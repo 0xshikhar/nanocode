@@ -17,7 +17,7 @@ use nanocodex::{
     agent::{rollout::RolloutConfig, session::SessionId},
     oai::{
         auth::{OpenAiAuth, OpenAiAuthMode},
-        transport::ResponsesTransport,
+        transport::{ChatGateway, ResponsesTransport},
     },
     tools::mcp::McpHandle,
 };
@@ -353,6 +353,9 @@ pub(crate) struct AgentArgs {
     mpp: MppArgs,
 
     #[command(flatten)]
+    openrouter: OpenRouterArgs,
+
+    #[command(flatten)]
     browser: BrowserArgs,
 }
 
@@ -526,6 +529,7 @@ impl AgentArgs {
             return HarnessFamily::Claude;
         }
         let responses_only = self.mpp.is_enabled()
+            || self.openrouter.enabled
             || self.model_id_prefix.is_some()
             || self.websocket_url.is_some()
             || self.api_base_url.is_some()
@@ -667,7 +671,7 @@ impl AgentArgs {
 
     pub(crate) fn responses_transport(&self) -> ResponsesTransport {
         self.responses_transport
-            .unwrap_or(if self.mpp.is_enabled() {
+            .unwrap_or(if self.mpp.is_enabled() || self.openrouter.enabled {
                 ResponsesTransport::Https
             } else {
                 ResponsesTransport::WebSocket
@@ -716,10 +720,15 @@ impl AgentArgs {
                 .build_claude(root, codex_home, vm, tui, requested_model)
                 .await;
         }
-        let thinking = self
-            .model_policy
-            .requested_thinking(harness)?
-            .unwrap_or(Thinking::Xhigh);
+        let openrouter = self.openrouter.enabled;
+        let thinking =
+            self.model_policy
+                .requested_thinking(harness)?
+                .unwrap_or(match requested_model {
+                    Some(HarnessModel::Codex(model)) if openrouter => model.default_thinking(),
+                    None if openrouter => Model::Glm53.default_thinking(),
+                    _ => Thinking::Xhigh,
+                });
         let responses_transport = self.responses_transport();
         let managed_memory = self.managed_memory(&codex_home, &root.session_id).await?;
         let mpp_enabled = self.mpp.is_enabled();
@@ -728,8 +737,15 @@ impl AgentArgs {
                 "the Tempo provider currently supports HTTPS Responses with Charge only"
             ));
         }
+        if openrouter && mpp_enabled {
+            return Err(eyre!(
+                "--provider.openrouter conflicts with --provider.tempo"
+            ));
+        }
         let auth = if mpp_enabled {
             OpenAiAuth::api_key("tempo-proxy")
+        } else if openrouter {
+            OpenAiAuth::api_key(self.openrouter.api_key()?)
         } else {
             self.auth.clone().resolve()?.nanocodex()?
         };
@@ -738,8 +754,14 @@ impl AgentArgs {
             Some(HarnessModel::Claude(_)) => {
                 unreachable!("model family was validated")
             }
+            None if openrouter => Model::Glm53,
             None => connected_account_default_model(auth.mode()),
         };
+        if openrouter && !ChatGateway::serves(model) {
+            return Err(eyre!(
+                "--provider.openrouter serves glm-5.3, gpt-6-astra, kimi-k3, and mimo-v2.6-pro; got {model}"
+            ));
+        }
         let mpp_adapter = self.mpp.clone().start().await?;
         let openai = self
             .responses_settings()
@@ -975,6 +997,7 @@ impl AgentArgs {
             model_id_prefix: self.model_id_prefix.clone(),
             store_responses: self.store_responses,
             api_base_url: self.api_base_url.clone(),
+            chat_gateway: self.openrouter.gateway(),
         }
     }
 
@@ -1057,6 +1080,50 @@ impl AgentArgs {
     }
 }
 
+/// Direct OpenRouter access for the closed gateway models.
+#[derive(Args, Clone)]
+struct OpenRouterArgs {
+    /// Serve GLM-5.3, GPT-6 Astra, Kimi K3, or MiMo through OpenRouter Chat
+    /// Completions, as the managed Worker's gateway route does.
+    ///
+    /// Defaults to GLM-5.3 (`z-ai/glm-5.3`) and reads `OPENROUTER_API_KEY`.
+    #[arg(
+        long = "provider.openrouter",
+        id = "openrouter",
+        global = true,
+        env = "NANOCODEX_PROVIDER_OPENROUTER",
+        default_value_t = false,
+        action = ArgAction::SetTrue
+    )]
+    enabled: bool,
+
+    /// OpenRouter API key.
+    #[arg(
+        long = "provider.openrouter.api-key",
+        id = "openrouter_api_key",
+        value_name = "KEY",
+        global = true,
+        env = "OPENROUTER_API_KEY",
+        hide_env_values = true,
+        value_parser = NonEmptyStringValueParser::new()
+    )]
+    api_key: Option<String>,
+}
+
+impl OpenRouterArgs {
+    fn api_key(&self) -> Result<String> {
+        self.api_key.clone().ok_or_else(|| {
+            eyre!(
+                "--provider.openrouter requires OPENROUTER_API_KEY or --provider.openrouter.api-key"
+            )
+        })
+    }
+
+    fn gateway(&self) -> Option<ChatGateway> {
+        self.enabled.then(ChatGateway::openrouter)
+    }
+}
+
 /// Responses transport policy for every Codex session in one task tree.
 #[derive(Clone)]
 struct ResponsesSettings {
@@ -1066,6 +1133,7 @@ struct ResponsesSettings {
     model_id_prefix: Option<String>,
     store_responses: Option<bool>,
     api_base_url: Option<String>,
+    chat_gateway: Option<ChatGateway>,
 }
 
 impl ResponsesSettings {
@@ -1083,6 +1151,9 @@ impl ResponsesSettings {
         }
         if let Some(store) = self.store_responses {
             openai = openai.store(store);
+        }
+        if let Some(gateway) = self.chat_gateway.clone() {
+            openai = openai.chat_gateway(gateway);
         }
         if let Some(api_base_url) = selected_api_base_url(
             self.api_base_url.clone(),

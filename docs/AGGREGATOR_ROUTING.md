@@ -23,6 +23,38 @@ preserved. Direct image inputs receive a terminal HTTP 400
 This also applies to GLM routes through OpenRouter and Vercel. The adapter does
 not change the pinned model or replay the screenshot tool.
 
+## Native CLI route
+
+The local `ncl` agent reaches the same OpenRouter route directly with
+`--provider.openrouter`, reading `OPENROUTER_API_KEY` (or
+`--provider.openrouter.api-key`). It follows this document's gateway contract:
+
+- The closed OpenRouter catalog above: `glm-5.3` (the default), `gpt-6-astra`,
+  `kimi-k3` and `mimo-v2.6-pro`, sent as `z-ai/glm-5.3`, `openai/gpt-6-astra`,
+  `moonshotai/kimi-k3` and `xiaomi/mimo-v2.6-pro`. Other models are refused at
+  startup.
+- A fixed HTTPS endpoint with bearer authorization. Only a loopback base URL,
+  used by local test servers, may replace it. Redirects are refused.
+- Provider errors are classified by status; upstream bodies are never parsed,
+  quoted or retained.
+- The same translation as the Cloudflare adapters: tool aliases, custom tools
+  as one string `input` argument, full-history tool messages, the portable
+  reasoning and compaction envelopes, single-call mode without
+  `parallel_tool_calls: false`, `provider.require_parameters`, `max_tokens` and
+  MiMo's local forced-choice handling, and the GLM image notice.
+
+```sh
+OPENROUTER_API_KEY=... ncl run --provider.openrouter "fix the failing test"
+OPENROUTER_API_KEY=... ncl run --provider.openrouter --model kimi-k3 "..."
+```
+
+`OpenAiBuilder::chat_gateway(ChatGateway::openrouter())` selects it in the
+SDK. The native HTTPS transport keeps the Responses Lite request until the
+wire and re-encodes the Chat reply as Responses events, so `exec` still returns
+as a `custom_tool_call`. Text and reasoning stream as they arrive; tool calls
+are released only after the completed reply validates their aliases, JSON and
+IDs, as the streaming adapter does.
+
 ## Cost evidence
 
 On 2026-09-20 the public model catalogs listed GLM input/output USD per million tokens as $0.91/$2.86 at OpenRouter and $1.40/$4.40 at Vercel. These are dated base-rate hints. Context tiers, cache hits, selected upstreams, discounts, currency, and time-dependent pricing can alter effective costs. Catalog token prices are not predicted total task spend. Provider-specific local measurements remain the stronger evidence for completion/cost/duration selection.

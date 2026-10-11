@@ -60,6 +60,9 @@ pub struct ModelConfig {
     /// Embedding-host transport used by the standard WebAssembly client.
     #[cfg(any(target_family = "wasm", docsrs))]
     pub host_transport: Option<Arc<dyn crate::transport::host::HostTransport>>,
+    /// Chat Completions gateway serving the closed gateway models over HTTPS.
+    #[cfg(not(target_family = "wasm"))]
+    pub chat_gateway: Option<Arc<crate::transport::ChatGateway>>,
     /// Explicit replacement for the selected model's built-in instructions.
     pub system_prompt: Option<Arc<str>>,
     /// Host instructions appended to the selected or overridden system prompt.
@@ -158,6 +161,8 @@ impl Default for ModelConfig {
             api_base_url: "https://api.openai.com/v1".to_owned(),
             #[cfg(any(target_family = "wasm", docsrs))]
             host_transport: None,
+            #[cfg(not(target_family = "wasm"))]
+            chat_gateway: None,
             system_prompt: None,
             additional_instructions: None,
         }
