@@ -419,6 +419,7 @@ fn pricing_estimation(criterion: &mut Criterion) {
         output_tokens: 16_000,
         output_tokens_details: None,
         total_tokens: 144_000,
+        reported_cost: None,
     };
     let mut group = criterion.benchmark_group("pricing_estimation");
     group.sample_size(100);

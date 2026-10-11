@@ -254,6 +254,35 @@ pub struct EstimatedUsdCost {
     service_tier: ServiceTier,
 }
 
+/// A charge reported by the provider for one response.
+///
+/// OpenRouter returns `usage.cost` with a prompt and completion breakdown.
+/// The prompt share becomes the input component and the remainder the output
+/// component, so the components always sum to the reported charge. Without a
+/// breakdown the whole charge is attributed to output.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ReportedCost {
+    /// Total charge for the response.
+    pub usd: UsdAmount,
+    /// Prompt share of the charge, when reported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_usd: Option<UsdAmount>,
+}
+
+impl ReportedCost {
+    fn as_cost(self, service_tier: ServiceTier) -> EstimatedUsdCost {
+        let input = self.input_usd.unwrap_or_default().min(self.usd);
+        EstimatedUsdCost {
+            amount: self.usd,
+            input,
+            cached_input: UsdAmount::default(),
+            cache_write_input: UsdAmount::default(),
+            output: UsdAmount::from_nano_usd(self.usd.nano_usd() - input.nano_usd()),
+            service_tier,
+        }
+    }
+}
+
 impl EstimatedUsdCost {
     /// Returns the exact aggregate estimate.
     #[must_use]
@@ -350,6 +379,9 @@ pub fn estimate_for_model(
     model: Model,
     service_tier: ServiceTier,
 ) -> EstimatedUsdCost {
+    if let Some(reported) = &usage.reported_cost {
+        return reported.as_cost(service_tier.effective_for_model(model));
+    }
     let cached_input_tokens = usage
         .input_tokens_details
         .as_ref()
@@ -428,6 +460,7 @@ mod tests {
                     output_tokens: 1_000_000,
                     output_tokens_details: None,
                     total_tokens: 2_000_000,
+                    reported_cost: None,
                 },
                 Model::Glm53,
                 tier,
@@ -454,6 +487,7 @@ mod tests {
                     reasoning_tokens: 150_000,
                 }),
                 total_tokens: 1_200_000,
+                reported_cost: None,
             },
             ServiceTier::Standard,
         );

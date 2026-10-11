@@ -21,6 +21,11 @@ pub struct Usage {
     #[serde(default)]
     /// Input plus output tokens.
     pub total_tokens: u64,
+    /// Charge the provider itself reported for this response, such as
+    /// OpenRouter's `usage.cost`. When present it replaces the built-in rate
+    /// estimate; see [`CostStatus::ReportedByProvider`](crate::pricing::CostStatus::ReportedByProvider).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reported_cost: Option<crate::pricing::ReportedCost>,
 }
 
 /// Detailed input-token accounting.

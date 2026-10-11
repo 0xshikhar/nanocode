@@ -1,5 +1,9 @@
 //! Built-in USD estimates for supported OpenAI models.
 //!
+//! A response that carries the provider's own charge (OpenRouter's
+//! `usage.cost`, see [`ReportedCost`](crate::pricing::ReportedCost)) is priced from that charge instead and
+//! reported with [`CostStatus::ReportedByProvider`](crate::pricing::CostStatus::ReportedByProvider).
+//!
 //! Sol, Luna, and Astra responses are priced automatically from
 //! provider-reported token usage and the selected standard or fast service tier.
 //!
@@ -28,7 +32,7 @@ mod estimate;
 use serde::{Deserialize, Serialize};
 
 pub use amount::UsdAmount;
-pub use estimate::{EstimatedUsdCost, ServiceTier, estimate, estimate_for_model};
+pub use estimate::{EstimatedUsdCost, ReportedCost, ServiceTier, estimate, estimate_for_model};
 
 /// Availability of the automatic local USD estimate.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -37,6 +41,9 @@ pub use estimate::{EstimatedUsdCost, ServiceTier, estimate, estimate_for_model};
 pub enum CostStatus {
     /// Provider usage was priced using the built-in rates.
     EstimatedFromUsage,
+    /// Every priced response carried the provider's own charge, such as
+    /// OpenRouter's `usage.cost`; no built-in rate was applied.
+    ReportedByProvider,
     /// The provider omitted usage from the completed response.
     #[default]
     UsageNotReported,
@@ -51,6 +58,7 @@ impl CostStatus {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::EstimatedFromUsage => "estimated_from_usage",
+            Self::ReportedByProvider => "reported_by_provider",
             Self::UsageNotReported => "usage_not_reported",
             Self::Other => "other",
         }

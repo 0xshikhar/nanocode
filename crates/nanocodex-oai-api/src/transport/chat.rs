@@ -10,12 +10,18 @@
 //! Chat messages. Replies are re-encoded as the Responses events the standard
 //! decoder already consumes, so custom tools still arrive as `custom_tool_call`.
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    time::Duration,
+};
 
 use http::header;
 use serde_json::{Map, Value, json};
 
-use crate::{Model, OpenAiAuthSnapshot, ResponsesError, monotonic_now_ns, socket::ReceivedText};
+use crate::{
+    Model, OpenAiAuthSnapshot, ResponsesError, monotonic_now_ns, pricing::UsdAmount,
+    socket::ReceivedText,
+};
 
 use super::{
     RetryAfter,
@@ -24,6 +30,13 @@ use super::{
 
 /// Base URL of the OpenRouter API.
 pub const OPENROUTER_API_BASE_URL: &str = "https://openrouter.ai/api/v1";
+
+/// Default for [`ChatGateway::stall_timeout`].
+///
+/// OpenRouter sends SSE keep-alive comments while an upstream is queued or
+/// reasoning, so two silent minutes means the stream is stuck rather than
+/// thinking.
+pub const DEFAULT_STALL_TIMEOUT: Duration = Duration::from_secs(120);
 
 // Portable envelopes shared with the JS adapters. They are plaintext transport
 // framing, not provider ciphertext, and must stay byte-compatible across hosts.
@@ -52,6 +65,7 @@ const SUMMARY_INSTRUCTIONS: &str = "Summarize the conversation so another assist
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChatGateway {
     provider: Provider,
+    stall_timeout: Duration,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -70,7 +84,23 @@ impl ChatGateway {
     pub const fn openrouter() -> Self {
         Self {
             provider: Provider::OpenRouter,
+            stall_timeout: DEFAULT_STALL_TIMEOUT,
         }
+    }
+
+    /// Fails an attempt when the provider sends no bytes for this long.
+    ///
+    /// Any byte resets the timer, including SSE keep-alive comments. The
+    /// failure is a retryable `https_timeout`, so the standard retry policy
+    /// replays the request. Defaults to [`DEFAULT_STALL_TIMEOUT`].
+    #[must_use]
+    pub const fn stall_timeout(mut self, timeout: Duration) -> Self {
+        self.stall_timeout = timeout;
+        self
+    }
+
+    pub(crate) const fn stall_timeout_is_valid(&self) -> bool {
+        !self.stall_timeout.is_zero()
     }
 
     /// The gateway's endpoint is fixed. Only a loopback HTTP(S) base, used by
@@ -161,7 +191,7 @@ impl ChatGateway {
             chat.insert("stream".to_owned(), Value::Bool(true));
         }
         let endpoint = format!("{}/chat/completions", api_base_url.trim_end_matches('/'));
-        let response = client
+        let pending = client
             .post(endpoint)
             .bearer_auth(auth.bearer())
             .header(header::CONTENT_TYPE, "application/json")
@@ -171,8 +201,10 @@ impl ChatGateway {
             )
             .header("X-Title", "Nanocodex")
             .body(Value::Object(chat).to_string())
-            .send()
+            .send();
+        let response = tokio::time::timeout(self.stall_timeout, pending)
             .await
+            .map_err(|_| stalled(self.stall_timeout))?
             .map_err(map_http_error)?;
         let status = response.status();
         if !status.is_success() {
@@ -190,8 +222,12 @@ impl ChatGateway {
             turn_state: None,
         };
         let mut stream = ChatStream::new(model, translation.registry, translation.tool_choice);
+        stream.stall_timeout = self.stall_timeout;
         if translation.compact {
-            let completion: Value = response.json().await.map_err(map_http_error)?;
+            let completion: Value = tokio::time::timeout(self.stall_timeout, response.json())
+                .await
+                .map_err(|_| stalled(self.stall_timeout))?
+                .map_err(map_http_error)?;
             stream.compaction(&completion)?;
             return Ok((ResponsesHttpStream::chat(stream), metadata));
         }
@@ -291,6 +327,18 @@ fn provider_rejected(status: u16, retry_after: Option<RetryAfter>) -> ResponsesE
         })
         .to_string(),
         retry_after,
+    }
+}
+
+/// The provider went silent. Retryable through the standard policy.
+fn stalled(timeout: Duration) -> ResponsesError {
+    ResponsesError::HttpRequest {
+        detail: format!(
+            "the Chat Completions gateway sent no data for {} s; the stream stalled",
+            timeout.as_secs_f64()
+        ),
+        retryable: true,
+        timeout: true,
     }
 }
 
@@ -1272,6 +1320,7 @@ pub(crate) struct ChatStream {
     usage: Option<Value>,
     finish_reason: Option<String>,
     retained: usize,
+    stall_timeout: Duration,
 }
 
 impl ChatStream {
@@ -1293,6 +1342,7 @@ impl ChatStream {
             usage: None,
             finish_reason: None,
             retained: 0,
+            stall_timeout: DEFAULT_STALL_TIMEOUT,
         }
     }
 
@@ -1683,7 +1733,10 @@ impl ChatStream {
             let Some(response) = self.response.as_mut() else {
                 return Err(ResponsesError::UnexpectedEnd);
             };
-            match response.chunk().await.map_err(map_http_error)? {
+            let chunk = tokio::time::timeout(self.stall_timeout, response.chunk())
+                .await
+                .map_err(|_| stalled(self.stall_timeout))?;
+            match chunk.map_err(map_http_error)? {
                 Some(chunk) => self.decoder.push(&chunk),
                 None => {
                     self.ended = true;
@@ -1894,6 +1947,12 @@ fn normalize(
             },
         })
     });
+    let usage = usage.map(|mut mapped| {
+        if let Some(cost) = result.get("usage").and_then(reported_cost) {
+            mapped["reported_cost"] = cost;
+        }
+        mapped
+    });
     let mut response = json!({
         "id": new_id("resp"),
         "object": "response",
@@ -1909,6 +1968,52 @@ fn normalize(
         });
     }
     Ok(response)
+}
+
+/// OpenRouter's own charge for one reply, as a [`crate::pricing::ReportedCost`].
+///
+/// `usage.cost` is what OpenRouter charged. With a bring-your-own key it is
+/// only OpenRouter's fee and the upstream provider bills
+/// `cost_details.upstream_inference_cost` separately, so both are counted.
+fn reported_cost(usage: &Value) -> Option<Value> {
+    let charged = usd(usage.get("cost")?)?;
+    let byok = usage.get("is_byok") == Some(&Value::Bool(true));
+    let upstream = usage
+        .pointer("/cost_details/upstream_inference_cost")
+        .and_then(usd)
+        .unwrap_or(0);
+    let total = if byok {
+        charged.saturating_add(upstream)
+    } else {
+        charged
+    };
+    let mut cost = json!({ "usd": UsdAmount::from_nano_usd(total).decimal() });
+    if let Some(prompt) = usage
+        .pointer("/cost_details/upstream_inference_prompt_cost")
+        .and_then(usd)
+    {
+        // The breakdown describes the upstream inference charge. Scale it to
+        // the total so a fee-bearing reply keeps an exact sum.
+        let input = if upstream == 0 {
+            prompt.min(total)
+        } else {
+            u64::try_from(u128::from(prompt) * u128::from(total) / u128::from(upstream))
+                .unwrap_or(total)
+                .min(total)
+        };
+        cost["input_usd"] = json!(UsdAmount::from_nano_usd(input).decimal());
+    }
+    Some(cost)
+}
+
+/// A non-negative JSON USD number as billionths of a dollar.
+fn usd(value: &Value) -> Option<u64> {
+    let value = value
+        .as_f64()
+        .filter(|value| value.is_finite() && *value >= 0.0)?;
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let nano = (value * 1e9).round() as u64;
+    Some(nano)
 }
 
 /// The complete Responses event sequence for one normalized response.

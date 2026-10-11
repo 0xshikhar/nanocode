@@ -55,6 +55,20 @@ as a `custom_tool_call`. Text and reasoning stream as they arrive; tool calls
 are released only after the completed reply validates their aliases, JSON and
 IDs, as the streaming adapter does.
 
+Cost: each reply's `usage.cost` (with a bring-your-own key, plus
+`cost_details.upstream_inference_cost`) becomes `Usage::reported_cost` and
+replaces the built-in rates. Run, turn and span cost then report
+`cost_status: "reported_by_provider"`; a turn with any reply lacking a charge
+falls back to the rates and reports `estimated_from_usage`. The prompt share of
+the breakdown is `input_usd` and the remainder `output_usd`.
+
+Stalls: an attempt fails after `--provider.openrouter.stall-timeout` seconds
+(default 120, `ChatGateway::stall_timeout`) without any bytes. OpenRouter's
+keep-alive comments reset the timer, so silent reasoning is not cut off. The
+failure is a retryable `https_timeout` and the standard retry policy replays
+the request. The timeout is scoped to this gateway; the Responses transports
+keep their existing behaviour.
+
 ## Cost evidence
 
 On 2026-09-20 the public model catalogs listed GLM input/output USD per million tokens as $0.91/$2.86 at OpenRouter and $1.40/$4.40 at Vercel. These are dated base-rate hints. Context tiers, cache hits, selected upstreams, discounts, currency, and time-dependent pricing can alter effective costs. Catalog token prices are not predicted total task spend. Provider-specific local measurements remain the stronger evidence for completion/cost/duration selection.

@@ -140,6 +140,10 @@ pub(super) struct UsageTotals {
     pub(super) total_tokens: u64,
     #[serde(skip)]
     pub(super) reported: bool,
+    /// Whether any response was priced from built-in rates rather than a
+    /// provider-reported charge.
+    #[serde(skip)]
+    pub(super) rate_estimated: bool,
     #[serde(skip)]
     pub(super) estimated_cost: Option<nanocodex_oai_api::pricing::EstimatedUsdCost>,
 }
@@ -152,6 +156,7 @@ impl UsageTotals {
         service_tier: ServiceTier,
     ) {
         self.reported = true;
+        self.rate_estimated |= usage.reported_cost.is_none();
         self.input_tokens += usage.input_tokens;
         self.cached_input_tokens += usage
             .input_tokens_details
@@ -255,6 +260,7 @@ impl RunStats {
                 + self.warmup_usage.reasoning_output_tokens,
             total_tokens: self.usage.total_tokens + self.warmup_usage.total_tokens,
             reported: self.usage.reported || self.warmup_usage.reported,
+            rate_estimated: self.usage.rate_estimated || self.warmup_usage.rate_estimated,
             estimated_cost,
         })
     }
