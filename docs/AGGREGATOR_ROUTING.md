@@ -55,6 +55,15 @@ as a `custom_tool_call`. Text and reasoning stream as they arrive; tool calls
 are released only after the completed reply validates their aliases, JSON and
 IDs, as the streaming adapter does.
 
+`--provider.openrouter.model <vendor/model>` (`ChatGateway::wire_model`) is a
+passthrough: only the wire model sent to OpenRouter changes, and `--model`
+(default `glm-5.3`) still selects prompts, efforts, image policy, compaction
+and identity. It exists for cheap agents at scale on a close variant of the
+same family, such as `z-ai/glm-5.3-flash`, and accepts only OpenRouter slug
+shapes (`vendor/model[:variant]`). It widens the closed catalog's wire IDs, not
+its capability profiles: a model that does not follow the selected model's Code
+Mode conventions can call tools without returning their output.
+
 ## Cost evidence
 
 On 2026-09-20 the public model catalogs listed GLM input/output USD per million tokens as $0.91/$2.86 at OpenRouter and $1.40/$4.40 at Vercel. These are dated base-rate hints. Context tiers, cache hits, selected upstreams, discounts, currency, and time-dependent pricing can alter effective costs. Catalog token prices are not predicted total task spend. Provider-specific local measurements remain the stronger evidence for completion/cost/duration selection.

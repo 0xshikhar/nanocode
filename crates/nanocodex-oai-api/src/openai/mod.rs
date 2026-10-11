@@ -696,6 +696,11 @@ fn validate(config: &ModelConfig) -> Result<(), OpenAiError> {
                 detail: "the gateway endpoint is fixed; only a loopback test base URL may replace it",
             });
         }
+        if !gateway.wire_model_is_valid() {
+            return Err(OpenAiError::InvalidConfiguration {
+                detail: "the gateway model ID must be an OpenRouter vendor/model slug",
+            });
+        }
         if config.auth.mode() != OpenAiAuthMode::ApiKey {
             return Err(OpenAiError::InvalidConfiguration {
                 detail: "Chat Completions gateways require API-key authentication",
