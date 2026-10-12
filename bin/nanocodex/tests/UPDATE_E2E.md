@@ -237,6 +237,36 @@ Windows is explicitly refused: running `--path` there can self-replace the runni
 executable and overwrite sibling entrypoints, and task identity is not isolated by
 HOME alone. Use a disposable native interactive Windows user/VM for acceptance.
 
+## Voice runtime install runner
+
+`voice_install_e2e.mjs` installs a real voice archive through the public updater:
+
+```sh
+cargo build --locked -p nanocodex-bin --bin nanocodex -p nanocodex-hand-daemon --bin nanocodex-hand
+node bin/nanocodex/tests/voice_install_e2e.mjs target/debug/nanocodex target/debug/nanocodex-hand \
+  nanocodex-voice-aarch64-apple-darwin.tar.gz output/voice-install-e2e
+```
+
+Use a published `nanocodex-voice-<target>.tar.gz` (checked against its release
+`SHA256SUMS`) or `scripts/build-voice-release.py` output. The runner copies the
+pair into a disposable directory with an isolated HOME/store, a generated invalid
+account file and, on macOS, an unregistered synthetic login-owner plist. It runs
+`update --path CLI --hand-binary HAND --voice-archive ARCHIVE`, then requires every
+`nanocodex-resources/voice/bin/` program to match the archive and be executable.
+The helper must print `--build-commit`; the macOS recorder runs without arguments
+and must exit 2 with its usage before any microphone permission check. The runner
+then makes every program except the helper 0600, as earlier updaters left the
+recorder, reselects the same pair and requires the verified cached runtime to be
+executable again. When the pair is staged, it repeats the 0600 modes and runs
+`update --apply` without `--restart-hand`: activation validation, which rollback
+and `hand recover` share, must restore them without an archive, and the pair stays
+staged. Native status also reads the user's real login Hand (read-only), so the
+pair is staged or activated depending on that Hand (an unstaged run records the
+skipped apply check); no restart is requested and, on macOS, its PID
+(read-only `launchctl print`) must be unchanged. Results are in
+`OUTPUT/transcript.log` and `OUTPUT/summary.json`. Audio devices, microphone
+permission and live voice conversations are not exercised.
+
 ## Source-selector runner
 
 `update_source_e2e.mjs` runs the actual updater, Git and Cargo **on macOS**. A
