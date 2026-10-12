@@ -44,12 +44,13 @@ pub mod usage;
 #[doc(hidden)]
 pub mod backend {
     pub use crate::agent::backend::*;
+    pub use crate::agent::{AgentOwner, adopt};
     pub use crate::session::TurnBoundary;
 }
 
 pub use agent::{
     AgentHandle, AgentSessionContext, BuilderBackend, Nanocodex, PromptRequest, PromptRoute,
-    SpawnOptions, Turn, TurnControl, TurnResult,
+    SpawnOptions, Turn, TurnControl, TurnResult, WeakAgent,
 };
 #[cfg(feature = "openai")]
 #[cfg_attr(docsrs, doc(cfg(feature = "openai")))]

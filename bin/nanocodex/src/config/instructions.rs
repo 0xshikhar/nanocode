@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 /// Resolves from the durable workspace binding at the actual user submission
 /// boundary, without locking an active model conversation.
 pub(crate) fn expand_session_user_skill(
-    agent: &nanocodex::Nanocodex,
+    agent: &nanocodex::Agent,
     prompt: &str,
 ) -> Result<Option<String>, String> {
     if !prompt.trim().starts_with('/') {
