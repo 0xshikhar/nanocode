@@ -227,10 +227,15 @@ Covered public boundaries:
   deliberately executable input fixtures, not a Hand-service implementation.
 - Corrupted cached companion is rejected by real `update --apply`; active CLI
   stays unchanged and pending evidence is preserved.
-- macOS `hand recover`: synthetic interrupted CLI state restores the previous
-  active version; committed CLI-only state finalizes; inconsistent committed
-  state is refused with the journal retained. **These are injected on-disk crash
-  records, not an actual killed update or OS-service rollback.**
+- macOS `hand recover`: while synthetic interrupted CLI state is recorded and
+  the owner names a different Hand (the staging path), `update --apply` and a
+  `--path` re-selection refuse with a `hand recover` instruction and keep
+  `current`, `pending-update`, the cached versions, the explicit selection and
+  the record. Recovery then restores the previous active version and reports a
+  CLI-only transaction; committed CLI-only state finalizes; inconsistent
+  committed state is refused with the journal retained; with no record,
+  recovery says so. **These are injected on-disk crash records, not an actual
+  killed update or OS-service rollback.**
 
 The account fixture and synthetic Mac owner definition must remain byte-identical.
 Windows is explicitly refused: running `--path` there can self-replace the running
@@ -331,7 +336,7 @@ journeys on a shared user's Hand:
    and verify the configured login/boot owner starts the same selected version.
    Passing `--version` or preserving plist text does not cover this lifetime test.
 3. Repeat selectors `update`, `update --nightly`, `update --branch TOPIC`, and
-   `update --pr NUMBER`, `update --version VERSION`, and a local `--path` pair:
+   `update --pr NUMBER`, `update VERSION`, and a local `--path` pair:
    default commands cache a verified coherent pair and stage without disrupting the installed service. Check the old CLI/service remain
    selected and pending state names the new pair after updater exit.
 4. `update --apply` must keep the staged pair deferred while an owner is installed;
