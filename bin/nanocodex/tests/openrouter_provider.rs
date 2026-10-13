@@ -339,10 +339,49 @@ async fn openrouter_refuses_missing_keys_and_unserved_models() -> Result<()> {
         "unexpected error: {stderr}"
     );
 
+    // The passthrough model must be an OpenRouter slug.
+    let (success, _, stderr) = run_cli(
+        workspace.path(),
+        &base,
+        &["--provider.openrouter.model", "glm 5.3 flash"],
+    )
+    .await?;
+    assert!(!success);
+    assert!(
+        stderr.contains("is not an OpenRouter model slug"),
+        "unexpected error: {stderr}"
+    );
     assert!(
         recorded.0.lock().unwrap().is_empty(),
         "a refused request reached the provider"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn openrouter_passthrough_changes_only_the_wire_model() -> Result<()> {
+    let recorded = Recorded::default();
+    let base = serve(recorded.clone()).await?;
+    let workspace = tempfile::tempdir()?;
+    let (success, events, stderr) = run_cli(
+        workspace.path(),
+        &base,
+        &["--provider.openrouter.model", "z-ai/glm-5.3-flash"],
+    )
+    .await?;
+    assert!(success, "CLI failed: {stderr}");
+    let requests = recorded.0.lock().unwrap().clone();
+    assert!(
+        requests
+            .iter()
+            .all(|(_, body)| body["model"] == "z-ai/glm-5.3-flash")
+    );
+    let completed = events
+        .iter()
+        .find(|event| event["type"] == "run.completed")
+        .ok_or_else(|| eyre!("run.completed missing"))?;
+    // The canonical model, its policy and identity are unchanged.
+    assert_eq!(completed["payload"]["model"], "@cf/zai-org/glm-5.3");
     Ok(())
 }
 
