@@ -1122,6 +1122,32 @@ struct OpenRouterArgs {
         value_parser = clap::value_parser!(u64).range(1..=3600)
     )]
     stall_timeout: u64,
+
+    /// Passthrough: send this OpenRouter model ID instead of the selected one.
+    ///
+    /// Only the wire model changes. `--model` (default glm-5.3) still selects
+    /// the prompts, reasoning efforts, image policy and compaction, so use a
+    /// close variant of that family, such as `z-ai/glm-5.3-flash` for cheap
+    /// agents at scale. Must be an OpenRouter `vendor/model[:variant]` slug.
+    #[arg(
+        long = "provider.openrouter.model",
+        id = "openrouter_model",
+        value_name = "VENDOR/MODEL",
+        global = true,
+        env = "NANOCODEX_PROVIDER_OPENROUTER_MODEL",
+        value_parser = parse_openrouter_model
+    )]
+    model: Option<String>,
+}
+
+fn parse_openrouter_model(value: &str) -> std::result::Result<String, String> {
+    if ChatGateway::is_valid_wire_model(value) {
+        Ok(value.to_owned())
+    } else {
+        Err(format!(
+            "{value:?} is not an OpenRouter model slug; expected vendor/model[:variant], such as z-ai/glm-5.3-flash"
+        ))
+    }
 }
 
 impl OpenRouterArgs {
@@ -1135,8 +1161,12 @@ impl OpenRouterArgs {
 
     fn gateway(&self) -> Option<ChatGateway> {
         self.enabled.then(|| {
-            ChatGateway::openrouter()
-                .stall_timeout(std::time::Duration::from_secs(self.stall_timeout))
+            let gateway = ChatGateway::openrouter()
+                .stall_timeout(std::time::Duration::from_secs(self.stall_timeout));
+            match &self.model {
+                Some(model) => gateway.wire_model(model.clone()),
+                None => gateway,
+            }
         })
     }
 }

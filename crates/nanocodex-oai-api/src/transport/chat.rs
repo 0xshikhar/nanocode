@@ -12,6 +12,7 @@
 
 use std::{
     collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    sync::Arc,
     time::Duration,
 };
 
@@ -66,6 +67,7 @@ const SUMMARY_INSTRUCTIONS: &str = "Summarize the conversation so another assist
 pub struct ChatGateway {
     provider: Provider,
     stall_timeout: Duration,
+    wire_model: Option<Arc<str>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -84,6 +86,7 @@ impl ChatGateway {
     pub const fn openrouter() -> Self {
         Self {
             provider: Provider::OpenRouter,
+            wire_model: None,
             stall_timeout: DEFAULT_STALL_TIMEOUT,
         }
     }
@@ -101,6 +104,46 @@ impl ChatGateway {
 
     pub(crate) const fn stall_timeout_is_valid(&self) -> bool {
         !self.stall_timeout.is_zero()
+    }
+
+    /// Passes this OpenRouter model ID through instead of the selected model's.
+    ///
+    /// Only the wire model changes. The selected (canonical) model keeps its
+    /// prompts, reasoning efforts, image policy, compaction and identity, and
+    /// its catalog ID stays the default when no override is given. Use this
+    /// for a close variant of the same family, such as `z-ai/glm-5.3-flash`
+    /// for cheap agents at scale. The ID must be an OpenRouter slug; see
+    /// [`Self::is_valid_wire_model`].
+    #[must_use]
+    pub fn wire_model(mut self, model: impl Into<String>) -> Self {
+        self.wire_model = Some(Arc::from(model.into().trim()));
+        self
+    }
+
+    pub(crate) fn wire_model_is_valid(&self) -> bool {
+        self.wire_model
+            .as_deref()
+            .is_none_or(Self::is_valid_wire_model)
+    }
+
+    /// Whether `model` has the shape of an OpenRouter model slug:
+    /// `vendor/model` with an optional `:variant`, at most 128 ASCII
+    /// characters from letters, digits, `-`, `_`, `.` and `:`.
+    #[must_use]
+    pub fn is_valid_wire_model(model: &str) -> bool {
+        let allowed = |part: &str, colon: bool| {
+            !part.is_empty()
+                && part.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric()
+                        || matches!(byte, b'-' | b'_' | b'.')
+                        || (colon && byte == b':')
+                })
+                && !part.starts_with(['.', ':', '-'])
+        };
+        model.len() <= 128
+            && model
+                .split_once('/')
+                .is_some_and(|(vendor, name)| allowed(vendor, false) && allowed(name, true))
     }
 
     /// The gateway's endpoint is fixed. Only a loopback HTTP(S) base, used by
@@ -145,7 +188,10 @@ impl ChatGateway {
         )
     }
 
-    const fn wire_model_for(&self, model: Model) -> &'static str {
+    fn wire_model_for(&self, model: Model) -> &str {
+        if let Some(model) = self.wire_model.as_deref() {
+            return model;
+        }
         match (self.provider, model) {
             // The managed routing catalog's OpenRouter IDs
             // (js/managed/src/thread-model-routing.ts).
