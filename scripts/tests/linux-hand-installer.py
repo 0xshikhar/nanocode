@@ -110,11 +110,57 @@ try:
     publishers=[e for e in final['events'] if e['type']=='connected' and e['path'].endswith('/tool-host')]
     assert len(publishers)==1, publishers
     assert not [e for e in final['events'] if e['type']=='rejected'], final
+    # Root provisioning over SSH reuses a user's saved login (never printed)
+    # and selects the service account and an existing project workspace.
+    inside('sh','-c','command -v setfacl || (apt-get install --yes --no-install-recommends acl >/dev/null)')
+    inside('sh','-c','id desk || useradd --create-home desk')
+    inside('sh','-c','mkdir -p /srv/projects/app && echo keep >/srv/projects/app/file && chown -R ubuntu:ubuntu /srv/projects '
+           '&& chmod 700 /srv/projects && setfacl -m u:desk:rwx /srv/projects && setfacl -m u:desk:--x /srv/nanocodex')
+    def acl(path): return inside('getfacl','-p','--omit-header',path).stdout
+    acl_before={path: acl(path) for path in ['/srv/projects','/srv/nanocodex']}
+    root_install=['env',f'NANOCODEX_ACCOUNT_FILE=/fixture/home-a/account.json',f'NANOCODEX_MANAGED_URL={origin}',
+                  '/fixture/bin/nanocodex','hand','install']
+    def placed(user_name, workspace):
+        result=inside(*root_install,'--service-user',user_name,'--workspace',workspace)
+        ready=json.loads(result.stdout.strip().splitlines()[-1])
+        assert ready['status']=='ready' and ready['machine_id']==machine['id'], ready
+        assert ready['service_user']==user_name and ready['workspace']==workspace, ready
+        uid=int(inside('id','-u',user_name).stdout)
+        record=json.loads(inside('cat','/opt/nanocodex/installation.json').stdout)
+        assert record['service_uid']==uid and record['service_user']==user_name, record
+        assert record['workspace']==workspace and record['machine_id']==machine['id'], record
+        assert inside('systemctl','show','nanocodex-hand.service','-p','User','--value').stdout.strip()==str(uid)
+        unit=inside('cat','/etc/systemd/system/nanocodex-hand.service').stdout
+        assert f'WorkingDirectory={workspace}\n' in unit and f'NANOCODEX_HAND_WORKSPACE={workspace}\n' in unit, unit
+        return uid, result
+    desk_uid, switched=placed('desk','/srv/projects')
+    assert 'Hand service owner changed from uid 1000 to desk' in switched.stderr, switched.stderr
+    leftover=inside('sh','-c','find /srv/nanocodex/.nanocodex /srv/nanocodex/desktop /srv/nanocodex/cache -uid 1000 | wc -l').stdout.strip()
+    assert leftover=='0', leftover
+    assert inside('stat','-c','%U %a','/srv/projects').stdout.strip()=='ubuntu 770', 'selected workspace re-owned or chmodded'
+    assert inside('stat','-c','%U','/srv/projects/app/file').stdout.strip()=='ubuntu'
+    for path, before in acl_before.items():
+        assert acl(path)==before, (path, before, acl(path))
+    assert inside('test','-e','/root/.config/systemd/user/nanocodex-update.timer',ok=False).returncode!=0
+    note=inside('/fixture/bin/nanocodex','hand','status').stderr
+    assert 'runs as desk' in note and machine['id'] in note, note
+    desk_pid=pid()
+    placed('desk','/srv/projects')
+    assert pid()==desk_pid, 'idempotent root placement restarted the daemon'
+    placed('ubuntu','/srv/projects')
+    leftover=inside('sh','-c',f'find /srv/nanocodex/.nanocodex /srv/nanocodex/desktop /srv/nanocodex/cache -uid {desk_uid} | wc -l').stdout.strip()
+    assert leftover=='0', leftover
+    for path, before in acl_before.items():
+        assert acl(path)==before, (path, before, acl(path))
+    final=public('/evidence')
+    assert not [e for e in final['events'] if e['type']=='rejected'], final
     summary={'result':'PASS','machine_id':machine['id'],'daemon_pid':original_pid,'account_publishers':len(publishers),
              'screen_catalogs':len(screens),'service_uid':record['service_uid'],'observers':2,
              'logged_out_background_components':True,'logged_out_updater_without_session_bus':True,'initial_components_state':preparation_state,
              'missing_desktop_packages_installed':True,'private_credentials':True,'ambient_key_ignored':True,
-             'daemon_survives_clients':True,'idempotent_setup':True}
+             'daemon_survives_clients':True,'idempotent_setup':True,
+             'root_saved_login_service_user':True,'workspace_selection_keeps_identity':True,
+             'existing_acls_preserved':True,'reversible_owner_transfer':True}
     (out/'summary.json').write_text(json.dumps(summary,indent=2)+'\n')
     (out/'account-events.json').write_text(json.dumps(final,indent=2)+'\n')
     print(json.dumps(summary))

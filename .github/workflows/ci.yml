@@ -186,6 +186,12 @@ jobs:
         run: >-
           python3 bin/nanocodex/tests/linux_hand_sudo_diagnostics_e2e.py
           target/debug/nanocodex output/linux-hand-sudo-diagnostics
+      - name: Exercise the systemd Hand installer, service user, workspace and ACL preservation
+        if: runner.os == 'Linux'
+        timeout-minutes: 15
+        run: |
+          docker build -t nanocodex-installer-journey scripts/fixtures/linux-installer
+          sudo python3 scripts/tests/linux-hand-installer.py --bin-dir target/debug --image nanocodex-installer-journey --output output/linux-hand-installer
       - name: Exercise release metadata recovery
         if: runner.os == 'Linux'
         timeout-minutes: 5
