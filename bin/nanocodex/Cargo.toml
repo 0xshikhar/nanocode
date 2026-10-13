@@ -176,6 +176,10 @@ path = "tests/tui_control.rs"
 name = "code_mode_teardown"
 path = "tests/code_mode_teardown.rs"
 
+[[test]]
+name = "openrouter_provider"
+path = "tests/openrouter_provider.rs"
+
 # The user-facing CLI. The Hand daemon executable (nanocodex-hand, installed
 # under the historical file name nanocodex2) is the separate
 # nanocodex-hand-daemon package in ./hand; neither depends on the other.

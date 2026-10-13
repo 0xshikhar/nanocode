@@ -322,6 +322,30 @@ impl<F> OpenAiBuilder<F> {
         self
     }
 
+    /// Serves the closed gateway models through a Chat Completions gateway.
+    ///
+    /// This is the native form of the managed Worker's gateway route
+    /// (`docs/AGGREGATOR_ROUTING.md`). [`Model::Glm53`], [`Model::Astra`],
+    /// [`Model::Kimi`] and [`Model::Mimo`] keep their
+    /// Nanocodex prompts, reasoning efforts and compaction; requests are
+    /// translated to Chat Completions at the HTTPS boundary and replies are
+    /// re-encoded as Responses events, so free-form custom tools such as
+    /// `exec` still return as `custom_tool_call`. This selects stateless HTTPS
+    /// with full history replay and the gateway's API base URL; call
+    /// [`Self::api_base_url`] afterwards to override the URL. The gateway
+    /// requires API-key authentication with the provider's key.
+    #[cfg(not(target_family = "wasm"))]
+    #[must_use]
+    pub fn chat_gateway(mut self, gateway: crate::transport::ChatGateway) -> Self {
+        self.config.api_base_url = gateway.default_api_base_url().to_owned();
+        self.config.chat_gateway = Some(Arc::new(gateway));
+        self.config.responses_transport = ResponsesTransport::Https;
+        self.config.responses_history = ResponsesHistory::FullReplay;
+        self.config.store_responses = false;
+        self.config.websocket_warmup = false;
+        self
+    }
+
     /// Installs the environment-owned socket and timer implementation.
     ///
     /// The host only moves text frames and waits for retry deadlines. Request
@@ -660,6 +684,34 @@ fn validate(config: &ModelConfig) -> Result<(), OpenAiError> {
         if !matches!(config.responses_transport, ResponsesTransport::Https) {
             return Err(OpenAiError::InvalidConfiguration {
                 detail: "model ID prefixes require the HTTPS Responses transport",
+            });
+        }
+    }
+    #[cfg(not(target_family = "wasm"))]
+    if let Some(gateway) = config.chat_gateway.as_deref() {
+        // The session selects the model later; the gateway refuses other
+        // models per request before anything is sent.
+        if !gateway.api_base_url_is_allowed(&config.api_base_url) {
+            return Err(OpenAiError::InvalidConfiguration {
+                detail: "the gateway endpoint is fixed; only a loopback test base URL may replace it",
+            });
+        }
+        if config.auth.mode() != OpenAiAuthMode::ApiKey {
+            return Err(OpenAiError::InvalidConfiguration {
+                detail: "Chat Completions gateways require API-key authentication",
+            });
+        }
+        if config.model_id_prefix.is_some() {
+            return Err(OpenAiError::InvalidConfiguration {
+                detail: "Chat Completions gateways choose their own model IDs; remove the model ID prefix",
+            });
+        }
+        if !matches!(config.responses_transport, ResponsesTransport::Https)
+            || config.store_responses
+            || !matches!(config.responses_history, ResponsesHistory::FullReplay)
+        {
+            return Err(OpenAiError::InvalidConfiguration {
+                detail: "Chat Completions gateways require stateless HTTPS with full history replay",
             });
         }
     }

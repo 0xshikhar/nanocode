@@ -14,13 +14,19 @@ const TURN_STATE_HEADER: &str = "x-codex-turn-state";
 pub(crate) struct ResponsesHttp {
     #[cfg(not(target_family = "wasm"))]
     client: reqwest::Client,
+    /// The gateway and its own client, which refuses redirects.
+    #[cfg(not(target_family = "wasm"))]
+    chat_gateway: Option<(std::sync::Arc<super::chat::ChatGateway>, reqwest::Client)>,
     #[cfg(target_family = "wasm")]
     host: Option<std::sync::Arc<dyn crate::transport::host::HostTransport>>,
 }
 
 pub(crate) struct ResponsesHttpStream {
     #[cfg(not(target_family = "wasm"))]
-    response: reqwest::Response,
+    response: Option<reqwest::Response>,
+    /// Responses events re-encoded from a Chat Completions gateway reply.
+    #[cfg(not(target_family = "wasm"))]
+    chat: Option<Box<super::chat::ChatStream>>,
     #[cfg(target_family = "wasm")]
     response: Box<dyn crate::transport::host::HostHttpBody>,
     decoder: SseDecoder,
@@ -34,8 +40,15 @@ pub(crate) struct HttpMetadata {
 
 #[cfg(not(target_family = "wasm"))]
 impl ResponsesHttp {
-    pub(crate) const fn new(client: reqwest::Client) -> Self {
-        Self { client }
+    pub(crate) fn new(
+        client: reqwest::Client,
+        chat_gateway: Option<std::sync::Arc<super::chat::ChatGateway>>,
+    ) -> Self {
+        Self {
+            client,
+            chat_gateway: chat_gateway
+                .map(|gateway| (gateway, super::chat::ChatGateway::http_client())),
+        }
     }
 
     pub(crate) async fn send(
@@ -47,6 +60,11 @@ impl ResponsesHttp {
         turn_state: Option<&str>,
         request: &EncodedRequest,
     ) -> Result<(ResponsesHttpStream, HttpMetadata), ResponsesError> {
+        if let Some((gateway, client)) = &self.chat_gateway {
+            return gateway
+                .send(client, api_base_url, auth, request.raw().get())
+                .await;
+        }
         let endpoint = format!("{}/responses", api_base_url.trim_end_matches('/'));
         let mut builder = self
             .client
@@ -103,7 +121,8 @@ impl ResponsesHttp {
         };
         Ok((
             ResponsesHttpStream {
-                response,
+                response: Some(response),
+                chat: None,
                 decoder: SseDecoder::default(),
                 ended: false,
             },
@@ -113,7 +132,21 @@ impl ResponsesHttp {
 }
 
 impl ResponsesHttpStream {
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn chat(stream: super::chat::ChatStream) -> Self {
+        Self {
+            response: None,
+            chat: Some(Box::new(stream)),
+            decoder: SseDecoder::default(),
+            ended: true,
+        }
+    }
+
     pub(crate) async fn next_text(&mut self) -> Result<ReceivedText, ResponsesError> {
+        #[cfg(not(target_family = "wasm"))]
+        if let Some(chat) = self.chat.as_mut() {
+            return chat.next_text().await;
+        }
         loop {
             if let Some(text) = self.decoder.next()? {
                 return Ok(ReceivedText {
@@ -132,7 +165,10 @@ impl ResponsesHttpStream {
                 return Err(ResponsesError::UnexpectedEnd);
             }
             #[cfg(not(target_family = "wasm"))]
-            let chunk = self.response.chunk().await.map_err(map_http_error)?;
+            let chunk = match self.response.as_mut() {
+                Some(response) => response.chunk().await.map_err(map_http_error)?,
+                None => None,
+            };
             #[cfg(target_family = "wasm")]
             let chunk = self.response.next().await.map_err(map_host_error)?;
             if let Some(chunk) = chunk {
@@ -146,7 +182,7 @@ impl ResponsesHttpStream {
 }
 
 #[derive(Default)]
-struct SseDecoder {
+pub(crate) struct SseDecoder {
     bytes: Vec<u8>,
     cursor: usize,
     data: Vec<String>,
@@ -155,13 +191,13 @@ struct SseDecoder {
 }
 
 impl SseDecoder {
-    fn push(&mut self, chunk: &[u8]) {
+    pub(crate) fn push(&mut self, chunk: &[u8]) {
         self.retry_receipt = Some(super::RetryReceipt::now());
         self.compact();
         self.bytes.extend_from_slice(chunk);
     }
 
-    fn finish(&mut self) {
+    pub(crate) fn finish(&mut self) {
         self.finished = true;
         self.compact();
         if !self.bytes.is_empty() {
@@ -170,7 +206,7 @@ impl SseDecoder {
         self.bytes.push(b'\n');
     }
 
-    fn next(&mut self) -> Result<Option<String>, ResponsesError> {
+    pub(crate) fn next(&mut self) -> Result<Option<String>, ResponsesError> {
         loop {
             let Some(relative_newline) = self.bytes[self.cursor..]
                 .iter()
