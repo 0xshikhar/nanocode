@@ -57,6 +57,7 @@ pub(crate) struct TurnUsageCounts {
     pub(crate) reasoning_output_tokens: u64,
     pub(crate) total_tokens: u64,
     pub(crate) reported: bool,
+    pub(crate) rate_estimated: bool,
     pub(crate) estimated_cost: Option<EstimatedUsdCost>,
 }
 
@@ -88,7 +89,11 @@ impl TurnUsage {
         } else {
             (
                 counts.estimated_cost.map(Box::new),
-                CostStatus::EstimatedFromUsage,
+                if counts.rate_estimated {
+                    CostStatus::EstimatedFromUsage
+                } else {
+                    CostStatus::ReportedByProvider
+                },
             )
         };
         Self {

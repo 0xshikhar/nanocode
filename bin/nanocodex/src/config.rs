@@ -1108,6 +1108,20 @@ struct OpenRouterArgs {
         value_parser = NonEmptyStringValueParser::new()
     )]
     api_key: Option<String>,
+
+    /// Fail a model attempt after this many seconds without any bytes from
+    /// OpenRouter (keep-alive comments count). The attempt is retried by the
+    /// standard retry policy.
+    #[arg(
+        long = "provider.openrouter.stall-timeout",
+        id = "openrouter_stall_timeout",
+        value_name = "SECONDS",
+        global = true,
+        env = "NANOCODEX_PROVIDER_OPENROUTER_STALL_TIMEOUT",
+        default_value_t = nanocodex::oai::transport::DEFAULT_STALL_TIMEOUT.as_secs(),
+        value_parser = clap::value_parser!(u64).range(1..=3600)
+    )]
+    stall_timeout: u64,
 }
 
 impl OpenRouterArgs {
@@ -1120,7 +1134,10 @@ impl OpenRouterArgs {
     }
 
     fn gateway(&self) -> Option<ChatGateway> {
-        self.enabled.then(ChatGateway::openrouter)
+        self.enabled.then(|| {
+            ChatGateway::openrouter()
+                .stall_timeout(std::time::Duration::from_secs(self.stall_timeout))
+        })
     }
 }
 

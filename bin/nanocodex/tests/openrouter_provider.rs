@@ -24,6 +24,7 @@ use axum::{
     routing::post,
 };
 use eyre::{Result, eyre};
+use futures_util::StreamExt as _;
 use serde_json::{Value, json};
 use tokio::{net::TcpListener, process::Command, time::timeout};
 
@@ -36,9 +37,13 @@ type Request = (Option<String>, Value);
 /// How the synthetic OpenRouter endpoint answers.
 #[derive(Clone, Copy, Default, PartialEq)]
 enum Behaviour {
-    /// A tool turn then a final turn.
+    /// A tool turn then a final turn, without `usage.cost`.
     #[default]
     Plain,
+    /// The same turns, each carrying OpenRouter's `usage.cost`.
+    Costed,
+    /// The first attempt goes silent after one chunk; later attempts answer.
+    StallFirst,
     /// HTTP 401 whose body echoes the key and an Authorization header.
     Reject,
     /// HTTP 307 to another server.
@@ -51,6 +56,8 @@ enum Behaviour {
 #[derive(Clone, Default)]
 struct Recorded(Arc<Mutex<Vec<Request>>>, Behaviour, Option<String>);
 
+/// Turn 1 charge: $0.000123 (prompt $0.0001). Turn 2: $0.000045.
+const TURN_COSTS: [(f64, f64); 2] = [(0.000_123, 0.000_1), (0.000_045, 0.000_04)];
 const SECRET: &str = "sk-or-v1-0123456789abcdef";
 
 #[tokio::test]
@@ -128,6 +135,78 @@ async fn openrouter_turn_runs_exec_as_a_custom_tool_and_replays_it() -> Result<(
             .any(|event| event["type"] == "assistant.message"
                 && event["payload"]["text"] == "The marker is written."),
         "final answer missing: {events:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn openrouter_reported_charges_replace_rate_estimates() -> Result<()> {
+    let completed = |events: &[Value]| {
+        events
+            .iter()
+            .find(|event| event["type"] == "run.completed")
+            .map(|event| event["payload"].clone())
+            .ok_or_else(|| eyre!("run.completed missing: {events:?}"))
+    };
+    // With usage.cost on every reply, the run reports exactly OpenRouter's charge.
+    let base = serve(Recorded(Arc::default(), Behaviour::Costed, None)).await?;
+    let workspace = tempfile::tempdir()?;
+    let (success, events, stderr) = run_cli(workspace.path(), &base, &[]).await?;
+    assert!(success, "CLI failed: {stderr}");
+    let payload = completed(&events)?;
+    assert_eq!(payload["cost_status"], "reported_by_provider");
+    assert_eq!(payload["estimated_cost"]["usd"], "0.000168");
+    assert_eq!(payload["estimated_cost"]["input_usd"], "0.00014");
+    assert_eq!(payload["estimated_cost"]["output_usd"], "0.000028");
+
+    // Without it, the built-in GLM-5.3 rates still price the same tokens.
+    let base = serve(Recorded::default()).await?;
+    let workspace = tempfile::tempdir()?;
+    let (success, events, stderr) = run_cli(workspace.path(), &base, &[]).await?;
+    assert!(success, "CLI failed: {stderr}");
+    let payload = completed(&events)?;
+    assert_eq!(payload["cost_status"], "estimated_from_usage");
+    assert_ne!(payload["estimated_cost"]["usd"], "0.000168");
+    Ok(())
+}
+
+#[tokio::test]
+async fn openrouter_stalled_stream_fails_the_attempt_and_retries() -> Result<()> {
+    let recorded = Recorded(Arc::default(), Behaviour::StallFirst, None);
+    let base = serve(recorded.clone()).await?;
+    let workspace = tempfile::tempdir()?;
+    let started = std::time::Instant::now();
+    let (success, events, stderr) = run_cli(
+        workspace.path(),
+        &base,
+        &["--provider.openrouter.stall-timeout", "1"],
+    )
+    .await?;
+    assert!(success, "CLI failed after the stall: {stderr}");
+    assert!(
+        started.elapsed() < Duration::from_secs(30),
+        "the stall was not cut short"
+    );
+    let failed = events
+        .iter()
+        .find(|event| event["type"] == "model.attempt.failed")
+        .ok_or_else(|| eyre!("the stalled attempt did not fail: {events:?}"))?;
+    assert_eq!(failed["payload"]["error_class"], "https_timeout");
+    assert_eq!(failed["payload"]["retryable"], true);
+    assert!(
+        failed["payload"]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("sent no data for 1 s")),
+        "unclear stall error: {failed}"
+    );
+    assert_eq!(
+        recorded.0.lock().unwrap().len(),
+        3,
+        "stalled attempt, retry, final turn"
+    );
+    assert_eq!(
+        std::fs::read_to_string(workspace.path().join("marker.txt"))?,
+        "ok"
     );
     Ok(())
 }
@@ -332,6 +411,20 @@ async fn completions(
             .body(Body::empty())
             .unwrap();
     }
+    if behaviour == Behaviour::StallFirst && turn == 1 {
+        // One chunk, then silence with the connection held open.
+        let first = format!(
+            ": OPENROUTER PROCESSING\n\ndata: {}\n\n",
+            json!({ "choices": [{ "index": 0, "delta": { "role": "assistant", "reasoning": "Thinking" } }] })
+        );
+        let stream = futures_util::stream::iter([Ok::<_, std::io::Error>(first)])
+            .chain(futures_util::stream::pending());
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "text/event-stream")
+            .body(Body::from_stream(stream))
+            .unwrap();
+    }
     if behaviour == Behaviour::BadAliasFirst && turn <= 2 {
         let (name, arguments) = if turn == 1 {
             ("tool_999".to_owned(), json!({ "input": CELL }).to_string())
@@ -343,10 +436,30 @@ async fn completions(
         ]);
     }
     // A failed first attempt is replayed: count turns from the retry.
-    let turn = if behaviour == Behaviour::BadAliasFirst {
+    let turn = if matches!(behaviour, Behaviour::StallFirst | Behaviour::BadAliasFirst) {
         turn - 1
     } else {
         turn
+    };
+    let cost = |index: usize| {
+        (behaviour == Behaviour::Costed).then(|| {
+            let (total, prompt) = TURN_COSTS[index];
+            json!({
+                "cost": total,
+                "is_byok": false,
+                "cost_details": {
+                    "upstream_inference_cost": total,
+                    "upstream_inference_prompt_cost": prompt,
+                    "upstream_inference_completions_cost": total - prompt,
+                },
+            })
+        })
+    };
+    let usage = |index: usize, mut usage: Value| {
+        if let (Some(cost), Some(fields)) = (cost(index), usage.as_object_mut()) {
+            fields.extend(cost.as_object().cloned().unwrap_or_default());
+        }
+        usage
     };
     let chunks = if turn == 1 {
         let exec = exec_alias(&request).unwrap_or_default();
@@ -357,13 +470,13 @@ async fn completions(
             json!({ "choices": [{ "index": 0, "delta": { "role": "assistant", "reasoning": "Write the marker." } }] }),
             json!({ "choices": [{ "index": 0, "delta": { "tool_calls": [{ "index": 0, "id": "call_exec", "type": "function", "function": { "name": exec, "arguments": head } }] } }] }),
             json!({ "choices": [{ "index": 0, "delta": { "tool_calls": [{ "index": 0, "function": { "arguments": tail } }] }, "finish_reason": "tool_calls" }] }),
-            json!({ "choices": [{ "index": 0, "delta": {}, "finish_reason": "tool_calls" }], "usage": { "prompt_tokens": 1200, "completion_tokens": 40 } }),
+            json!({ "choices": [{ "index": 0, "delta": {}, "finish_reason": "tool_calls" }], "usage": usage(0, json!({ "prompt_tokens": 1200, "completion_tokens": 40 })) }),
         ]
     } else {
         vec![
             json!({ "choices": [{ "index": 0, "delta": { "role": "assistant", "content": "The marker " } }] }),
             json!({ "choices": [{ "index": 0, "delta": { "content": "is written." }, "finish_reason": "stop" }] }),
-            json!({ "choices": [], "usage": { "prompt_tokens": 1400, "completion_tokens": 6, "prompt_tokens_details": { "cached_tokens": 1100 } } }),
+            json!({ "choices": [], "usage": usage(1, json!({ "prompt_tokens": 1400, "completion_tokens": 6, "prompt_tokens_details": { "cached_tokens": 1100 } })) }),
         ]
     };
     sse(chunks)

@@ -909,7 +909,11 @@ pub(super) fn estimate_cost(
                 model,
                 service_tier,
             )),
-            crate::CostStatus::EstimatedFromUsage,
+            if usage.reported_cost.is_some() {
+                crate::CostStatus::ReportedByProvider
+            } else {
+                crate::CostStatus::EstimatedFromUsage
+            },
         ),
         None => (None, crate::CostStatus::UsageNotReported),
     }
