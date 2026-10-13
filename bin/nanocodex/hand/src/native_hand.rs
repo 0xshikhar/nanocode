@@ -246,6 +246,39 @@ impl NativeState {
     }
 }
 
+/// Explicitly move an existing identity to another workspace while keeping
+/// its machine id. A missing identity is created normally by `NativeState::open`.
+pub(super) fn rebind_identity_workspace(
+    directory: &Path,
+    workspace: &Path,
+) -> Result<(), ManagedError> {
+    let workspace = fs::canonicalize(workspace).map_err(configuration)?;
+    if !workspace.is_dir() {
+        return Err(configuration(
+            "native Hand workspace must be an existing directory",
+        ));
+    }
+    let path = directory.join("identity.json");
+    if fs::symlink_metadata(&path).is_err() {
+        return Ok(());
+    }
+    require_regular(&path, false)?;
+    let mut identity: Identity =
+        serde_json::from_slice(&fs::read(&path).map_err(configuration)?).map_err(configuration)?;
+    if identity.workspace == workspace {
+        return Ok(());
+    }
+    identity.workspace = workspace;
+    let mut temporary = tempfile::NamedTempFile::new_in(directory).map_err(configuration)?;
+    serde_json::to_writer(&mut temporary, &identity).map_err(configuration)?;
+    temporary.write_all(b"\n").map_err(configuration)?;
+    temporary.as_file().sync_all().map_err(configuration)?;
+    temporary
+        .persist(&path)
+        .map_err(|error| configuration(error.error))?;
+    Ok(())
+}
+
 fn require_regular(path: &Path, directory: bool) -> Result<(), ManagedError> {
     let kind = fs::symlink_metadata(path)
         .map_err(configuration)?
@@ -756,6 +789,28 @@ mod tests {
         let linked = directory.path().join("linked");
         std::os::unix::fs::symlink(workspace.path(), &linked).unwrap();
         assert!(NativeState::open(workspace.path(), &linked, "Server".into()).is_err());
+    }
+
+    #[test]
+    fn explicit_workspace_rebind_keeps_the_machine_identity() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let directory = private_state_directory();
+        let machine = NativeState::open(first.path(), directory.path(), "Server".into())
+            .unwrap()
+            .machine
+            .id()
+            .to_owned();
+        assert!(NativeState::open(second.path(), directory.path(), "Server".into()).is_err());
+        rebind_identity_workspace(directory.path(), second.path()).unwrap();
+        let rebound = NativeState::open(second.path(), directory.path(), "Server".into()).unwrap();
+        assert_eq!(rebound.machine.id(), machine);
+        drop(rebound);
+        // Idempotent, and a missing identity is left for normal creation.
+        rebind_identity_workspace(directory.path(), second.path()).unwrap();
+        let empty = private_state_directory();
+        rebind_identity_workspace(empty.path(), second.path()).unwrap();
+        assert!(!empty.path().join("identity.json").exists());
     }
 
     #[cfg(unix)]

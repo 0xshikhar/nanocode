@@ -178,6 +178,12 @@ pub(crate) fn repair_legacy_activation() {
     }
 }
 
+/// The installed `bin/nanocodex` launcher, when this CLI runs from a store.
+pub(crate) fn launcher_path() -> Option<std::path::PathBuf> {
+    let launcher = VersionStore::discover().ok()?.root().join("bin/nanocodex");
+    launcher.is_file().then_some(launcher)
+}
+
 /// Repair missing default scheduling only for an installed, managed CLI.
 pub(crate) fn ensure_default_automatic_updates() -> Result<()> {
     let store = VersionStore::discover()?;

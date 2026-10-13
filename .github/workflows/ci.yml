@@ -180,6 +180,12 @@ jobs:
         run: >-
           python3 bin/nanocodex/tests/install_network_e2e.py
           target/debug/nanocodex target/debug/nanocodex-hand output/installer-bundle
+      - name: Exercise Linux Hand setup without administrator access
+        if: runner.os == 'Linux'
+        timeout-minutes: 3
+        run: >-
+          python3 bin/nanocodex/tests/linux_hand_sudo_diagnostics_e2e.py
+          target/debug/nanocodex output/linux-hand-sudo-diagnostics
       - name: Exercise release metadata recovery
         if: runner.os == 'Linux'
         timeout-minutes: 5

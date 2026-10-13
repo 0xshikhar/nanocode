@@ -92,9 +92,15 @@ impl Install {
             .await
             .wrap_err("failed to start the installed Nanocodex setup")?;
         if !status.success() {
+            // The child reported the failed stage and its next commands above.
             bail!(
-                "the binaries are installed; resume setup with: {} setup",
-                executable.display()
+                "the binaries are installed, but setup stopped at the stage reported above; resume with: {} setup{}",
+                executable.display(),
+                if std::io::stdin().is_terminal() {
+                    ""
+                } else {
+                    " (from an interactive terminal)"
+                }
             );
         }
         Ok(())

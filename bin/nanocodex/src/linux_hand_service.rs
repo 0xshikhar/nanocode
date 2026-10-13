@@ -2,7 +2,6 @@
 //! a foreground Hand or changes its user, account, boot unit, factory or guests.
 use std::{
     fs,
-    io::IsTerminal as _,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -83,7 +82,34 @@ pub(crate) async fn status() -> Result<ServiceStatus> {
 
 pub(crate) async fn print_status() -> Result<()> {
     println!("{}", serde_json::to_string_pretty(&status().await?)?);
+    if let Some(note) = owner_note(&installation_record(), nix::unistd::geteuid().as_raw()) {
+        eprintln!("{note}");
+    }
     Ok(())
+}
+
+/// The public installation record (service owner, machine, workspace).
+pub(crate) fn installation_record() -> serde_json::Value {
+    fs::read("/opt/nanocodex/installation.json")
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or(serde_json::Value::Null)
+}
+
+/// Explain why another user's private Hand endpoint is not visible here.
+pub(crate) fn owner_note(record: &serde_json::Value, euid: u32) -> Option<String> {
+    let uid = record["service_uid"].as_u64()?;
+    if uid == u64::from(euid) {
+        return None;
+    }
+    let user = record["service_user"].as_str().map_or_else(
+        || format!("uid {uid}"),
+        |name| format!("{name} (uid {uid})"),
+    );
+    let machine = record["machine_id"].as_str().unwrap_or("unknown");
+    Some(format!(
+        "The Hand service runs as {user}; its private status endpoint is visible only to that account. Machine {machine}: check account connectivity with nanocodex hand list. To serve this account's desktop instead, as root: nanocodex hand install --service-user <this user>."
+    ))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -297,9 +323,14 @@ pub(crate) async fn authorize() -> Result<()> {
     if cached.success() {
         return Ok(());
     }
-    if !std::io::stdin().is_terminal() {
+    if !crate::hand_setup::has_controlling_terminal() && std::env::var_os("SUDO_ASKPASS").is_none()
+    {
         bail!(
-            "Device administrator authorization is required to update the system Hand; background updates only stage the verified bundle"
+            "Hand update stopped at stage administrator access: sudo needs a password, but this session has no terminal to ask for it.
+State: the running Hand is unchanged; a verified update remains staged.
+Retryable: yes. Next, one of:
+  - in an interactive terminal on this machine: nanocodex update --apply --restart-hand
+  - over SSH with a terminal: ssh -t HOST nanocodex update --apply --restart-hand"
         );
     }
     if !Command::new("/usr/bin/sudo")
@@ -308,7 +339,11 @@ pub(crate) async fn authorize() -> Result<()> {
         .await?
         .success()
     {
-        bail!("Device administrator authorization was not granted");
+        bail!(
+            "Hand update stopped at stage administrator access: sudo authentication failed or this account may not use sudo.
+State: the running Hand is unchanged; a verified update remains staged.
+Retryable: yes: nanocodex update --apply --restart-hand"
+        );
     }
     Ok(())
 }
@@ -357,4 +392,24 @@ pub(crate) async fn validate_candidate(candidate: &Path) -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn owner_note_explains_another_accounts_service() {
+        let record = json!({"service_uid": 960, "service_user": "nanocodex", "machine_id": "m-1"});
+        let note = owner_note(&record, 1000).unwrap();
+        assert!(note.contains("runs as nanocodex (uid 960)"));
+        assert!(note.contains("Machine m-1"));
+        assert!(note.contains("--service-user"));
+        assert!(
+            !note.contains("restart"),
+            "no restart advice that needs another account"
+        );
+        assert!(owner_note(&record, 960).is_none());
+        assert!(owner_note(&json!({}), 1000).is_none());
+    }
 }

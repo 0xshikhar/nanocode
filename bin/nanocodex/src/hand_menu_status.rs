@@ -45,8 +45,16 @@ pub(crate) async fn run() -> Result<()> {
 
 async fn local_status() -> Value {
     let result = tokio::time::timeout(Duration::from_secs(3), async {
-        let state = crate::hand_service::status().await?;
-        let pending = crate::hand_service::is_pending().await?;
+        #[cfg(target_os = "linux")]
+        let (state, pending) = (
+            crate::linux_hand_service::status().await?,
+            crate::linux_hand_service::installation_record()["pending_login"] == true,
+        );
+        #[cfg(not(target_os = "linux"))]
+        let (state, pending) = (
+            crate::hand_service::status().await?,
+            crate::hand_service::is_pending().await?,
+        );
         #[cfg(target_os = "macos")]
         let keep_awake = std::env::var_os("HOME").and_then(|home| {
             crate::hand_keep_awake::snapshot(std::path::Path::new(&home), state.pid).ok()

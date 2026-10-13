@@ -328,7 +328,10 @@ impl State {
             {
                 session.validate_inherited_text_session()?;
             }
-            if self::text::type_text(text).await.map_err(error)? {
+            if self::text::type_text(text, self.session.as_ref())
+                .await
+                .map_err(error)?
+            {
                 return Ok(());
             }
         }

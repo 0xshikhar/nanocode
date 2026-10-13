@@ -414,7 +414,9 @@ main() {
     "$bootstrap" install "$@" || install_status=$?
   fi
   if [ "$install_status" -ne 0 ]; then
-    say "installation did not finish (exit $install_status); rerun the same command to resume"
+    # Setup reports the stage it stopped at and its exact next command; a
+    # rerun only resumes after that cause is addressed.
+    say "installation did not finish (exit $install_status); follow the next step reported above, then rerun the same command to resume"
   fi
   return "$install_status"
 }

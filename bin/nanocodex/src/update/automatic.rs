@@ -435,8 +435,41 @@ mod linux {
         Ok(())
     }
 
+    /// Root must not schedule its own timer for a non-root user's store
+    /// (for example root provisioning over SSH with that user's CLI).
+    pub(super) const fn root_scheduling_foreign_store(euid: u32, owner: u32) -> bool {
+        euid == 0 && owner != 0
+    }
+
+    #[cfg(not(unix))]
+    fn foreign_owner(_root: &Path) -> Result<Option<u32>> {
+        Ok(None)
+    }
+
+    #[cfg(unix)]
+    fn foreign_owner(root: &Path) -> Result<Option<u32>> {
+        use std::os::unix::fs::MetadataExt as _;
+        let owner = match fs::metadata(root) {
+            Ok(metadata) => metadata.uid(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        let euid = nix::unistd::geteuid().as_raw();
+        Ok(root_scheduling_foreign_store(euid, owner).then_some(owner))
+    }
+
     pub(super) fn ensure_default(root: &Path, nightly: bool) -> Result<()> {
         if entry_exists(&opt_out_path(root))? {
+            return Ok(());
+        }
+        // A default schedule belongs to the installation's owner. Running a
+        // CLI from another account (for example root provisioning over SSH)
+        // must not create that account's timer for someone else's files.
+        if let Some(owner) = foreign_owner(root)? {
+            eprintln!(
+                "Automatic updates were not enabled for {}: it belongs to uid {owner}, and root does not schedule updates for another user's installation. Run nanocodex as that user to manage its updates.",
+                root.display()
+            );
             return Ok(());
         }
         let home = home()?;
@@ -627,6 +660,16 @@ mod linux {
 
         // Real systemctl, isolated in a child to avoid changing the test runner's
         // environment or contacting the host's user manager. No service is started.
+        #[test]
+        fn root_never_schedules_for_a_non_root_store() {
+            assert!(root_scheduling_foreign_store(0, 1000));
+            assert!(!root_scheduling_foreign_store(0, 0));
+            assert!(!root_scheduling_foreign_store(1000, 1000));
+            // A non-root user keeps today's behavior for shared stores.
+            assert!(!root_scheduling_foreign_store(1000, 0));
+            assert!(!root_scheduling_foreign_store(1000, 960));
+        }
+
         #[test]
         fn offline_install_repairs_owned_units_and_preserves_channel() {
             const CHILD: &str = "NANOCODEX_TEST_OFFLINE_UPDATER";

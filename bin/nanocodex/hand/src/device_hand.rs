@@ -58,8 +58,24 @@ pub(crate) struct DeviceHand {
 }
 
 fn open(directory: &Path) -> Result<NativeState, ManagedError> {
-    let workspace = home()?.join("Nanocodex");
-    fs::create_dir_all(&workspace).map_err(error)?;
+    // A system installation may select an existing workspace explicitly; the
+    // machine identity follows it rather than minting another computer.
+    let workspace =
+        match std::env::var_os("NANOCODEX_HAND_WORKSPACE").filter(|path| !path.is_empty()) {
+            Some(path) => {
+                let path = PathBuf::from(path);
+                if !path.is_absolute() {
+                    return Err(error("NANOCODEX_HAND_WORKSPACE must be an absolute path"));
+                }
+                super::native_hand::rebind_identity_workspace(directory, &path)?;
+                path
+            }
+            None => {
+                let path = home()?.join("Nanocodex");
+                fs::create_dir_all(&path).map_err(error)?;
+                path
+            }
+        };
     NativeState::open(
         &workspace,
         directory,
@@ -77,6 +93,19 @@ fn identity(directory: &Path) -> Result<Value, ManagedError> {
     Ok(
         json!({"id": value["machine_id"], "name": super::host::bounded_display_name(whoami::devicename()), "workspace": value["workspace"], "kind": "local"}),
     )
+}
+/// What native screen discovery selects for this OS account right now: the
+/// account's own live Wayland session or the Hand's private virtual desktop.
+#[cfg(target_os = "linux")]
+fn screen_discovery() -> Value {
+    use super::screen_linux_session::{Selection, select};
+    match select() {
+        Ok(Selection::Wayland(session)) => {
+            json!({"source": "wayland", "display": session.display().to_string_lossy()})
+        }
+        Ok(Selection::PrivateDesktop) => json!({"source": "private_desktop"}),
+        Err(error) => json!({"source": "unavailable", "error": error.to_string()}),
+    }
 }
 fn publish(directory: &Path, value: &Value) -> Result<(), ManagedError> {
     let mut file = tempfile::NamedTempFile::new_in(directory).map_err(error)?;
@@ -287,7 +316,11 @@ async fn serve_inner(command: DeviceHand) -> Result<(), ManagedError> {
         // Another client can be publishing the initial identity at this instant.
         for _ in 0..20 {
             match identity(&directory) {
-                Ok(value) => {
+                Ok(mut value) => {
+                    #[cfg(target_os = "linux")]
+                    {
+                        value["screen"] = screen_discovery();
+                    }
                     emit(&value);
                     return Ok(());
                 }

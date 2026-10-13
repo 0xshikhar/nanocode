@@ -151,7 +151,7 @@ fn validate_runtime(runtime: &Path, uid: u32) -> Result<()> {
 }
 
 impl WaylandSession {
-    fn validated(runtime: &Path, display: &OsStr, uid: u32) -> Result<Self> {
+    pub(crate) fn validated(runtime: &Path, display: &OsStr, uid: u32) -> Result<Self> {
         let display_path = Path::new(display);
         // libwayland permits absolute display paths, but only direct children of
         // the validated runtime are accepted here. Never accept ../ or symlinks.
@@ -243,6 +243,11 @@ impl WaylandSession {
             ));
         }
         Ok(())
+    }
+
+    /// The captured display socket name, for truthful readiness reports.
+    pub(crate) fn display(&self) -> &OsStr {
+        &self.display
     }
 
     pub(crate) fn configure(&self, command: &mut tokio::process::Command) -> Result<()> {
@@ -431,6 +436,14 @@ mod tests {
         net::UnixListener,
     };
 
+    // Close the listener for every holder. A test helper forked concurrently
+    // can briefly inherit this descriptor, so dropping ours alone may leave the
+    // socket accepting connections and make "stale" look alive.
+    fn close(listener: UnixListener) {
+        use std::os::fd::AsRawFd as _;
+        nix::sys::socket::shutdown(listener.as_raw_fd(), nix::sys::socket::Shutdown::Both).unwrap();
+    }
+
     struct Fixture {
         directory: tempfile::TempDir,
         uid: u32,
@@ -498,7 +511,7 @@ mod tests {
     fn empty_stale_invalid_and_foreign_hints_never_become_sessions() {
         let f = Fixture::new();
         let stale = f.socket("wayland-0");
-        drop(stale);
+        close(stale);
         for display in [
             None,
             Some(""),
@@ -549,6 +562,36 @@ mod tests {
             Selection::PrivateDesktop
         ));
         assert!(f.select(Some("wayland"), None, Some("wayland-1")).is_err());
+    }
+
+    // Explicit legacy text helpers inherit the service environment; it must
+    // name exactly the captured compositor or text is refused.
+    #[test]
+    fn inherited_text_environment_must_match_the_captured_session() {
+        let f = Fixture::new();
+        let _captured = f.socket("wayland-1");
+        let _other = f.socket("wayland-2");
+        let session =
+            WaylandSession::validated(f.directory.path(), OsStr::new("wayland-1"), f.uid).unwrap();
+        let runtime = Some(f.directory.path().as_os_str());
+        assert!(
+            session
+                .validate_text_environment(runtime, Some(OsStr::new("wayland-1")))
+                .is_ok()
+        );
+        let mismatch = session
+            .validate_text_environment(runtime, Some(OsStr::new("wayland-2")))
+            .unwrap_err();
+        assert!(
+            mismatch.to_string().contains("differs from the captured"),
+            "{mismatch}"
+        );
+        assert!(session.validate_text_environment(runtime, None).is_err());
+        assert!(
+            session
+                .validate_text_environment(None, Some(OsStr::new("wayland-1")))
+                .is_err()
+        );
     }
 
     #[test]
@@ -633,7 +676,7 @@ mod tests {
         );
         assert_eq!(std::env::var_os("XDG_RUNTIME_DIR"), before_runtime);
         assert_eq!(std::env::var_os("WAYLAND_DISPLAY"), before_display);
-        drop(live);
+        close(live);
         assert!(
             session.configure(&mut child).is_err(),
             "recovery must not trust stale captured socket"

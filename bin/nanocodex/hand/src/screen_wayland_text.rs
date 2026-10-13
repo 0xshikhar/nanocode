@@ -11,10 +11,15 @@ use tokio::{
     process::Command,
 };
 
+use super::WaylandSession;
+
 struct Config {
     x11: bool,
     display: bool,
     wtype: bool,
+    /// Use wtype when present because this user's input method (fcitx5,
+    /// ibus) owns input-method-v2, so Waymote IME commits would be dropped.
+    wtype_auto: bool,
     path: OsString,
 }
 impl Config {
@@ -23,6 +28,8 @@ impl Config {
             x11: std::env::var("NANOCODEX_WAYLAND_TEXT_X11").as_deref() == Ok("1"),
             display: std::env::var_os("DISPLAY").is_some_and(|v| !v.is_empty()),
             wtype: std::env::var("NANOCODEX_WAYLAND_TEXT_WTYPE").as_deref() == Ok("1"),
+            wtype_auto: std::env::var_os("NANOCODEX_WAYLAND_TEXT_WTYPE").is_none()
+                && same_user_input_method(),
             path: std::env::var_os("PATH").unwrap_or_default(),
         }
     }
@@ -48,10 +55,33 @@ impl Config {
     }
 }
 
-pub(super) async fn type_text(text: &str) -> io::Result<bool> {
-    type_with(&Config::environment(), text).await
+/// Whether an input-method daemon runs as this user. Only same-owner process
+/// names are inspected; other users' sessions are never examined.
+fn same_user_input_method() -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    let uid = nix::unistd::geteuid().as_raw();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.bytes().all(|b| b.is_ascii_digit()))
+            && entry.metadata().is_ok_and(|meta| meta.uid() == uid)
+            && std::fs::read_to_string(entry.path().join("comm"))
+                .is_ok_and(|comm| matches!(comm.trim(), "fcitx5" | "fcitx" | "ibus-daemon"))
+    })
 }
-async fn type_with(config: &Config, text: &str) -> io::Result<bool> {
+
+pub(super) async fn type_text(text: &str, session: Option<&WaylandSession>) -> io::Result<bool> {
+    type_with(&Config::environment(), session, text).await
+}
+async fn type_with(
+    config: &Config,
+    session: Option<&WaylandSession>,
+    text: &str,
+) -> io::Result<bool> {
     tokio::time::timeout(Duration::from_secs(5), async {
         if config.x11
             && config.display
@@ -63,16 +93,41 @@ async fn type_with(config: &Config, text: &str) -> io::Result<bool> {
                 &["type", "--clearmodifiers", "--delay", "1", "--file", "-"],
                 text.as_bytes(),
                 Duration::from_secs(5),
+                None,
             )
             .await?;
             successful(result)?;
             return Ok(true);
         }
-        if config.wtype {
-            let executable = config
-                .executable("wtype")?
-                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "wtype is unavailable"))?;
-            successful(run(&executable, &["-"], text.as_bytes(), Duration::from_secs(5)).await?)?;
+        let executable =
+            if config.wtype {
+                Some(config.executable("wtype")?.ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::NotFound, "wtype is unavailable")
+                })?)
+            } else if config.wtype_auto {
+                config.executable("wtype")?
+            } else {
+                None
+            };
+        if let Some(executable) = executable {
+            // wtype is a Wayland client: it must reach the captured compositor,
+            // never whichever display (if any) this service process inherited.
+            let session = session.ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "wtype requires the captured Wayland session",
+                )
+            })?;
+            successful(
+                run(
+                    &executable,
+                    &["-"],
+                    text.as_bytes(),
+                    Duration::from_secs(5),
+                    Some(session),
+                )
+                .await?,
+            )?;
             return Ok(true);
         }
         Ok(false) // Default: Waymote IME commits.
@@ -101,6 +156,7 @@ async fn focused(executable: &std::path::Path) -> io::Result<bool> {
         &["getwindowfocus", "getwindowpid"],
         &[],
         Duration::from_millis(250),
+        None,
     )
     .await
     .map_err(|e| io::Error::new(e.kind(), format!("X11 focus probe: {e}")))?;
@@ -149,8 +205,17 @@ async fn run(
     args: &[&str],
     text: &[u8],
     limit: Duration,
+    session: Option<&WaylandSession>,
 ) -> io::Result<Output> {
-    let mut child = Command::new(executable)
+    let mut command = Command::new(executable);
+    if let Some(session) = session {
+        // Revalidates the live same-uid compositor socket before every delivery
+        // and names it explicitly; a replaced or foreign socket refuses the text.
+        session
+            .configure(&mut command)
+            .map_err(|e| io::Error::other(format!("captured Wayland session: {e}")))?;
+    }
+    let mut child = command
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -212,23 +277,44 @@ mod tests {
     // Forked helpers can briefly inherit another test's writable script FD.
     // Serialize fixture writes and execs so ETXTBSY cannot mask delivery errors.
     static FIXTURES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    const DISPLAY: &str = "wayland-text-test";
     struct Fixture {
+        // A real private runtime directory with a live same-uid listener stands
+        // in for the captured compositor; nothing connects to a user's session.
+        compositor: Option<std::os::unix::net::UnixListener>,
+        session: WaylandSession,
         dir: tempfile::TempDir,
         _guard: std::sync::MutexGuard<'static, ()>,
     }
     impl Fixture {
         fn new() -> Self {
             let guard = FIXTURES.lock().unwrap_or_else(|e| e.into_inner());
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+            let compositor =
+                std::os::unix::net::UnixListener::bind(dir.path().join(DISPLAY)).unwrap();
+            let session = WaylandSession::validated(
+                dir.path(),
+                std::ffi::OsStr::new(DISPLAY),
+                nix::unistd::geteuid().as_raw(),
+            )
+            .unwrap();
             Self {
-                dir: tempfile::tempdir().unwrap(),
+                compositor: Some(compositor),
+                session,
+                dir,
                 _guard: guard,
             }
+        }
+        async fn typed(&self, config: &Config, text: &str) -> io::Result<bool> {
+            type_with(config, Some(&self.session), text).await
         }
         fn config(&self, x11: bool, display: bool, wtype: bool) -> Config {
             Config {
                 x11,
                 display,
                 wtype,
+                wtype_auto: false,
                 path: self.dir.path().as_os_str().into(),
             }
         }
@@ -255,7 +341,7 @@ mod tests {
         f.script("xdotool", "echo called > probe; exit 2");
         for (x11, display) in [(false, true), (true, false)] {
             assert!(
-                !type_with(&f.config(x11, display, false), "abc")
+                !f.typed(&f.config(x11, display, false), "abc")
                     .await
                     .unwrap()
             );
@@ -268,7 +354,7 @@ mod tests {
         f.script("xdotool", "if [ \"$1\" = getwindowfocus ]; then printf '%s\\n' \"$@\" > probe; echo 42; else printf '%s\\n' \"$@\" > args; /bin/cat > text; fi");
         f.script("wtype", "echo called > wtype-called; exit 1");
         let text = "--世界🙂\n'$(false)'";
-        assert!(type_with(&f.config(true, true, true), text).await.unwrap());
+        assert!(f.typed(&f.config(true, true, true), text).await.unwrap());
         assert_eq!(f.log("probe"), b"getwindowfocus\ngetwindowpid\n");
         assert_eq!(
             f.log("args"),
@@ -289,16 +375,8 @@ mod tests {
             "echo 'XGetInputFocus returned the focused window of 1.' >&2; exit 1",
         ] {
             f.script("xdotool", body);
-            assert!(
-                !type_with(&f.config(true, true, false), "IME")
-                    .await
-                    .unwrap()
-            );
-            assert!(
-                type_with(&f.config(true, true, true), "世界")
-                    .await
-                    .unwrap()
-            );
+            assert!(!f.typed(&f.config(true, true, false), "IME").await.unwrap());
+            assert!(f.typed(&f.config(true, true, true), "世界").await.unwrap());
             assert_eq!(f.log("text"), "世界".as_bytes());
             assert_eq!(f.log("args"), b"-\n");
         }
@@ -306,25 +384,30 @@ mod tests {
     #[tokio::test]
     async fn missing_xdotool_and_independent_wtype() {
         let f = Fixture::new();
+        assert!(!f.typed(&f.config(true, true, false), "IME").await.unwrap());
         assert!(
-            !type_with(&f.config(true, true, false), "IME")
-                .await
-                .unwrap()
-        );
-        assert!(
-            type_with(&f.config(false, false, true), "hello")
+            f.typed(&f.config(false, false, true), "hello")
                 .await
                 .is_err()
         );
         f.script("wtype", "/bin/cat > text");
         for (x11, display) in [(false, false), (true, true)] {
-            assert!(
-                type_with(&f.config(x11, display, true), "🙂")
-                    .await
-                    .unwrap()
-            );
+            assert!(f.typed(&f.config(x11, display, true), "🙂").await.unwrap());
             assert_eq!(f.log("text"), "🙂".as_bytes());
         }
+    }
+    #[tokio::test]
+    async fn input_method_owner_uses_wtype_only_when_present() {
+        let f = Fixture::new();
+        let auto = Config {
+            wtype_auto: true,
+            ..f.config(false, false, false)
+        };
+        // Absent wtype keeps the default Waymote IME path instead of failing.
+        assert!(!f.typed(&auto, "IME").await.unwrap());
+        f.script("wtype", "/bin/cat > text");
+        assert!(f.typed(&auto, "héllo").await.unwrap());
+        assert_eq!(f.log("text"), "héllo".as_bytes());
     }
     #[tokio::test]
     async fn broken_probe_never_falls_back() {
@@ -340,20 +423,14 @@ mod tests {
         ] {
             f.script("xdotool", body);
             assert!(
-                type_with(&f.config(true, true, true), "text")
-                    .await
-                    .is_err(),
+                f.typed(&f.config(true, true, true), "text").await.is_err(),
                 "{body}"
             );
             f.absent("fallback");
         }
         let path = f.script("xdotool", "echo 42");
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644)).unwrap();
-        assert!(
-            type_with(&f.config(true, true, true), "text")
-                .await
-                .is_err()
-        );
+        assert!(f.typed(&f.config(true, true, true), "text").await.is_err());
         f.absent("fallback");
     }
     #[tokio::test]
@@ -361,7 +438,8 @@ mod tests {
         let f = Fixture::new();
         f.script("xdotool", "if [ \"$1\" = getwindowfocus ]; then echo 42; else /bin/dd bs=1 count=3 of=prefix 2>/dev/null; exit 7; fi");
         f.script("wtype", "echo called > fallback");
-        let failure = type_with(&f.config(true, true, true), "世界🙂")
+        let failure = f
+            .typed(&f.config(true, true, true), "世界🙂")
             .await
             .unwrap_err();
         assert!(failure.to_string().contains("exit status: 7"), "{failure}");
@@ -371,7 +449,8 @@ mod tests {
             "wtype",
             "/bin/dd bs=1 count=3 of=prefix 2>/dev/null; exit 9",
         );
-        let failure = type_with(&f.config(false, false, true), "界🙂")
+        let failure = f
+            .typed(&f.config(false, false, true), "界🙂")
             .await
             .unwrap_err();
         assert!(failure.to_string().contains("exit status: 9"), "{failure}");
@@ -384,11 +463,7 @@ mod tests {
         for body in ["exec /bin/sleep 10", "/bin/sleep 10 & echo 42"] {
             f.script("xdotool", body);
             let start = std::time::Instant::now();
-            assert!(
-                type_with(&f.config(true, true, true), "text")
-                    .await
-                    .is_err()
-            );
+            assert!(f.typed(&f.config(true, true, true), "text").await.is_err());
             assert!(start.elapsed() < Duration::from_secs(2));
             f.absent("fallback");
         }
@@ -403,7 +478,8 @@ mod tests {
                 &executable,
                 &[],
                 &vec![b'x'; 1_000_000],
-                Duration::from_millis(100)
+                Duration::from_millis(100),
+                None
             )
             .await
             .is_err()
@@ -423,9 +499,73 @@ mod tests {
             "/bin/dd if=/dev/zero bs=20000 count=1 2>/dev/null",
         );
         assert!(
-            run(&executable, &[], &[], Duration::from_millis(250))
+            run(&executable, &[], &[], Duration::from_millis(250), None)
                 .await
                 .is_err()
         );
+    }
+
+    // Production services inherit no Wayland environment (session discovery is
+    // deliberately not process-global), so the helper must be told the captured
+    // compositor explicitly. Assert what the spawned helper actually received.
+    #[tokio::test]
+    async fn wtype_receives_the_captured_session_not_the_inherited_environment() {
+        let f = Fixture::new();
+        f.script(
+            "wtype",
+            "printf '%s\\n' \"$XDG_RUNTIME_DIR\" \"$WAYLAND_DISPLAY\" > env; /bin/cat > text",
+        );
+        let expected = format!("{}\n{DISPLAY}\n", f.dir.path().display());
+        let auto = Config {
+            wtype_auto: true,
+            ..f.config(false, false, false)
+        };
+        for config in [&auto, &f.config(false, false, true)] {
+            assert!(f.typed(config, "héllo 世界").await.unwrap());
+            assert_eq!(f.log("env"), expected.as_bytes());
+            assert_eq!(f.log("text"), "héllo 世界".as_bytes());
+            std::fs::remove_file(f.dir.path().join("env")).unwrap();
+        }
+        // Without a captured session the helper is never started.
+        let failure = type_with(&auto, None, "text").await.unwrap_err();
+        assert!(
+            failure.to_string().contains("captured Wayland session"),
+            "{failure}"
+        );
+        f.absent("env");
+    }
+    #[tokio::test]
+    async fn closed_or_replaced_compositor_socket_refuses_text() {
+        let mut f = Fixture::new();
+        f.script("wtype", "echo called > called");
+        let auto = Config {
+            wtype_auto: true,
+            ..f.config(false, false, false)
+        };
+        // The compositor exited: its socket path remains but nothing listens.
+        // Shut the listener down for every holder; a concurrently forked test
+        // helper may briefly share this descriptor.
+        let compositor = f.compositor.take().unwrap();
+        nix::sys::socket::shutdown(
+            std::os::fd::AsRawFd::as_raw_fd(&compositor),
+            nix::sys::socket::Shutdown::Both,
+        )
+        .unwrap();
+        drop(compositor);
+        let failure = f.typed(&auto, "secret").await.unwrap_err();
+        assert!(
+            failure.to_string().contains("captured Wayland session"),
+            "{failure}"
+        );
+        f.absent("called");
+        // The socket path was replaced by something that is not a socket.
+        std::fs::remove_file(f.dir.path().join(DISPLAY)).unwrap();
+        std::fs::write(f.dir.path().join(DISPLAY), b"not a socket").unwrap();
+        let failure = f.typed(&auto, "secret").await.unwrap_err();
+        assert!(
+            failure.to_string().contains("captured Wayland session"),
+            "{failure}"
+        );
+        f.absent("called");
     }
 }
