@@ -30,9 +30,8 @@ and developer tools. OpenAI and Claude harnesses share an owned lifecycle while
 keeping their provider-native transports, histories, and tools. Your application
 controls the interface, authentication, data, infrastructure, and policy.
 
-Configure both backends once, then spawn an agent and give it a prompt.
-The workspace is global; tools and Code Mode belong to each harness. Default
-tools are included without tool factories.
+Configure both subscription backends once. Spawn with the default harness
+(Codex), or select Claude. Workspace, tools, and Code Mode use their defaults.
 
 <table>
 <tr><th>Rust</th><th>JavaScript (Node.js)</th></tr>
@@ -40,96 +39,60 @@ tools are included without tool factories.
 <td valign="top">
 
 ```rust
-use nanocodex::{
-    ClaudeHarness, CodexHarness, HarnessFamily, Nanocodex, OpenAi,
-    claude::ClaudeClient,
-};
+use std::sync::Arc;
+use nanocodex::{HarnessFamily, Nanocodex, OpenAi};
+use nanocodex::oai::auth::ChatGptSubscription;
+use nanocodex::claude::{ClaudeClient, subscription::ClaudeSubscription};
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let openai = OpenAi::new(std::env::var("OPENAI_API_KEY")?)?;
-    let claude = ClaudeClient::official(
-        reqwest::Client::new(),
-        std::env::var("ANTHROPIC_API_KEY")?,
-    );
+let chatgpt = ChatGptSubscription::open(chatgpt_host, "chatgpt", None).await?;
+let claude = ClaudeSubscription::new(claude_host, "claude", Default::default())?;
+let nano = Nanocodex::builder()
+    .openai(OpenAi::new(chatgpt.authorization().await?)?)
+    .claude(ClaudeClient::subscription(reqwest::Client::new(), Arc::new(claude)))
+    .build()?;
 
-    let nano = Nanocodex::builder()
-        .workspace(std::env::current_dir()?)
-        .openai(CodexHarness::new(openai).code_mode(true))
-        .claude(ClaudeHarness::new(claude).code_mode(true))
-        .build()?;
+let (coder, _) = nano.spawn().build().await?;
+let code = coder.prompt("Fix the parser test.").await?.await?;
 
-    let (agent, _events) = nano
-        .spawn()
-        .harness(HarnessFamily::Claude) // Optional; defaults to Codex.
-        .build()
-        .await?;
-    let result = agent
-        .prompt("Find and fix the failing parser test.")
-        .await?
-        .await?;
-    println!("{}", result.final_message());
-
-    nano.shutdown().await?;
-    Ok(())
-}
+let (reviewer, _) = nano.spawn().harness(HarnessFamily::Claude).build().await?;
+let review = reviewer.prompt("Review the parser fix.").await?.await?;
 ```
 
 </td>
 <td valign="top">
 
 ```js
-import { Nanocodex, Transport } from "nanocodex/node";
+import { Nanocodex, Transport, ChatGptSubscription } from "nanocodex/node";
+import { ClaudeSubscription } from "nanocodex/worker";
 
+const chatgpt = await ChatGptSubscription.open({ id: "chatgpt", store });
+const claude = await ClaudeSubscription.open({ id: "claude", store, module });
 const nano = await Nanocodex.create({
-  workspace: process.cwd(),
   backends: {
-    codex: {
-      transport: Transport.openAi({
-        apiKey: process.env.OPENAI_API_KEY,
-      }),
-      codeMode: true,
-    },
-    claude: {
-      transport: Transport.anthropic({
-        apiKey: process.env.ANTHROPIC_API_KEY,
-      }),
-      codeMode: true,
-    },
+    codex: Transport.chatGpt({ subscription: chatgpt }),
+    claude: Transport.anthropic({ subscription: claude }),
   },
 });
 
-try {
-  const agent = await nano.spawn({
-    harness: "claude", // Optional; defaults to Codex.
-  });
-  const turn = agent.turn.prompt({
-    input: "Find and fix the failing parser test.",
-  });
-  try {
-    const result = await turn.result();
-    try {
-      console.log(result.finalMessage);
-    } finally {
-      result.dispose();
-    }
-  } finally {
-    turn.dispose();
-  }
-} finally {
-  await nano.shutdown();
-}
+const coder = await nano.spawn();
+const code = await coder.turn.prompt({ input: "Fix the parser test." }).result();
+
+const reviewer = await nano.spawn({ harness: "claude" });
+const review = await reviewer.turn.prompt({ input: "Review the parser fix." }).result();
 ```
 
 </td>
 </tr>
 </table>
 
-Omit `.harness(...)` in Rust or use `nano.spawn()` in JS to select the default
-backend. The current API creates the agent with `spawn` and submits its prompt
-separately. Set `code_mode(false)` / `codeMode: false` to expose tools directly.
-Rust requires the `claude` feature plus `reqwest` and `tokio`; the JS factory
-requires a pinned checkout until the next package release.
+The host adapters (`chatgpt_host`, `claude_host`) and JS `store` hold already
+signed-in subscriptions. JS `module` is the precompiled `nanocodex/wasm` module
+required by `ClaudeSubscription.open`. Opening a handle reuses stored login;
+first-time sign-in belongs in your application's authentication flow. See
+[ChatGPT subscriptions](crates/nanocodex-oai-api/src/auth/subscription.rs) and
+[Claude authentication](docs/claude-authentication.md).
+Rust snippets run inside an async function returning `Result`, with the `claude`
+feature enabled. The JS factory requires a pinned checkout until the next release.
 
 ## Rust: start here
 
