@@ -227,6 +227,7 @@
     "nanocodex-tools": "workspace:*",
     "pako": "2.1.0",
     "quickjs-emscripten-core": "0.32.0",
+    "re2js": "1.3.3",
     "sprintf-js": "1.1.3",
     "wata": "0.4.0",
     "ws": "^8.18.3"

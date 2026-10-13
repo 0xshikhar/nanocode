@@ -13,6 +13,7 @@ import {
   Nanocodex,
   Subagents,
   Transport,
+  Workspace,
   createMemoryChatGptSubscriptionStore,
 } from "../node/index.mjs";
 import { Nanocodex as HostNanocodex, Transport as HostTransport } from "../host/index.mjs";
@@ -243,8 +244,9 @@ test("Nanocodex.create configures backends once and owns independent roots", { t
     const { readFile } = await import("node:fs/promises");
     const module = await WebAssembly.compile(await readFile(new URL("../pkg-web/nanocodex_bg.wasm", import.meta.url)));
     await assert.rejects(HostNanocodex.create({ backends: { claude: HostTransport.anthropic({ apiKey: "synthetic", endpoint }) }, module }), /explicit codeEvaluator/);
+    const sharedFiles = await Workspace.open({ path: process.cwd(), root: "/workspace" });
     for (const factory of [HostNanocodex, BrowserNanocodex]) {
-      const runtime = await factory.create({ backends: { claude: HostTransport.anthropic({ apiKey: "synthetic", endpoint }) }, module, codeEvaluator: async () => {} });
+      const runtime = await factory.create({ filesystem: sharedFiles, backends: { claude: HostTransport.anthropic({ apiKey: "synthetic", endpoint }) }, module, codeEvaluator: async () => {} });
       assert.equal(runtime.defaults.model, "claude-opus-5-5");
       await runtime.shutdown();
     }

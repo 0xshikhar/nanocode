@@ -24,16 +24,13 @@ export type ToolFactoryContext = Readonly<{ harness: HarnessFamily; role: "root"
 export type ToolSource<Tools> = Tools | ((context: ToolFactoryContext) => Tools | Promise<Tools>);
 
 type BackendBase = {
-  /** The model's working directory label. Grants no file access by itself. */
-  workspace?: string | undefined;
-  /** Rooted file capability; fixes workspace to its root. Shared adapters share files, never execution state. */
-  filesystem?: Workspace | undefined;
   /** true (default): only exec/wait reach the model. false: host tools are exposed directly. */
   codeMode?: boolean | undefined;
 };
 
 export type CodexBackend<Transport> = Readonly<BackendBase & {
   transport: Transport;
+  /** Omit for built-in coding tools; an explicit selection replaces them. */
   tools?: ToolSource<ToolConfiguration<SubagentTool>> | undefined;
   reasoningMode?: ReasoningMode | undefined;
   fastMode?: boolean | undefined;
@@ -42,14 +39,13 @@ export type CodexBackend<Transport> = Readonly<BackendBase & {
   additionalInstructions?: string | undefined;
   mcp?: McpServers | false | undefined;
   executionEnvironment?: ExecutionEnvironment | undefined;
-  filesystemTools?: boolean | undefined;
   beforeCompaction?: ((request: BeforeCompactionRequest) => Promise<CompactionReceipt>) | undefined;
   codeEffectJournal?: CodeEffectJournal | undefined;
 }>;
 
 export type ClaudeBackend = Readonly<BackendBase & {
   transport: ClaudeTransport;
-  /** Claude tool arrays only; createTools() runtimes are a Codex tool contract. */
+  /** Omit for Read/Edit/Write/Glob/Grep. Explicit arrays replace defaults. Claude tool arrays only; createTools() runtimes are a Codex tool contract. */
   tools?: ToolSource<readonly ClaudeTool[]> | undefined;
   maxTokens?: number | undefined;
   cache?: "off" | "5m" | "1h" | undefined;
@@ -75,7 +71,10 @@ export type Options<Transport> = Readonly<{
   /** Defaults to the model's own default thinking. */
   thinking?: Thinking | undefined;
   instructions?: string | undefined;
+  /** Shared working directory for every harness. Node defaults to process.cwd(). */
   workspace?: string | undefined;
+  /** Shared file capability. Node opens workspace automatically; Web API hosts supply an adapter. */
+  filesystem?: Workspace | undefined;
   codeEvaluator?: CodeEvaluator | undefined;
   /** Compiled WASM module for Web API placements. */
   module?: unknown;
@@ -88,14 +87,12 @@ export type SpawnOptions = Readonly<{
   /** Selects its own family; changing the model uses that model's default thinking (the default model keeps the runtime thinking). */
   model?: HarnessModel | (string & {}) | undefined;
   thinking?: Thinking | undefined;
-  workspace?: string | undefined;
 }>;
 
 export type ResumeOptions = Readonly<{
   /** Required only for an uncataloged checkpoint model; must match a cataloged one. */
   harness?: HarnessFamily | undefined;
   instructions?: string | undefined;
-  workspace?: string | undefined;
 }>;
 
 export type Defaults = Readonly<{ harness: HarnessFamily; model: string; thinking: Thinking | undefined }>;

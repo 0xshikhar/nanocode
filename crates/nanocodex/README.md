@@ -45,22 +45,23 @@ manage response IDs or history.
 
 ## Two harnesses, one runtime
 
-Configure each harness with its own client, tools, Code Mode and workspace.
-Runtime-level `instructions` and `workspace` are defaults for both; each
-spawn may override them (spawn > harness > runtime):
+Configure each harness with its own client, tools and Code Mode. Runtime-level
+`instructions` are defaults for both, and each harness or spawn may override
+them (spawn > harness > runtime). The `workspace` is one runtime-wide
+directory shared by every agent of either family:
 
 ```rust,no_run
 # #[cfg(all(feature = "claude", feature = "openai"))]
 # async fn mixed() -> Result<(), Box<dyn std::error::Error>> {
 use nanocodex::{
-    ClaudeHarness, ClaudeModel, CodexHarness, HarnessFamily, Model, Nanocodex, OpenAi, Thinking,
-    Tools, claude::ClaudeClient,
+    ClaudeHarness, ClaudeModel, HarnessFamily, Model, Nanocodex, OpenAi, Thinking, Tools,
+    claude::ClaudeClient,
 };
 
 let openai = OpenAi::new(std::env::var("OPENAI_API_KEY")?)?;
 let claude = ClaudeClient::official(reqwest::Client::new(), std::env::var("ANTHROPIC_API_KEY")?);
 let nano = Nanocodex::builder()
-    .openai(CodexHarness::new(openai).tools(Tools::default()).code_mode(true))
+    .openai(openai)
     .claude(
         ClaudeHarness::new(claude)
             .tools(Tools::builder().without_defaults().build()?)
@@ -97,14 +98,32 @@ Selection rules:
   provider request. Thinking is never clamped.
 
 Tools belong to each harness and are materialized separately for every agent.
-Codex installs [`Tools`] natively and defaults to the standard Codex tools.
-Claude defaults to no client tools; configured [`Tools`] are bridged into its native
-client catalog. `code_mode(true)` exposes them through Code Mode's `exec` and `wait`;
-`code_mode(false)` exposes each tool as a direct provider tool (freeform tools take
-their raw text in `input`; deferred or asynchronous tools are rejected for Claude
-direct mode). OpenAI-hosted web search and image generation have no local
-handler and are not bridged. `workspace` fixes the agents' working directory and
-context root; it does not install file or shell tools. `configure` applies native
+Without a tool selection each family gets its own canonical coding tools,
+rooted at the runtime workspace: Codex the standard Codex tools
+(`exec_command`, `write_stdin`, `apply_patch`, `view_image`), and Claude the
+Claude Code file tools of `nanocodex-claude-tools` (`Read`, `Edit`, `Write`,
+`Glob`, `Grep`), executed by the same `ClaudeWorkspaceFiles` implementation and
+keeping their Claude names, schemas and results. Claude gets no `Bash`, which
+requires a host sandbox executor. `tools`/`tools_factory` replace that default,
+and an empty selection installs no tools. Codex installs a configured [`Tools`]
+natively; Claude bridges it into its native client catalog. Either family's
+`code_mode(true)` (the default) exposes its tools, default or configured,
+through Code Mode's `exec` and `wait`, so Claude cells call
+`tools.Read({file_path})`; `code_mode(false)` exposes each tool as a direct
+provider tool, registering the default Claude file tools natively (freeform
+tools take their raw text in `input`; deferred or asynchronous tools are
+rejected for Claude direct mode). Claude Code Mode returns PDF document blocks
+from `Read` as a text notice; use direct mode for them. OpenAI-hosted web search
+and image generation have no local handler and are not bridged.
+
+`workspace` fixes the working directory, context root, tool root and rollout
+workspace of every agent the runtime constructs, including resumed sessions and
+children of either family. It defaults to the process's current directory when
+the runtime is built, and a relative path is resolved against it; harnesses and
+spawns have no workspace of their own. A workspace that is not an existing
+directory fails Claude construction with `NanocodexError::InvalidRequest`
+before any provider request. The runtime workspace is applied again after a
+`configure` hook, which cannot move an agent elsewhere. `configure` applies native
 [`CodexBuilder`] or Claude builder settings to every agent of that harness. The
 Codex harness uses the standard Responses service of its client; hosts with a
 custom Tower service factory build agents with `Agent::builder` and a [`Harness`].
@@ -152,9 +171,12 @@ effort; selecting another family uses that family's defaults.
 The [runtime journey](tests/it/runtime.rs) drives both real native builders
 against localhost Responses HTTP and Messages SSE fixtures: backend errors, two
 isolated roots with overrides, cross-family subagents, resume, direct tools,
-and shutdown. Run
-`cargo test -p nanocodex --all-features --test it runtime -- --nocapture`; the
-provider request transcript is retained in ignored `output/library-runtime/`.
+and shutdown. The [default tools journey](tests/it/default_tools.rs) configures
+no tools and has Codex and Claude roots, cross-family children and native
+Claude children read and edit files in one temporary workspace, through Code
+Mode and directly. Run
+`cargo test -p nanocodex --all-features --test it -- --nocapture`; the provider
+request transcripts are retained in ignored `output/library-runtime/`.
 
 ## One agent
 

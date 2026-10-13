@@ -48,8 +48,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let openai = OpenAi::new(std::env::var("OPENAI_API_KEY")?)?;
     let nano = Nanocodex::builder()
         .openai(CodexHarness::new(openai)
-            .code_mode(true)
-            .workspace(std::env::current_dir()?))
+            .code_mode(true))
+        .workspace(std::env::current_dir()?)
         .instructions(
             "You are a Rust coding agent. Preserve unrelated work and run relevant tests.",
         )
@@ -67,7 +67,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 Configure both `CodexHarness` and `ClaudeHarness` on the same runtime to spawn
 agents from either family. Each harness owns its tool configuration, Code Mode
-setting, and workspace defaults; each agent retains an independent conversation.
+setting, and provider configuration. The runtime supplies one shared workspace;
+each agent retains an independent conversation.
 See [two harnesses, one runtime](crates/nanocodex/README.md#two-harnesses-one-runtime)
 for a complete example with model selection, checkpoints, and resume.
 
@@ -114,23 +115,10 @@ application tools.
 import { Nanocodex, Transport } from "nanocodex/node";
 
 const nano = await Nanocodex.create({
+  workspace: process.cwd(),
   backends: {
-    codex: {
-      transport: Transport.openAi({ apiKey: process.env.OPENAI_API_KEY }),
-      workspace: process.cwd(),
-      codeMode: true,
-      tools: [{
-        name: "lookup_issue",
-        description: "Return one issue by number.",
-        parameters: {
-          type: "object",
-          properties: { number: { type: "integer" } },
-          required: ["number"],
-          additionalProperties: false,
-        },
-        handler: ({ number }) => issueTracker.get(number),
-      }],
-    },
+    codex: { transport: Transport.openAi({ apiKey: process.env.OPENAI_API_KEY }) },
+    claude: { transport: Transport.anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }) },
   },
   instructions: "You are a coding agent. Make focused changes and verify them.",
 });
@@ -156,9 +144,10 @@ try {
 
 Spawn more agents with `nano.spawn({ instructions, model, thinking })`; each has
 its own conversation and inherits the configured runtime defaults. Each backend
-configures its own tools, Code Mode, and workspace. A JS workspace path supplies
-working-directory context; a filesystem adapter supplies actual rooted file
-access. Sharing an adapter intentionally shares files. `Agent.create`
+configures its own tools and Code Mode. The global `workspace` is shared by both
+harnesses; Node opens its file adapter automatically. Claude gets Read, Edit,
+Write, Glob and Grep; Codex gets its workspace tools. Custom `tools` replace
+these defaults. Web API hosts provide a shared `filesystem` adapter. `Agent.create`
 remains available for direct single-agent construction.
 
 Use `Transport.chatGpt({ subscription })` for a caller-owned ChatGPT

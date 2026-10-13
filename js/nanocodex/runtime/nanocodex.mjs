@@ -11,9 +11,10 @@ import { claudeTransportOptions, isClaudeTransport } from "./claude-transport.mj
 import { managedTransportOptions } from "./managed-transport.mjs";
 import { resolveResponsesTransport } from "./responses-transport.mjs";
 import { tools as workspaceTools } from "./workspace.mjs";
+import { claudeWorkspaceTools } from "./claude-workspace-tools.mjs";
 
 const FAMILIES = Object.freeze(["codex", "claude"]);
-const RUNTIME_KEYS = new Set(["backends", "harness", "model", "thinking", "instructions", "workspace", "codeEvaluator", "module"]);
+const RUNTIME_KEYS = new Set(["backends", "harness", "model", "thinking", "instructions", "workspace", "filesystem", "codeEvaluator", "module"]);
 const RUNTIME_REJECTED = Object.freeze({
   tools: "tools belong to each backend: backends.codex.tools / backends.claude.tools",
   codeMode: "codeMode belongs to each backend",
@@ -25,19 +26,19 @@ const RUNTIME_REJECTED = Object.freeze({
   durabilityId: "durable sessions are per Agent; use Agent.create with durability",
   resume: "use nano.resume(checkpoint)",
 });
-const SHARED_BACKEND_KEYS = ["transport", "tools", "codeMode", "workspace"];
-const CODEX_KEYS = new Set([...SHARED_BACKEND_KEYS, "filesystem", "filesystemTools", "reasoningMode", "fastMode",
+const SHARED_BACKEND_KEYS = ["transport", "tools", "codeMode"];
+const CODEX_KEYS = new Set([...SHARED_BACKEND_KEYS, "reasoningMode", "fastMode",
   "instantToolSteering", "rawApiEvents", "additionalInstructions", "mcp", "executionEnvironment",
   "beforeCompaction", "codeEffectJournal"]);
-const CLAUDE_KEYS = new Set([...SHARED_BACKEND_KEYS, "filesystem", "maxTokens", "cache", "adaptiveThinking", "keepThinking",
+const CLAUDE_KEYS = new Set([...SHARED_BACKEND_KEYS, "maxTokens", "cache", "adaptiveThinking", "keepThinking",
   "fastMode", "parallelTools", "contextWindowTokens", "autoCompactWindowTokens", "subagents"]);
 // Root-only Codex settings never become part of an alternate-family child recipe.
 const CODEX_CHILD_KEYS = ["reasoningMode", "fastMode"];
 const CLAUDE_CHILD_EXCLUDED = new Set(["subagents"]);
 // Caller-owned stateful capabilities keep their identity.
 const CAPABILITY_KEYS = new Set(["codeEffectJournal", "beforeCompaction"]);
-const SPAWN_KEYS = new Set(["instructions", "harness", "model", "thinking", "workspace"]);
-const RESUME_KEYS = new Set(["harness", "instructions", "workspace"]);
+const SPAWN_KEYS = new Set(["instructions", "harness", "model", "thinking"]);
+const RESUME_KEYS = new Set(["harness", "instructions"]);
 
 /**
  * @param {{ placement: string, createAgent(options: object): Promise<object>,
@@ -46,9 +47,10 @@ const RESUME_KEYS = new Set(["harness", "instructions", "workspace"]);
  */
 export function createNanocodexFactory(platform) {
   return async function create(options) {
-    const config = snapshotRuntime(options, platform);
-    const catalog = catalogIndex(await platform.loadCatalog({ module: config.module }));
-    const defaults = resolveDefaults(config, catalog);
+    const initial = snapshotRuntime(options, platform);
+    const catalog = catalogIndex(await platform.loadCatalog({ module: initial.module }));
+    const defaults = resolveDefaults(initial, catalog);
+    const config = await prepareWorkspace(initial, platform);
     return createRuntime(config, catalog, defaults, platform);
   };
 }
@@ -82,12 +84,13 @@ function snapshotRuntime(options, platform) {
   if (codeMode && options.codeEvaluator === undefined && platform.requiresEvaluator?.()) {
     throw new TypeError("Code Mode in this " + platform.placement + " placement requires an explicit codeEvaluator, such as createQuickJsEvaluator()");
   }
-  const workspace = options.workspace;
-  for (const [family, backend] of Object.entries(backends)) {
-    if (backend.filesystem && backend.workspace === undefined && workspace !== undefined && workspace !== backend.filesystem.root) {
-      throw new TypeError("workspace must match backends." + family + ".filesystem.root");
-    }
+  const filesystem = options.filesystem;
+  if (filesystem !== undefined && (!filesystem || typeof filesystem.root !== "string"
+    || ["list", "readFile", "writeFile", "remove", "mkdir"].some(name => typeof filesystem[name] !== "function"))) {
+    throw new TypeError("filesystem must be a Workspace adapter shared by the runtime");
   }
+  const workspace = options.workspace ?? filesystem?.root;
+  if (filesystem && workspace !== filesystem.root) throw new TypeError("workspace must match filesystem.root");
   return Object.freeze({
     backends: Object.freeze(backends),
     harness: options.harness,
@@ -95,6 +98,7 @@ function snapshotRuntime(options, platform) {
     thinking: options.thinking,
     instructions: options.instructions,
     workspace,
+    filesystem,
     codeEvaluator: options.codeEvaluator,
     module: options.module,
   });
@@ -111,33 +115,20 @@ function backendEntry(value, family, isTransport) {
 
 function snapshotShared(entry, family, keys) {
   for (const key of Object.keys(entry)) {
+    if (key === "workspace" || key === "filesystem") throw new TypeError(key + " belongs on Nanocodex.create, shared by all harnesses");
     if (!keys.has(key)) throw new TypeError("unsupported backends." + family + " option: " + key);
   }
   if (entry.codeMode !== undefined && typeof entry.codeMode !== "boolean") {
     throw new TypeError("backends." + family + ".codeMode must be a boolean");
   }
-  if (entry.workspace !== undefined && typeof entry.workspace !== "string") {
-    throw new TypeError("backends." + family + ".workspace is the model's working directory string; pass a Workspace adapter as backends." + family + ".filesystem");
-  }
-  const filesystem = entry.filesystem;
-  if (filesystem !== undefined) {
-    if (!filesystem || typeof filesystem !== "object" || typeof filesystem.root !== "string") {
-      throw new TypeError("backends." + family + ".filesystem must be a Workspace adapter");
-    }
-    if (entry.workspace !== undefined && entry.workspace !== filesystem.root) {
-      throw new TypeError("backends." + family + ".workspace must match backends." + family + ".filesystem.root");
-    }
-  }
   const extras = {};
   for (const [key, value] of Object.entries(entry)) {
-    if (!SHARED_BACKEND_KEYS.includes(key) && key !== "filesystem" && value !== undefined) extras[key] = CAPABILITY_KEYS.has(key) ? value : plain(value);
+    if (!SHARED_BACKEND_KEYS.includes(key) && value !== undefined) extras[key] = CAPABILITY_KEYS.has(key) ? value : plain(value);
   }
   return {
     transport: entry.transport,
     tools: snapshotTools(entry.tools, family),
     codeMode: entry.codeMode !== false,
-    workspace: entry.workspace,
-    filesystem,
     extras: Object.freeze(extras),
   };
 }
@@ -331,54 +322,45 @@ function toolMode(backend) {
   return backend.codeMode ? "code-only" : "direct";
 }
 
-/** spawn > backend > runtime; a filesystem adapter fixes the working directory to its root. */
-function backendWorkspace(config, backend, override) {
-  const root = backend.filesystem?.root;
-  const workspace = override ?? backend.workspace ?? (root ?? config.workspace);
-  if (root !== undefined && workspace !== root) {
-    throw new TypeError("the workspace must match the backend filesystem root " + root);
+/** One workspace is shared by every harness, root and child in this runtime. */
+async function prepareWorkspace(config, platform) {
+  const needsFiles = Object.values(config.backends).some(backend => backend.tools === undefined);
+  const resolved = await platform.prepareWorkspace?.({ workspace: config.workspace,
+    filesystem: config.filesystem, needsFiles });
+  const filesystem = resolved?.filesystem ?? config.filesystem;
+  const workspace = resolved?.workspace ?? config.workspace ?? filesystem?.root;
+  if (filesystem && workspace !== filesystem.root) throw new TypeError("workspace must match filesystem.root");
+  if (needsFiles && !filesystem) {
+    throw capabilityError("default coding tools require a runtime filesystem; pass a shared Workspace adapter as filesystem, or explicit tools to replace the defaults", "workspace");
   }
-  return workspace;
+  return Object.freeze({ ...config, workspace, filesystem });
 }
 
-/** The same rooted file tools Codex installs for filesystem, as explicit named tools. */
+/** An explicit tool selection replaces the defaults, including an empty array. */
 function withFilesystemTools(tools, filesystem, family) {
-  if (filesystem === undefined) return tools;
-  const named = Object.entries(workspaceTools(filesystem)).map(([name, tool]) => family === "claude"
-    ? { name, description: tool.description, inputSchema: tool.parameters, handler: (input) => tool.handler(input) }
-    : { name, ...tool });
-  if (tools === undefined) return named;
-  if (Array.isArray(tools)) return [...tools, ...named];
-  if (family === "codex" && (typeof tools.close === "function" || typeof tools.attach === "function")) {
-    throw new TypeError("a createTools() instance cannot be combined with backends.codex.filesystem in an alternate-family child; configure its workspace inside createTools");
-  }
-  if (family === "claude") throw new TypeError("Claude tools must be an array");
-  return { ...tools, ...Object.fromEntries(named.map(({ name, ...tool }) => [name, tool])) };
+  if (tools !== undefined) return tools;
+  if (family === "claude") return claudeWorkspaceTools(filesystem);
+  return Object.entries(workspaceTools(filesystem)).map(([name, tool]) => ({ name, ...tool }));
 }
 
-/** Alternate-family children use their own backend's workspace, falling back to the root's. */
-function childWorkspace(backend, rootWorkspace) {
-  return backend.filesystem?.root ?? backend.workspace ?? rootWorkspace;
-}
-
-async function codexChild(config, catalog, defaults, rootWorkspace, created) {
+async function codexChild(config, catalog, defaults, created) {
   const backend = config.backends.codex;
   const { model, thinking } = childSelection(catalog, defaults, "codex");
-  const workspace = childWorkspace(backend, rootWorkspace);
+  const workspace = config.workspace;
   const recipe = { transport: backend.transport, model, thinking, toolMode: toolMode(backend),
-    tools: withFilesystemTools(await materializeTools(backend.tools, { harness: "codex", role: "child" }, created), backend.filesystem, "codex") };
+    tools: withFilesystemTools(await materializeTools(backend.tools, { harness: "codex", role: "child" }, created), config.filesystem, "codex") };
   if (workspace !== undefined) recipe.workspace = workspace;
   if (config.codeEvaluator !== undefined) recipe.codeEvaluator = config.codeEvaluator;
   for (const key of CODEX_CHILD_KEYS) if (backend.extras[key] !== undefined) recipe[key] = backend.extras[key];
   return recipe;
 }
 
-async function claudeChild(config, catalog, defaults, rootWorkspace, created) {
+async function claudeChild(config, catalog, defaults, created) {
   const backend = config.backends.claude;
   const { model, thinking } = childSelection(catalog, defaults, "claude");
-  const workspace = childWorkspace(backend, rootWorkspace);
+  const workspace = config.workspace;
   const recipe = { ...backend.auth, model, toolMode: toolMode(backend),
-    tools: withFilesystemTools(await materializeTools(backend.tools, { harness: "claude", role: "child" }, created), backend.filesystem, "claude") ?? [] };
+    tools: withFilesystemTools(await materializeTools(backend.tools, { harness: "claude", role: "child" }, created), config.filesystem, "claude") ?? [] };
   if (thinking !== undefined) recipe.thinking = thinking;
   if (workspace !== undefined) recipe.workspace = workspace;
   if (config.codeEvaluator !== undefined) recipe.codeEvaluator = config.codeEvaluator;
@@ -399,23 +381,23 @@ async function agentOptions(config, catalog, defaults, family, settings, created
     if (typeof settings.resume.session_id === "string") shared.sessionId = settings.resume.session_id;
   }
   if (family === "codex") {
-    const workspace = backendWorkspace(config, backend, settings.workspace);
+    const workspace = config.workspace;
     const options = { ...backend.extras, ...shared, transport: backend.transport, toolMode: toolMode(backend),
       tools: await materializeTools(backend.tools, { harness: "codex", role: "root" }, created) };
     if (settings.model !== undefined) options.model = settings.model;
     if (settings.thinking !== undefined) options.thinking = settings.thinking;
     if (workspace !== undefined) options.workspace = workspace;
-    if (backend.filesystem !== undefined) options.filesystem = backend.filesystem;
-    if (config.backends.claude !== undefined) options.harnesses = { claude: await claudeChild(config, catalog, defaults, workspace, created) };
+    if (backend.tools === undefined && config.filesystem !== undefined) options.filesystem = config.filesystem;
+    if (config.backends.claude !== undefined) options.harnesses = { claude: await claudeChild(config, catalog, defaults, created) };
     return options;
   }
-  const workspace = backendWorkspace(config, backend, settings.workspace);
+  const workspace = config.workspace;
   const options = { ...backend.extras, ...backend.auth, ...shared, harness: "claude", model: settings.model,
     toolMode: toolMode(backend), subagents: backend.extras.subagents ?? {},
-    tools: withFilesystemTools(await materializeTools(backend.tools, { harness: "claude", role: "root" }, created), backend.filesystem, "claude") ?? [] };
+    tools: withFilesystemTools(await materializeTools(backend.tools, { harness: "claude", role: "root" }, created), config.filesystem, "claude") ?? [] };
   if (settings.thinking !== undefined) options.thinking = settings.thinking;
   if (workspace !== undefined) options.workspace = workspace;
-  if (config.backends.codex !== undefined) options.harnesses = { codex: await codexChild(config, catalog, defaults, workspace, created) };
+  if (config.backends.codex !== undefined) options.harnesses = { codex: await codexChild(config, catalog, defaults, created) };
   return options;
 }
 
@@ -491,7 +473,7 @@ function createRuntime(config, catalog, defaults, platform) {
       settings = checkKeys(options, SPAWN_KEYS, "nano.spawn");
       selection = select(config, catalog, defaults, settings);
     } catch (error) { return Promise.reject(error); }
-    return construct(selection.harness, { ...selection, instructions: settings.instructions, workspace: settings.workspace });
+    return construct(selection.harness, { ...selection, instructions: settings.instructions });
   }
 
   function resume(checkpoint, options) {
@@ -515,7 +497,7 @@ function createRuntime(config, catalog, defaults, platform) {
     } catch (error) { return Promise.reject(error); }
     // The checkpoint keeps its own session identity, model and thinking.
     return construct(family, { model: family === "claude" ? checkpoint.model : undefined,
-      instructions: settings.instructions, workspace: settings.workspace, resume: checkpoint });
+      instructions: settings.instructions, resume: checkpoint });
   }
 
   function shutdown() {

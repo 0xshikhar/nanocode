@@ -130,8 +130,11 @@ pub use nanocodex_oai_tools as tools;
 pub use nanocodex_oai_tools as oai_tools;
 
 /// Claude-native tool adapters and host capability contracts.
-#[cfg(feature = "claude-tools")]
-#[cfg_attr(docsrs, doc(cfg(feature = "claude-tools")))]
+#[cfg(all(feature = "claude-tools", not(target_family = "wasm")))]
+#[cfg_attr(
+    docsrs,
+    doc(cfg(all(feature = "claude-tools", not(target_family = "wasm"))))
+)]
 #[doc(inline)]
 pub use nanocodex_claude_tools as claude_tools;
 

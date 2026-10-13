@@ -24,9 +24,10 @@ const filesystem = await Workspace.open({ path: "/tmp/nanocodex-types" });
 
 const nano: Nanocodex.Runtime = await Nanocodex.create({
   backends: {
-    codex: { transport: Transport.chatGpt({ subscription }), tools: () => createTools(), codeMode: true, filesystem },
-    claude: { transport: Transport.anthropic({ apiKey: "synthetic" }), tools: [], workspace: "/claude", maxTokens: 1024 },
+    codex: { transport: Transport.chatGpt({ subscription }), tools: () => createTools(), codeMode: true },
+    claude: { transport: Transport.anthropic({ apiKey: "synthetic" }), tools: [], maxTokens: 1024 },
   },
+  filesystem,
   harness: "codex",
   model: "gpt-6.1-sol",
   thinking: "low",
@@ -34,7 +35,7 @@ const nano: Nanocodex.Runtime = await Nanocodex.create({
 });
 const root: DefaultAgent = await nano.spawn({ instructions: "x", harness: "claude", model: "claude-sonnet-5-5", thinking: "high" });
 await root.turn.prompt({ input: "hello" }).result();
-const resumed: DefaultAgent = await nano.resume(checkpoint, { workspace: "/w" });
+const resumed: DefaultAgent = await nano.resume(checkpoint);
 void resumed;
 const harness: "codex" | "claude" = nano.defaults.harness;
 void harness;
@@ -59,3 +60,8 @@ Transport.anthropic({ apiKey: "k", headers: async () => ({}) });
 await Nanocodex.create({ backends: { claude: Transport.openAi({ apiKey: "k" }) }, model: "gpt-6.1-sol" });
 // @ts-expect-error per-root sessions are not configurable at runtime level.
 await nano.spawn({ sessionId: "fixed" });
+
+// @ts-expect-error workspace belongs to the runtime, not a harness.
+await Nanocodex.create({ backends: { claude: { transport: Transport.anthropic({ apiKey: "k" }), workspace: "/w" } } });
+// @ts-expect-error every spawned agent shares the runtime workspace.
+await nano.spawn({ workspace: "/other" });

@@ -21,6 +21,7 @@ rustdoc-args = ["-D", "warnings"]
 default = ["durability", "mcp", "openai", "tools"]
 claude = [
     "dep:nanocodex-claude",
+    "dep:nanocodex-claude-tools",
     "nanocodex-durability?/claude",
     "nanocodex-oai-tools?/code-mode",
 ]
@@ -45,7 +46,6 @@ workspace-tools = [
 [dependencies]
 nanocodex-agent = { path = "../nanocodex-agent", version = "0.6.7", default-features = false }
 nanocodex-claude = { workspace = true, optional = true }
-nanocodex-claude-tools = { workspace = true, optional = true }
 nanocodex-durability = { workspace = true, optional = true }
 nanocodex-oai-api = { path = "../nanocodex-oai-api", version = "0.6.7", default-features = false, features = ["events"] }
 nanocodex-oai-tools = { path = "../nanocodex-oai-tools", version = "0.6.7", default-features = false, optional = true }
@@ -53,6 +53,9 @@ serde_json.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
+# Native runtime Claude agents default to the canonical Claude file tools.
+nanocodex-claude = { workspace = true, optional = true, features = ["tools"] }
+nanocodex-claude-tools = { workspace = true, optional = true }
 nanocodex-managed = { workspace = true, optional = true }
 nanocodex-observability = { workspace = true, optional = true }
 

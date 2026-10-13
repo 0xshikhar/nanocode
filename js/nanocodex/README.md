@@ -104,28 +104,22 @@ session and lifecycle; the runtime shares only immutable configuration and the
 credential capabilities you pass it.
 
 ```js
-import { Nanocodex, Transport, Workspace } from "nanocodex/node";
-
-// subscription: an open ChatGptSubscription; codexTools/claudeTools: your named tool arrays.
+import { Nanocodex, Transport } from "nanocodex/node";
 
 const nano = await Nanocodex.create({
+  workspace: process.cwd(),
   backends: {
     codex: {
       transport: Transport.chatGpt({ subscription }), // or Transport.openAi({ apiKey })
-      tools: codexTools,                                // copied per Agent host
       codeMode: true,
-      filesystem: await Workspace.open({ path: "./codex-work", root: "/workspace" }),
     },
     claude: {
       transport: Transport.anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }),
-      tools: claudeTools,
-      workspace: "/workspace",
+      codeMode: false,
       maxTokens: 8192,
     },
   },
   harness: "codex",
-  model: "gpt-6.1-sol",
-  thinking: "low",
   instructions: "Default root instructions.",
 });
 
@@ -141,9 +135,9 @@ await nano.shutdown();
 ```
 
 Backends. `backends.codex` takes a Responses transport (`openAi`, `chatGpt`, `mpp`, `hostManaged`)
-or `{ transport, tools, codeMode, workspace, filesystem, ...codexOptions }`.
+or `{ transport, tools, codeMode, ...codexOptions }`.
 `backends.claude` takes `Transport.anthropic({ apiKey } | { headers } | { subscription })`
-or `{ transport, tools, codeMode, workspace, filesystem, ...claudeOptions }`. A
+or `{ transport, tools, codeMode, ...claudeOptions }`. A
 `subscription` is an open `ClaudeSubscription` from `nanocodex/worker`; each request reads
 its current private headers with the subscription compatibility profile.
 Nothing is read from the environment, and a family without a backend is never
@@ -161,26 +155,35 @@ family, and thinking then defaults to that model's default unless it is the
 runtime default model. Unsupported thinking, a model of another family, an
 unknown model and a family without a backend reject before dispatch. When both
 backends are configured, each root can spawn canonical subagents of either
-family; children use their own backend's credentials, tools and workspace. A
+family; children use their backend's credentials and tools in the runtime's shared workspace. A
 Claude root's Codex children may use the ChatGPT subscription or MPP.
 
-Tools and workspaces belong to each backend. Declarative tool arrays and maps
-are copied per Agent. A factory `({ harness, role }) => tools` runs once per root
-(`role: "root"`) and once per alternate-family child capability (`role: "child"`,
-created with the root even if no child is spawned); it may return or resolve a
-fresh `createTools()` instance (Codex only), which the claiming host closes. A
-`createTools()` instance itself belongs to one host and is rejected, and a
-factory-made `createTools()` cannot be combined with `backends.codex.filesystem`
-for a Claude root's Codex children: configure the workspace inside `createTools`
-or use a declarative tool array there. `workspace` is only the model's
-working directory label; `filesystem` is a `Workspace` adapter that grants rooted file
-tools (Codex installs them natively, Claude receives the same tools as named
-Claude tools) and fixes the working directory to its root. One adapter shared
-by both backends shares files, never execution state. Shells are separate
-tools. `workspace` resolves spawn, then backend, then runtime; `instructions`
-resolve spawn, then runtime. `codeMode: true` (default) exposes only `exec`/`wait`; `codeMode: false`
-exposes the host tools directly to the provider (no evaluator needed; remote MCP
-requires Code Mode).
+Workspace is global: set `workspace` and an optional `filesystem` on
+`Nanocodex.create`, never on a backend or spawn. In Node, omitting `filesystem`
+opens the configured host directory (default `process.cwd()`) automatically,
+creating it if missing. Automatic Node paths currently require a non-root POSIX
+directory; other path layouts can use an explicit `Workspace` adapter. A Web API
+host supplies a `Workspace` adapter as `filesystem`; its `root` is the shared
+workspace path. The browser runtime opens a shared OPFS workspace by default.
+All roots and children see the same files while retaining separate conversations.
+
+Omit `tools` to get the built-in coding tools. Claude supplies `Read`, `Edit`,
+`Write`, `Glob` and `Grep`; Codex supplies its workspace file tools. Explicit tool
+arrays, maps or factories replace defaults, and `tools: []` disables them.
+Declarative catalogs are copied per agent. A factory `({ harness, role }) => tools`
+may return a fresh `createTools()` instance for Codex; the claiming host closes it.
+A `createTools()` instance itself cannot be shared between hosts.
+
+The JS Claude defaults read and edit UTF-8 text (up to 1 MiB per file). Searches
+skip descendant `.git` and `node_modules` directories and are bounded to 10,000
+entries; narrow `path` for larger trees. `Glob` supports `*`, `?` and `**`; `Grep`
+uses RE2 regular expressions. Native Rust uses its existing Claude file adapters,
+including their media and ignore-file support. Codex's JS `list_files` retains
+its 2,000-entry bound; list individual directories for larger workspaces.
+
+`codeMode: true` (default) exposes tools through `exec`/`wait`;
+`codeMode: false` exposes their native names directly. Instructions resolve spawn,
+then runtime. Remote MCP requires Code Mode.
 
 Ownership. The runtime owns every root, `nano.resume` result, fork and
 `session.spawn` sibling, including ones made through `Actions`. `agent.session.shutdown()`
@@ -195,8 +198,9 @@ are rejected: use `Agent.create` for named or durable sessions.
 Placement. `nanocodex/node` runs every root in the current process with the Node
 evaluator. `nanocodex/host` runs roots inline in the current Web API isolate and
 requires `module`; Code Mode backends also need `codeEvaluator` (for example
-`createQuickJsEvaluator()`) where no `Worker` exists. `nanocodex/browser` places a Codex-only root in its own package
-module Worker, so its options must be structured-clone-safe (`openAi` or
+`createQuickJsEvaluator()`) where no `Worker` exists. `nanocodex/browser` uses inline agents when sharing a file adapter. A Codex-only
+root with explicit custom tools and no file adapter uses its package module
+Worker, so those options must be structured-clone-safe (`openAi` or
 `hostManaged` transports, no function tool handlers or subscriptions); Claude
 and mixed-family roots run inline in the page, so their credentials are
 visible to that page. Use `nanocodex/host` inside a caller-owned Worker for

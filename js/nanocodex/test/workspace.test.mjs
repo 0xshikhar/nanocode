@@ -83,7 +83,7 @@ test("Node workspaces reuse real files and reject symlink escapes", async () => 
 
     await symlink(outside, join(directory, "escape"));
     await assert.rejects(second.writeFile("escape/stolen.txt", "no"), /unsafe/);
-    await assert.rejects(second.list(".", { recursive: true }), /refuses symbolic link/);
+    assert.deepEqual((await second.list(".", { recursive: true })).map(entry => entry.path), ["/workspace/src", "/workspace/src/main.rs"]);
 
     const logical = await NodeWorkspace.open({ path: directory, root: "/project" });
     assert.equal(logical.root, "/project");
