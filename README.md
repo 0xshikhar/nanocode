@@ -65,6 +65,56 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+### Claude and Codex configuration
+
+Each column configures a standalone runtime with its harness's default tools.
+Run these snippets inside an async function returning `Result`. For Claude,
+enable `nanocodex`'s `claude` feature and add `reqwest` to construct its HTTP client.
+
+<table>
+<tr><th>Claude</th><th>Codex</th></tr>
+<tr>
+<td valign="top"><pre lang="rust">use nanocodex::{ClaudeHarness, Nanocodex};
+use nanocodex::claude::ClaudeClient;
+
+let client = ClaudeClient::official(
+    reqwest::Client::new(),
+    std::env::var("ANTHROPIC_API_KEY")?,
+);
+let nano = Nanocodex::builder()
+    .workspace(std::env::current_dir()?)
+    .claude(ClaudeHarness::new(client)
+        .code_mode(true))
+    .build()?;
+
+let (agent, _events) =
+    nano.spawn().build().await?;
+// Use agent.prompt(...).await?.await?;
+nano.shutdown().await?;</pre></td>
+<td valign="top"><pre lang="rust">use nanocodex::{CodexHarness, Nanocodex, OpenAi};
+
+let client = OpenAi::new(
+    std::env::var("OPENAI_API_KEY")?,
+)?;
+let nano = Nanocodex::builder()
+    .workspace(std::env::current_dir()?)
+    .openai(CodexHarness::new(client)
+        .code_mode(true))
+    .build()?;
+
+let (agent, _events) =
+    nano.spawn().build().await?;
+// Use agent.prompt(...).await?.await?;
+nano.shutdown().await?;</pre></td>
+</tr>
+</table>
+
+`workspace` belongs to `Nanocodex`. Code Mode belongs to each harness and is
+shown explicitly above; it defaults to enabled with the standard crate features.
+Set `.code_mode(false)` to expose tools directly. Omitting `.tools(...)` keeps
+Claude's `Read`, `Edit`, `Write`, `Glob`, and `Grep`, or Codex's standard tools
+including `exec_command`, `write_stdin`, `apply_patch`, and `view_image`.
+
 Configure both `CodexHarness` and `ClaudeHarness` on the same runtime to spawn
 agents from either family. Each harness owns its tool configuration, Code Mode
 setting, and provider configuration. The runtime supplies one shared workspace;
@@ -141,6 +191,59 @@ try {
   await nano.shutdown();
 }
 ```
+
+### Claude and Codex configuration in JavaScript
+
+Both Node configurations use the same factory and agent API. Each column is a
+standalone example; the combined configuration above registers both backends
+on one runtime with one shared workspace.
+
+<table>
+<tr><th>Claude</th><th>Codex</th></tr>
+<tr>
+<td valign="top"><pre lang="js">import { Nanocodex, Transport }
+  from "nanocodex/node";
+
+const nano = await Nanocodex.create({
+  workspace: process.cwd(),
+  backends: {
+    claude: {
+      transport: Transport.anthropic({
+        apiKey: process.env.ANTHROPIC_API_KEY,
+      }),
+      codeMode: true,
+    },
+  },
+});
+
+const agent = await nano.spawn();
+// Use agent.turn.prompt({ input: "..." });
+await nano.shutdown();</pre></td>
+<td valign="top"><pre lang="js">import { Nanocodex, Transport }
+  from "nanocodex/node";
+
+const nano = await Nanocodex.create({
+  workspace: process.cwd(),
+  backends: {
+    codex: {
+      transport: Transport.openAi({
+        apiKey: process.env.OPENAI_API_KEY,
+      }),
+      codeMode: true,
+    },
+  },
+});
+
+const agent = await nano.spawn();
+// Use agent.turn.prompt({ input: "..." });
+await nano.shutdown();</pre></td>
+</tr>
+</table>
+
+Omitting `tools` installs the backend's default file tools. `codeMode` defaults
+to `true`; set it to `false` to expose those tools directly. When both backends
+are configured, select one with `nano.spawn({ harness: "claude" })` or
+`nano.spawn({ harness: "codex" })`.
 
 Spawn more agents with `nano.spawn({ instructions, model, thinking })`; each has
 its own conversation and inherits the configured runtime defaults. Each backend
