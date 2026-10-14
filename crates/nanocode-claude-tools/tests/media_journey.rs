@@ -69,13 +69,13 @@ async fn native_images_and_notebook_edit_read_journey() {
             .unwrap_err()
             .contains("invalid image")
     );
-    fs::write(dir.path().join("big.png"), vec![0; 5 * 1024 * 1024 + 1]).unwrap();
+    fs::write(dir.path().join("big.png"), vec![0; 16 * 1024 * 1024 + 1]).unwrap();
     assert!(
         files
             .execute_output("Read", json!({"file_path":"big.png"}))
             .await
             .unwrap_err()
-            .contains("5 MiB")
+            .contains("16 MiB")
     );
     let png = image_bytes(image::ImageFormat::Png);
     let notebook = json!({"nbformat":4,"nbformat_minor":5,"metadata":{"language_info":{"name":"python"}},"cells":[
@@ -471,5 +471,84 @@ async fn delayed_poppler_timeout_cleanup_and_recovery_journey() {
     );
     println!(
         "Delayed real Poppler: returned {error:?} after {elapsed:?}; snapshot removed, inherited-pipe child stopped, next PDF read recovered"
+    );
+}
+
+#[tokio::test]
+async fn large_read_and_normalized_image_journey() {
+    let dir = tempfile::tempdir().unwrap();
+    let files = ClaudeWorkspaceFiles::new(dir.path())
+        .unwrap()
+        .with_read_token_budget(400_000);
+    let source = format!("{}\nLARGE_READ_END\n", "x".repeat(1_100_000));
+    fs::write(dir.path().join("large.txt"), &source).unwrap();
+    assert!(
+        files
+            .execute("Read", json!({"file_path":"large.txt"}))
+            .await
+            .unwrap_err()
+            .contains("allow_large")
+    );
+    let large = files
+        .execute("Read", json!({"file_path":"large.txt","allow_large":true}))
+        .await
+        .unwrap();
+    assert!(large.contains("LARGE_READ_END") && large.len() > source.len());
+    assert!(
+        files
+            .clone()
+            .with_read_token_budget(10)
+            .execute("Read", json!({"file_path":"large.txt","allow_large":true}))
+            .await
+            .unwrap_err()
+            .contains("budget")
+    );
+    assert!(
+        files
+            .execute_output("Read", json!({"file_path":"large.txt","allow_large":"yes"}))
+            .await
+            .is_err()
+    );
+
+    // Actual high-entropy pixels exercise both resampling and JPEG compression.
+    let mut state = 7_u32;
+    let pixels = image::RgbImage::from_fn(2600, 1800, |_, _| {
+        let mut channel = || {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state as u8
+        };
+        image::Rgb([channel(), channel(), channel()])
+    });
+    let mut encoded = Cursor::new(Vec::new());
+    pixels
+        .write_to(&mut encoded, image::ImageFormat::Png)
+        .unwrap();
+    fs::write(dir.path().join("large.png"), encoded.into_inner()).unwrap();
+    let result = files
+        .execute_output("Read", json!({"file_path":"large.png","allow_large":true}))
+        .await
+        .unwrap();
+    let parts = blocks(result);
+    let ToolResultBlock::Image {
+        source: ImageSource::Base64 { media_type, data },
+    } = &parts[0]
+    else {
+        panic!("missing image block");
+    };
+    let bytes = STANDARD.decode(data).unwrap();
+    let image = image::load_from_memory(&bytes).unwrap();
+    assert!(image.width() <= 1568 && image.height() <= 1568);
+    assert!(u64::from(image.width()) * u64::from(image.height()) <= 1_150_000);
+    assert!(bytes.len() <= 500 * 1024);
+    assert_eq!(media_type, "image/jpeg");
+    println!(
+        "Read large text: {} bytes, final marker present; image: {}x{}, {} bytes, {}",
+        large.len(),
+        image.width(),
+        image.height(),
+        bytes.len(),
+        media_type
     );
 }

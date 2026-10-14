@@ -41,7 +41,7 @@ nanocode-durability = { workspace = true, optional = true, features = ["claude"]
 nanocode-codex = { path = "../nanocode-codex", version = "0.6.7", default-features = false, features = ["events"] }
 nanocode-code-mode = { path = "../nanocode-code-mode", version = "0.6.7", default-features = false, features = ["code-mode", "attachment"] }
 serde_json.workspace = true
-tokio = { workspace = true, features = ["rt", "sync"] }
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 # Native runtime Claude agents default to the canonical Claude file tools.

@@ -71,7 +71,7 @@ pub(crate) fn read(
                 .into(),
         );
     }
-    let bytes = read_bytes(path, if is_image { MAX_IMAGE } else { MAX_SOURCE })?;
+    let bytes = read_bytes(path, MAX_SOURCE)?;
     if pdf {
         return read_pdf(&bytes, input, options, session).map(Some);
     }
@@ -99,11 +99,11 @@ fn read_bytes(path: &Path, max: usize) -> Result<Vec<u8>, String> {
 }
 
 fn image_block(bytes: &[u8]) -> Result<ToolResultBlock, String> {
-    if bytes.len() > MAX_IMAGE {
-        return Err("image exceeds 5 MiB limit".into());
+    if bytes.len() > MAX_SOURCE {
+        return Err("image source exceeds 16 MiB limit".into());
     }
     let format = image::guess_format(bytes).map_err(|e| format!("invalid image: {e}"))?;
-    let mime = match format {
+    let mut mime = match format {
         image::ImageFormat::Png => "image/png",
         image::ImageFormat::Jpeg => "image/jpeg",
         image::ImageFormat::Gif => "image/gif",
@@ -113,17 +113,64 @@ fn image_block(bytes: &[u8]) -> Result<ToolResultBlock, String> {
     // Validate the real image, limiting decoded allocations as well as input bytes.
     let mut reader = image::ImageReader::with_format(Cursor::new(bytes), format);
     let mut limits = image::Limits::default();
-    limits.max_image_width = Some(8000);
-    limits.max_image_height = Some(8000);
-    limits.max_alloc = Some(64 * 1024 * 1024);
+    limits.max_image_width = Some(32768);
+    limits.max_image_height = Some(32768);
+    limits.max_alloc = Some(256 * 1024 * 1024);
     reader.limits(limits);
-    let _decoded = reader
+    let decoded = reader
         .decode()
         .map_err(|e| format!("invalid or oversized image: {e}"))?;
+    // Fit within the standard vision envelope while preserving aspect ratio.
+    let pixels = f64::from(decoded.width()) * f64::from(decoded.height());
+    let scale = (1568.0 / f64::from(decoded.width().max(decoded.height())))
+        .min((1_150_000.0 / pixels).sqrt())
+        .min(1.0);
+    let resized = if scale < 1.0 {
+        decoded.resize_exact(
+            (f64::from(decoded.width()) * scale).floor().max(1.0) as u32,
+            (f64::from(decoded.height()) * scale).floor().max(1.0) as u32,
+            image::imageops::FilterType::Lanczos3,
+        )
+    } else {
+        decoded
+    };
+    let mut encoded = bytes.to_vec();
+    if scale < 1.0 {
+        encoded.clear();
+        resized
+            .write_to(&mut Cursor::new(&mut encoded), image::ImageFormat::Png)
+            .map_err(|e| format!("image resize: {e}"))?;
+        mime = "image/png";
+    }
+    if encoded.len() > 500 * 1024 {
+        // JPEG has no alpha: composite onto white instead of turning it black.
+        let rgba = resized.to_rgba8();
+        let rgb = image::RgbImage::from_fn(rgba.width(), rgba.height(), |x, y| {
+            let p = rgba.get_pixel(x, y).0;
+            let alpha = u16::from(p[3]);
+            image::Rgb(
+                [0, 1, 2]
+                    .map(|i| ((u16::from(p[i]) * alpha + 255 * (255 - alpha) + 127) / 255) as u8),
+            )
+        });
+        for quality in [85, 70, 55, 40, 25, 10] {
+            encoded.clear();
+            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, quality)
+                .encode_image(&rgb)
+                .map_err(|e| format!("image compression: {e}"))?;
+            if encoded.len() <= 500 * 1024 {
+                break;
+            }
+        }
+        mime = "image/jpeg";
+    }
+    if encoded.len() > MAX_IMAGE {
+        return Err("normalized image exceeds 5 MiB".into());
+    }
     Ok(ToolResultBlock::Image {
         source: ImageSource::Base64 {
             media_type: mime.into(),
-            data: STANDARD.encode(bytes),
+            data: STANDARD.encode(&encoded),
         },
     })
 }
@@ -463,17 +510,20 @@ fn read_notebook(bytes: &[u8], input: &Value) -> Result<ToolOutput, String> {
                                         .into(),
                                 );
                             }
-                            let block = image_block(&bytes)?;
-                            // Reject a declared type inconsistent with the actual payload.
-                            if let ToolResultBlock::Image {
-                                source: ImageSource::Base64 { media_type, .. },
-                            } = &block
-                                && media_type != mime
-                            {
+                            // Check the original MIME before normalization changes the encoding.
+                            let actual = match image::guess_format(&bytes).ok() {
+                                Some(image::ImageFormat::Png) => "image/png",
+                                Some(image::ImageFormat::Jpeg) => "image/jpeg",
+                                Some(image::ImageFormat::Gif) => "image/gif",
+                                Some(image::ImageFormat::WebP) => "image/webp",
+                                _ => "unsupported",
+                            };
+                            if actual != mime {
                                 return Err(
                                     "notebook image MIME type does not match its bytes".into()
                                 );
                             }
+                            let block = image_block(&bytes)?;
                             blocks.push(block);
                             image = true;
                             break;

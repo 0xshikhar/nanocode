@@ -28,6 +28,7 @@ pub struct ClaudeWorkspaceFiles {
     root: PathBuf,
     root_alias: PathBuf,
     media: MediaReadOptions,
+    read_token_budget: usize,
 }
 
 impl ClaudeWorkspaceFiles {
@@ -49,6 +50,7 @@ impl ClaudeWorkspaceFiles {
             root,
             root_alias,
             media: MediaReadOptions::default(),
+            read_token_budget: 200_000,
         })
     }
 
@@ -60,11 +62,19 @@ impl ClaudeWorkspaceFiles {
         self
     }
 
+    /// Limit text Read output to the host's available token budget (four-byte estimate).
+    /// `allow_large` may exceed the ordinary 25,000-token limit, never this budget.
+    #[must_use]
+    pub fn with_read_token_budget(mut self, tokens: usize) -> Self {
+        self.read_token_budget = tokens;
+        self
+    }
+
     /// Standalone JSON metadata for the five tools; no model-vendor contract is required.
     #[must_use]
     pub fn definitions() -> Vec<Value> {
         vec![
-            json!({"name":"Read","description":"Read text with numbered lines, images, PDF pages, or notebook cells and outputs. PDF reads require Poppler pdfinfo/pdftoppm; pages selects at most 20 pages and is required for PDFs over 10 pages.","input_schema":{"type":"object","properties":{"file_path":{"type":"string"},"offset":{"type":"integer","minimum":1},"limit":{"type":"integer","minimum":1},"pages":{"type":"string","description":"PDF page or inclusive range, e.g. 3 or 1-5; maximum 20 pages."}},"required":["file_path"],"additionalProperties":false}}),
+            json!({"name":"Read","description":"Read text with numbered lines, images, PDF pages, or notebook cells and outputs. PDF reads require Poppler pdfinfo/pdftoppm; pages selects at most 20 pages and is required for PDFs over 10 pages.","input_schema":{"type":"object","properties":{"file_path":{"type":"string"},"allow_large":{"type":"boolean","description":"Allow text beyond ordinary limits, bounded by the host context budget. Media limits are unchanged."},"offset":{"type":"integer","minimum":1},"limit":{"type":"integer","minimum":1},"pages":{"type":"string","description":"PDF page or inclusive range, e.g. 3 or 1-5; maximum 20 pages."}},"required":["file_path"],"additionalProperties":false}}),
             json!({"name":"Edit","description":"Replace exact text in a workspace file, requiring one occurrence unless replace_all is true.","input_schema":{"type":"object","properties":{"file_path":{"type":"string"},"old_string":{"type":"string"},"new_string":{"type":"string"},"replace_all":{"type":"boolean"}},"required":["file_path","old_string","new_string"],"additionalProperties":false}}),
             json!({"name":"Write","description":"Atomically replace a UTF-8 workspace file, creating parent directories as needed.","input_schema":{"type":"object","properties":{"file_path":{"type":"string"},"content":{"type":"string"}},"required":["file_path","content"],"additionalProperties":false}}),
             json!({"name":"Glob","description":"List workspace files using glob wildcards, braces and character classes, newest first.","input_schema":{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"}},"required":["pattern"],"additionalProperties":false}}),
@@ -136,9 +146,12 @@ impl ClaudeWorkspaceFiles {
                 let fields = input.as_object().ok_or("Read input must be an object")?;
                 if let Some(key) = fields
                     .keys()
-                    .find(|k| !["file_path", "offset", "limit", "pages"].contains(&k.as_str()))
+                    .find(|k| !["file_path", "offset", "limit", "pages", "allow_large"].contains(&k.as_str()))
                 {
                     return Err(format!("unsupported Read option: {key}"));
+                }
+                if input.get("allow_large").is_some_and(|v| !v.is_boolean()) {
+                    return Err("allow_large must be a boolean".into());
                 }
                 let (_, path) = this.file(Self::field(&input, "file_path")?)?;
                 media = crate::media::read(&path, &input, &this.media, session.as_ref())?;
@@ -182,7 +195,7 @@ impl ClaudeWorkspaceFiles {
 
     fn execute_sync(&self, name: &str, input: &Value) -> Result<String, String> {
         let allowed: &[&str] = match name {
-            "Read" => &["file_path", "offset", "limit", "pages"],
+            "Read" => &["file_path", "offset", "limit", "pages", "allow_large"],
             "Write" => &["file_path", "content"],
             "Edit" => &["file_path", "old_string", "new_string", "replace_all"],
             "Glob" => &["pattern", "path"],
@@ -275,7 +288,35 @@ impl ClaudeWorkspaceFiles {
             return Err("pages is only applicable to PDF files".into());
         }
         let (_, path) = self.file(Self::field(input, "file_path")?)?;
-        let content = Self::read_text(&path)?;
+        let allow_large = input
+            .get("allow_large")
+            .map_or(Some(false), Value::as_bool)
+            .ok_or("allow_large must be a boolean")?;
+        let source_limit = if allow_large {
+            16 * 1024 * 1024
+        } else {
+            MAX_FILE
+        };
+        let mut bytes = Vec::new();
+        fs::File::open(&path)
+            .map_err(|e| format!("read: {e}"))?
+            .take((source_limit + 1) as u64)
+            .read_to_end(&mut bytes)
+            .map_err(|e| format!("read: {e}"))?;
+        if bytes.len() > source_limit {
+            return Err(if allow_large {
+                "text exceeds 16 MiB source limit"
+            } else {
+                "file exceeds 1 MiB text limit; use allow_large: true"
+            }
+            .into());
+        }
+        let content = String::from_utf8(bytes).map_err(|_| "file is not UTF-8 text")?;
+        let output_limit = self
+            .read_token_budget
+            .min(if allow_large { usize::MAX } else { 25_000 })
+            .saturating_mul(4)
+            .min(16 * 1024 * 1024);
         let offset = input
             .get("offset")
             .map_or(Some(1), Value::as_u64)
@@ -294,9 +335,11 @@ impl ClaudeWorkspaceFiles {
             .skip(offset.saturating_sub(1).min(usize::MAX as u64) as usize)
             .take(usize::try_from(limit).unwrap_or(usize::MAX))
         {
-            if !push_bounded(&mut out, &format!("{}\t{}\n", i + 1, line)) {
-                break;
+            let line = format!("{}\t{}\n", i + 1, line);
+            if out.len().saturating_add(line.len()) > output_limit {
+                return Err("requested text exceeds the available Read budget; use offset/limit or allow_large: true".into());
             }
+            out.push_str(&line);
         }
         Ok(out)
     }

@@ -11,7 +11,9 @@ pub mod web;
 #[cfg(not(target_family = "wasm"))]
 pub mod workspace_files;
 
-pub use bash::{BashExecutor, BashRequest, BashResult, ClaudeBash, SandboxBashExecutor};
+pub use bash::{
+    BashExecution, BashExecutor, BashRequest, BashResult, ClaudeBash, SandboxBashExecutor,
+};
 pub use host::{
     ClaudeHost, ClaudeHostTools, ClaudeMcp, ClaudeMcpProvider, HostContext, HostRequest, HostTool,
     ImageSource, McpToolDefinition, ToolContent, ToolOutput, ToolResultBlock,

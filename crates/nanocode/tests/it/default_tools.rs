@@ -15,7 +15,16 @@ use std::{
 };
 
 const DEADLINE: Duration = Duration::from_secs(60);
-const CLAUDE_FILE_TOOLS: [&str; 6] = ["Read", "Edit", "Write", "Glob", "Grep", "Bash"];
+const CLAUDE_FILE_TOOLS: [&str; 8] = [
+    "Read",
+    "Edit",
+    "Write",
+    "Glob",
+    "Grep",
+    "Bash",
+    "TaskOutput",
+    "TaskStop",
+];
 type Transcript = Arc<Mutex<Vec<Value>>>;
 
 /// The file named after a marker in the latest prompt.
@@ -91,6 +100,15 @@ fn messages(body: &Value, ordinal: usize) -> String {
                     "const read = await tools.Read({{file_path: \"{name}\"}}); \
                      await tools.Edit({{file_path: \"{name}\", old_string: \"alpha\", new_string: \"claude-edited\"}}); \
                      const bash = await tools.Bash({{command: \"printf bash-ok\"}}); text(JSON.stringify(bash)); \
+                     const bg = await tools.Bash({{command: \"printf background-ok\", run_in_background: true}}); \
+                     const done = await tools.TaskOutput({{task_id: bg.task_id, block: true, timeout: 5000}}); \
+                     if (done.stdout !== \"background-ok\") throw new Error(JSON.stringify(done)); text(done); \
+                     const auto = await tools.Bash({{command: \"sleep 0.1; printf auto-ok\", timeout: 1}}); \
+                     const autoDone = await tools.TaskOutput({{task_id: auto.task_id, timeout: 5000}}); \
+                     if (autoDone.stdout !== \"auto-ok\") throw new Error(JSON.stringify(autoDone)); text(autoDone); \
+                     const pending = await tools.Bash({{command: \"sleep 60\", run_in_background: true}}); \
+                     const stopped = await tools.TaskStop({{task_id: pending.task_id}}); \
+                     if (stopped.status !== \"stopped\") throw new Error(JSON.stringify(stopped)); text(stopped); \
                      text(\"read:\" + JSON.stringify(read));"
                 )}),
             )),
@@ -234,6 +252,12 @@ async fn edits(agent: &nanocode::Agent, transcript: &Transcript, workspace: &Pat
                 .map(Value::to_string)
                 .collect::<String>();
             assert!(results.contains("bash-ok"), "Bash must execute: {results}");
+            assert!(
+                results.contains("background-ok")
+                    && results.contains("auto-ok")
+                    && results.contains("stopped"),
+                "background lifecycle: {results}"
+            );
             let exec = requests[0]["tools"][0]["description"].to_string();
             for name in CLAUDE_FILE_TOOLS {
                 assert!(exec.contains(name), "exec describes nested {name}: {exec}");

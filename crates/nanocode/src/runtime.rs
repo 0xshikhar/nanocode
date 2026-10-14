@@ -20,6 +20,7 @@ use std::{
     sync::{Arc, Mutex, MutexGuard, PoisonError},
 };
 
+mod claude_bash;
 mod claude_files;
 mod claude_tools;
 
@@ -713,24 +714,34 @@ fn claude_recipe(harness: ClaudeHarness, runtime: &Settings, workspace: &Arc<Pat
                     .workspace(workspace.to_string_lossy().into_owned())
                     .code_only(true);
             }
-            // Each backend retains its own defaults, nested under exec/wait.
-            let tools = match settings.tools {
-                Some(tools) => tools,
-                None => {
-                    let files = Arc::new(default_claude_files(&workspace)?);
-                    let root = workspace.to_path_buf();
-                    AgentTools::PerAgent(Arc::new(move |handle: AgentHandle| {
-                        claude_files::selection(&files, root.clone(), handle.session_environment())
-                    }))
-                }
+            // Materialize defaults and background ownership independently per agent.
+            let tools = settings.tools;
+            let files = if tools.is_none() {
+                Some(Arc::new(default_claude_files(&workspace)?))
+            } else {
+                None
             };
             let root = workspace.to_path_buf();
             builder = builder.tools_factory(move |handle| {
-                let selected = tools
-                    .materialize(handle.clone())
-                    .and_then(exposed)
-                    .map_err(|error| NanocodexError::InvalidRequest(error.to_string()))?;
-                claude_tools::install(&selected, root.clone(), &handle)
+                let jobs = Arc::new(claude_bash::Jobs::default());
+                let selected = match &tools {
+                    Some(tools) => tools.materialize(handle.clone()),
+                    None => claude_files::selection(
+                        files.as_ref().expect("default files"),
+                        root.clone(),
+                        handle.session_environment(),
+                        jobs.clone(),
+                    ),
+                }
+                .and_then(exposed)
+                .map_err(|error| NanocodexError::InvalidRequest(error.to_string()))?;
+                let native = claude_tools::install(&selected, root.clone(), &handle)?;
+                Ok(native.adapter_shutdown(move || {
+                    let jobs = jobs.clone();
+                    async move {
+                        jobs.shutdown().await;
+                    }
+                }))
             });
             builder = builder.code_only(true);
             if let Some(checkpoint) = spec.checkpoint {

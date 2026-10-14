@@ -218,6 +218,7 @@ pub struct ClaudeTools {
     dynamic: Vec<DynamicToolsFactory>,
     custom_tool_search: bool,
     adapter_cleanup: Vec<ToolCleanup>,
+    adapter_shutdown: Vec<ToolCleanup>,
 }
 impl ClaudeTools {
     /// Drains adapter-owned work after each admitted turn, including cancellation.
@@ -229,6 +230,17 @@ impl ClaudeTools {
     {
         self.adapter_cleanup
             .push(Arc::new(move || Box::pin(cleanup())));
+        self
+    }
+    /// Stops adapter-owned background work when the agent shuts down.
+    /// Unlike turn cleanup, these callbacks preserve work across turns.
+    pub fn adapter_shutdown<F, Fut>(mut self, shutdown: F) -> Self
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: crate::ToolFuture<Output = ()> + 'static,
+    {
+        self.adapter_shutdown
+            .push(Arc::new(move || Box::pin(shutdown())));
         self
     }
     /// Creates an empty native function collection.
@@ -1243,12 +1255,16 @@ impl ClaudeBuilder {
             handle = handle.with_spawn_factory(factory.clone());
         }
         let mut custom_tool_search = false;
+        let mut adapter_cleanup = Vec::new();
+        let mut adapter_shutdown = Vec::new();
         if let Some(factory) = &self.tools_factory {
             let native = factory(handle.clone())?;
             custom_tool_search = native.custom_tool_search;
             self.client_tool_search |= custom_tool_search;
             self.tools.extend(native.tools);
             self.dynamic_tools.extend(native.dynamic);
+            adapter_cleanup.extend(native.adapter_cleanup);
+            adapter_shutdown.extend(native.adapter_shutdown);
         }
 
         if self.claude.model.trim().is_empty()
@@ -1396,7 +1412,6 @@ impl ClaudeBuilder {
                 *handler = hooked_handler(name.clone(), handler.clone(), hooks.clone());
             }
         }
-        let mut adapter_cleanup = Vec::new();
         if let Some(adapter) = &self.tools_adapter {
             if !self.server_tools.is_empty() {
                 return Err(unsupported("client tool adapters cannot wrap server tools"));
@@ -1431,6 +1446,7 @@ impl ClaudeBuilder {
                 dynamic,
                 custom_tool_search: false,
                 adapter_cleanup: Vec::new(),
+                adapter_shutdown: Vec::new(),
             };
             let adapted = adapter(catalog)?;
             for (definition, handler) in adapted.tools {
@@ -1443,7 +1459,8 @@ impl ClaudeBuilder {
                 definitions.push(definition);
             }
             self.dynamic_tools = adapted.dynamic;
-            adapter_cleanup = adapted.adapter_cleanup;
+            adapter_cleanup.extend(adapted.adapter_cleanup);
+            adapter_shutdown.extend(adapted.adapter_shutdown);
             self.client_tool_search = false;
         }
         let mut names = handlers.keys().map(String::as_str).collect::<HashSet<_>>();
@@ -1571,6 +1588,7 @@ impl ClaudeBuilder {
             system_blocks: self.system_blocks,
             tools: definitions,
             adapter_cleanup,
+            adapter_shutdown,
             dynamic_tools: self.dynamic_tools,
             tool_hooks: self.tool_hooks,
             server_tools: self.server_tools,
@@ -2798,6 +2816,7 @@ struct TurnSteering {
 
 struct State {
     adapter_cleanup: Vec<ToolCleanup>,
+    adapter_shutdown: Vec<ToolCleanup>,
     lifecycle_opened: Mutex<Option<String>>,
     subagent_type: Option<String>,
     subagent_type_resolver: Option<SubagentTypeResolver>,
@@ -6744,6 +6763,9 @@ impl State {
     /// Closes the rollout mirror once and releases the durable owner. Owner
     /// release is idempotent and joins a release already in progress.
     async fn release_local(&self) -> Result<()> {
+        for shutdown in &self.adapter_shutdown {
+            shutdown().await;
+        }
         let first = !self.released.swap(true, Ordering::SeqCst);
         #[cfg(not(target_family = "wasm"))]
         if first && let Some(mirror) = &self.rollout {

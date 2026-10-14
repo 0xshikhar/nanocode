@@ -8,7 +8,7 @@ Primary adapter/capability types are also exported at the crate root. Filesystem
 and notebook execution are native-only; portable contracts and the session task
 board do not require the OpenAI runtime or a native process implementation.
 
-Embeddings explicitly implement `ClaudeHost`, `SandboxBashExecutor`, approved
+Embeddings explicitly implement `ClaudeHost`, `BashExecutor` (or `SandboxBashExecutor` for isolated hosts), approved
 web capabilities and/or `ClaudeMcpProvider`. Host/MCP outputs are native
 `ToolOutput` values (text/images, `is_error`, structured results and metadata).
 `HostContext` carries model/session/turn/call identities and the output budget,
@@ -37,3 +37,14 @@ The Claude backend integration suite includes actual loopback Messages/SSE
 continuations for host errors/media and reopened task checkpoints. Its caller
 MCP journey exercises this native contract over loopback JSON-RPC HTTP; it does
 not claim automatic dynamic-catalog builder wiring or production MCP services.
+
+`ClaudeBash` accepts background requests through `BashExecutor::execute_with_background`.
+Basic executors reject background requests; the `nanocode` runtime supplies the
+session-owned executor and `TaskOutput`/`TaskStop` adapters. `ClaudeTools` supports
+separate callbacks for turn cleanup and agent shutdown, so background jobs do
+not end with each turn.
+
+`Read` supports `allow_large` with a host-selected output budget through
+`ClaudeWorkspaceFiles::with_read_token_budget`. Native image reads normalize
+large images before returning visual content. Browser filesystem adapters have
+their own capabilities and do not gain native processes or image decoding.

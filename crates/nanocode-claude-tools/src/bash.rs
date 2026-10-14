@@ -77,9 +77,34 @@ pub trait SandboxBashExecutor: Send + Sync {
     ) -> impl std::future::Future<Output = Result<BashResult, String>> + Send;
 }
 
+/// Outcome of a foreground or background-capable executor.
+pub enum BashExecution {
+    /// The command has finished.
+    Completed(BashResult),
+    /// The command continues as a session-owned task.
+    Background {
+        /// Identifier accepted by TaskOutput and TaskStop.
+        task_id: String,
+    },
+}
+
 /// Host-authorized command execution, local or isolated by the embedding host.
 /// Implementations bound capture and terminate commands on timeout/cancellation.
 pub trait BashExecutor: Send + Sync {
+    /// Execute with optional background ownership. Basic executors support foreground only.
+    fn execute_with_background(
+        &self,
+        request: BashRequest,
+        background: bool,
+    ) -> impl std::future::Future<Output = Result<BashExecution, String>> + Send {
+        async move {
+            if background {
+                return Err("this executor does not support background commands".into());
+            }
+            self.execute(request).await.map(BashExecution::Completed)
+        }
+    }
+
     /// Execute a bounded foreground command.
     fn execute(
         &self,
@@ -109,14 +134,14 @@ impl<E: BashExecutor> ClaudeBash<E> {
     pub fn definitions() -> Vec<Value> {
         vec![json!({
             "name": "Bash",
-            "description": "Run a foreground command in the host-authorized execution environment. Background execution and sandbox bypass are unavailable.",
+            "description": "Run a foreground command in the host-authorized execution environment. Use run_in_background for a task ID, then TaskOutput or TaskStop. Sandbox bypass is unavailable.",
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "command": {"type": "string", "minLength": 1, "maxLength": MAX_COMMAND_BYTES},
                     "description": {"type": "string", "maxLength": MAX_DESCRIPTION_BYTES},
-                    "timeout": {"type": "integer", "minimum": 1, "maximum": MAX_TIMEOUT_MS, "default": DEFAULT_TIMEOUT_MS},
-                    "run_in_background": {"type": "boolean", "description": "Only false is supported; no background session capability is installed."},
+                    "timeout": {"type": "integer", "minimum": 1, "maximum": 7_200_000, "default": DEFAULT_TIMEOUT_MS},
+                    "run_in_background": {"type": "boolean", "description": "Return a task ID immediately; retrieve or stop it with TaskOutput/TaskStop."},
                     "dangerouslyDisableSandbox": {"type": "boolean", "description": "Unsupported: sandbox bypass is never permitted."}
                 },
                 "required": ["command"],
@@ -127,10 +152,11 @@ impl<E: BashExecutor> ClaudeBash<E> {
 
     /// Validate a Bash invocation and delegate it to the injected executor.
     ///
-    /// The return value is JSON text containing `stdout`, `stderr`,
+    /// Completed commands return JSON text containing `stdout`, `stderr`,
     /// `exit_code`, and `truncated`. Escaped JSON is under 64 KiB even for
     /// control-character-heavy output. A command's nonzero exit is reported in
-    /// the result instead of being turned into an adapter error.
+    /// the result instead of being turned into an adapter error. Background
+    /// execution returns a `task_id` and running status.
     pub async fn execute(&self, name: &str, input: Value) -> Result<String, String> {
         self.execute_in_session(name, input, None).await
     }
@@ -169,9 +195,6 @@ impl<E: BashExecutor> ClaudeBash<E> {
             .get("run_in_background")
             .map_or(Some(false), Value::as_bool)
             .ok_or("invalid run_in_background")?;
-        if background {
-            return Err("run_in_background requires an unavailable session capability".into());
-        }
         let command = fields
             .get("command")
             .and_then(Value::as_str)
@@ -193,12 +216,22 @@ impl<E: BashExecutor> ClaudeBash<E> {
         };
         let timeout_ms = fields
             .get("timeout")
-            .map_or(Some(DEFAULT_TIMEOUT_MS), Value::as_u64)
+            .map_or(
+                Some(if background {
+                    1_800_000
+                } else {
+                    DEFAULT_TIMEOUT_MS
+                }),
+                Value::as_u64,
+            )
             .ok_or("invalid timeout")?;
-        if !(1..=MAX_TIMEOUT_MS).contains(&timeout_ms) {
-            return Err(format!(
-                "timeout must be 1 to {MAX_TIMEOUT_MS} milliseconds"
-            ));
+        let maximum = if background {
+            7_200_000
+        } else {
+            MAX_TIMEOUT_MS
+        };
+        if !(1..=maximum).contains(&timeout_ms) {
+            return Err(format!("timeout must be 1 to {maximum} milliseconds"));
         }
         let request = BashRequest {
             command: command.to_owned(),
@@ -208,10 +241,23 @@ impl<E: BashExecutor> ClaudeBash<E> {
             max_stderr_bytes: MAX_STREAM_BYTES,
             session,
         };
-        let result = self.executor.execute(request).await.map_err(|e| {
-            let (bounded, _) = cap_utf8(&e, MAX_STREAM_BYTES);
-            format!("command executor: {bounded}")
-        })?;
+        let result = self
+            .executor
+            .execute_with_background(request, background)
+            .await
+            .map_err(|e| {
+                let (bounded, _) = cap_utf8(&e, MAX_STREAM_BYTES);
+                format!("command executor: {bounded}")
+            })?;
+        let result = match result {
+            BashExecution::Completed(result) => result,
+            BashExecution::Background { task_id } => {
+                return Ok(json!({
+                    "task_id": task_id, "status": "running", "background": true,
+                })
+                .to_string());
+            }
+        };
         let (stdout, stdout_cut) = cap_utf8(&result.stdout, MAX_STREAM_BYTES);
         let (stderr, stderr_cut) = cap_utf8(&result.stderr, MAX_STREAM_BYTES);
         Ok(json!({

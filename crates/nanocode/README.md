@@ -97,13 +97,30 @@ Selection rules:
   provider request. Thinking is never clamped.
 
 Tools belong to each harness and are materialized separately for every agent.
-Without a tool selection each family gets its own canonical coding tools,
+Without a tool selection each family gets its own coding tools,
 rooted at the runtime workspace: Codex the standard Codex tools
 (`exec_command`, `write_stdin`, `apply_patch`, `update_plan`, `view_image`), and Claude the
-Claude Code file tools of `nanocode-claude-tools` (`Read`, `Edit`, `Write`,
-`Glob`, `Grep`) plus `Bash`. Bash uses the shared native process runner with
-workspace cwd, session identity, bounded stdout/stderr, and a foreground timeout.
-It runs with host permissions; background commands and sandbox bypass are not supported.
+Claude-style file tools of `nanocode-claude-tools` (`Read`, `Edit`, `Write`,
+`Glob`, `Grep`) plus `Bash`, `TaskOutput`, and `TaskStop`. Bash uses the shared
+native process runner with workspace cwd, session identity, and bounded output.
+`run_in_background: true` returns a task ID immediately; a foreground command
+that exceeds its timeout also returns a task ID and continues. `TaskOutput`
+returns completed stdout/stderr and exit status, or a running status while it
+waits. `TaskStop` cancels the command. Jobs are local to the agent, survive turns,
+and are stopped on shutdown; they are not restored from checkpoints. Background
+commands default to 30 minutes, with an explicit timeout up to two hours.
+Execution uses host permissions; sandbox bypass is unsupported.
+
+`Read({file_path, allow_large: true})` raises the ordinary text limits within
+the host's output budget. Native reads estimate four bytes per token, use a
+25,000-token ordinary output ceiling and a 16 MiB large-text source ceiling;
+the runtime caps the large-read budget at 200,000 tokens. This is an output
+budget, not a tokenizer-based measurement of remaining conversation space.
+Images are resized to the standard vision envelope (1568-pixel long edge and
+1.15 megapixels); payloads over 500 KiB are recompressed as JPEG without another
+dimension change. Small supported images retain their bytes. The image source
+limit is 16 MiB, and decoded allocations remain bounded.
+These are SDK implementations, not a claim of exact Claude Code parity.
 `tools`/`tools_factory` replace the defaults. Both families always expose `exec`
 and `wait`; selected tools are called inside JavaScript, such as
 `tools.Read({file_path})` or `tools.Bash({command: "pwd"})`. An empty selection
