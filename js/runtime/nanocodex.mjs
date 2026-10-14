@@ -19,10 +19,10 @@ import { claudeWorkspaceTools } from "./claude-workspace-tools.mjs";
 
 import { toolRouterBrand, toolRouterRuntime, toolMapSource } from "./tool-router.mjs";
 
-import { createRunnerPool, unavailableProcessTools } from "./runners.mjs";
+import { createRunnerPool, unavailableProcessTools, runnerManagementTool } from "./runners.mjs";
 
 const FAMILIES = Object.freeze(["codex", "claude"]);
-const RUNTIME_KEYS = new Set(["backends", "harness", "model", "thinking", "instructions", "workspace", "filesystem", "codeEvaluator", "module", "cua", "durability", "runners", "runnerServer"]);
+const RUNTIME_KEYS = new Set(["backends", "harness", "model", "thinking", "instructions", "workspace", "filesystem", "codeEvaluator", "module", "cua", "durability", "runners", "runnerServer", "runnerManagement"]);
 const RUNTIME_REJECTED = Object.freeze({
   tools: "tools belong to each backend: backends.codex.tools / backends.claude.tools",
   codeMode: "Code Mode is always enabled",
@@ -117,6 +117,7 @@ function snapshotRuntime(options, platform) {
       || ["readRecord", "load", "acquire", "replace"].some(name => typeof options.durability[name] !== "function"))) {
     throw new TypeError("durability must be a shared DurabilityStore");
   }
+  if (options.runnerManagement !== undefined && typeof options.runnerManagement !== "boolean") throw new TypeError("runnerManagement must be a boolean");
   const filesystem = options.filesystem;
   if (filesystem !== undefined && (!filesystem || typeof filesystem.root !== "string"
     || ["list", "readFile", "writeFile", "remove", "mkdir"].some(name => typeof filesystem[name] !== "function"))) {
@@ -138,6 +139,7 @@ function snapshotRuntime(options, platform) {
     module: options.module,
     runners: options.runners,
     runnerServer: options.runnerServer,
+    runnerManagement: options.runnerManagement,
   });
 }
 
@@ -401,6 +403,7 @@ async function prepareWorkspace(config, platform) {
 function withFilesystemTools(tools, filesystem, family, cua, runnerPool, processTools) {
   if (tools === undefined) tools = family === "claude" ? claudeWorkspaceTools(filesystem)
     : Object.entries(workspaceTools(filesystem)).map(([name, tool]) => ({ name, ...tool }));
+  tools = withCua(tools, cua);
   if (runnerPool) {
     if (tools?.[toolRouterBrand]) {
       tools = runnerPool.wrapTools(tools, processTools);
@@ -409,8 +412,9 @@ function withFilesystemTools(tools, filesystem, family, cua, runnerPool, process
       tools = [...tools, ...Object.entries(processTools).filter(([name]) => !names.has(name)).map(([name, tool]) => ({ name, ...tool }))];
     } else tools = { ...processTools, ...tools };
     if (!tools?.[toolRouterBrand]) tools = runnerPool.wrapTools(tools);
+    tools = runnerPool.toolConfiguration(tools);
   }
-  return withCua(tools, cua);
+  return tools;
 }
 
 async function codexChild(config, catalog, defaults, created) {
@@ -504,7 +508,7 @@ async function createRuntime(config, catalog, defaults, platform) {
     if (errors.length) throw new AggregateError(errors, "runner mount message delivery failed");
   }, config.durability);
   const process = await platform.runnerProcessTools?.(config.workspace);
-  config = { ...config, runnerPool, processTools: process?.tools ?? unavailableProcessTools() };
+  config = { ...config, runnerPool, processTools: { ...(process?.tools ?? unavailableProcessTools()), ...(config.runnerManagement === false ? {} : { runners: runnerManagementTool(runnerPool) }) } };
   try {
     if (config.runnerServer !== undefined) await runnerPool.listenForRunners(config.runnerServer);
     if (config.runners !== undefined) {

@@ -29,6 +29,7 @@ pub(crate) struct RoutedTool {
     pub pool: Option<super::RunnerPool>,
     pub sessions: Arc<ProcessRoutes>,
     pub local_runtime_id: Arc<str>,
+    pub local_desktop: bool,
 }
 
 pub(crate) struct RemoteOnlyTool {
@@ -68,7 +69,10 @@ impl Tool for RemoteOnlyTool {
 }
 
 fn cua(name: &str) -> bool {
-    matches!(name, "mcp__cua_repl__js" | "mcp__cua_repl__reset")
+    matches!(
+        name,
+        "mcp__cua_repl__js" | "mcp__cua_repl__reset" | "mcp__cua_repl__js_reset"
+    )
 }
 
 fn normalize(path: &Path) -> Result<PathBuf, crate::contract::ToolError> {
@@ -93,11 +97,7 @@ fn normalize(path: &Path) -> Result<PathBuf, crate::contract::ToolError> {
 
 impl Route {
     pub(crate) fn namespace(&self) -> &str {
-        self.tools
-            .iter()
-            .next()
-            .expect("validated remote catalog")
-            .namespace()
+        self.tools.namespace()
     }
     pub(crate) fn remote(&self, name: &str) -> Option<RemoteTool> {
         self.tools
@@ -106,14 +106,7 @@ impl Route {
             .cloned()
     }
     pub(crate) fn mount(&self) -> PathBuf {
-        PathBuf::from(format!(
-            "/{}",
-            self.tools
-                .iter()
-                .next()
-                .expect("validated remote catalog")
-                .namespace()
-        ))
+        PathBuf::from(format!("/{}", self.namespace()))
     }
 }
 
@@ -270,16 +263,33 @@ impl Tool for RoutedTool {
                     selected = routes
                         .iter()
                         .position(|route| path.starts_with(route.mount()));
-                    let index = selected.ok_or_else(|| {
-                        format!("selected root `{workdir}` has no attached desktop")
-                    })?;
-                    let remote = routes[index].remote(name).ok_or_else(|| {
-                        format!("selected root `{workdir}` has no desktop providing `{name}`")
-                    })?;
-                    if name == "mcp__cua_repl__js"
-                        && value.as_object().is_some_and(|object| object.len() == 1)
-                    {
-                        return Ok(crate::ToolOutput::json(&serde_json::json!({"workdir":workdir, "tools":routes[index].tools.iter().filter(|tool| cua(tool.remote_name())).map(|tool| tool.native_definition()).collect::<Vec<_>>() })).with_structured_result(serde_json::json!({"workdir":workdir,"definition":remote.native_definition()})));
+                    if let Some(index) = selected {
+                        let remote = routes[index].remote(name).ok_or_else(|| {
+                            format!("selected root `{workdir}` has no desktop providing `{name}`")
+                        })?;
+                        if name == "mcp__cua_repl__js"
+                            && value.as_object().is_some_and(|object| object.len() == 1)
+                        {
+                            return Ok(crate::ToolOutput::json(&serde_json::json!({"workdir":workdir, "tools":routes[index].tools.iter().filter(|tool| cua(tool.remote_name())).map(|tool| tool.native_definition()).collect::<Vec<_>>() })).with_structured_result(serde_json::json!({"workdir":workdir,"definition":remote.native_definition()})));
+                        }
+                    } else {
+                        self.check_mount(&path, &routes, context.session_id())
+                            .await?;
+                        if !self.local_desktop
+                            || routes.iter().any(|route| route.mode == RemoteMode::Replace)
+                        {
+                            return Err(format!(
+                                "selected root `{workdir}` has no attached desktop"
+                            )
+                            .into());
+                        }
+                        if name == "mcp__cua_repl__js"
+                            && value.as_object().is_some_and(|object| object.len() == 1)
+                        {
+                            return Ok(crate::ToolOutput::json(
+                                &serde_json::json!({"workdir":workdir, "definition":self.local.definition()}),
+                            ));
+                        }
                     }
                 }
                 if name == "write_stdin" {
@@ -491,7 +501,12 @@ impl crate::DynamicToolProvider for RunnerProvider {
             )
             .filter(|definition| seen.insert(definition.name().to_owned()))
             .map(|definition| {
+                let local_desktop = self
+                    .providers
+                    .iter()
+                    .any(|provider| provider.contains(definition.name()));
                 RoutedTool {
+                    local_desktop,
                     local: Arc::new(RemoteOnlyTool {
                         definition,
                         providers: self.providers.clone(),
@@ -516,6 +531,10 @@ impl crate::DynamicToolProvider for RunnerProvider {
             .into_iter()
             .find(|definition| definition.name() == name)?;
         let routed = RoutedTool {
+            local_desktop: self
+                .providers
+                .iter()
+                .any(|provider| provider.contains(name)),
             local: Arc::new(RemoteOnlyTool {
                 definition,
                 providers: self.providers.clone(),

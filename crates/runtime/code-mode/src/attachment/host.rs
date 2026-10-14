@@ -198,6 +198,7 @@ impl RemoteRunner {
     pub(crate) fn tools_snapshot(&self) -> Option<RemoteTools> {
         let specs = self.inner.catalog.borrow().clone()?;
         Some(RemoteTools {
+            namespace: self.inner.namespace.clone(),
             workspace: self.inner.state().workspace.clone(),
             tools: specs
                 .iter()
@@ -226,6 +227,7 @@ impl RemoteRunner {
             None => wait.await?,
         };
         Ok(RemoteTools {
+            namespace: self.inner.namespace.clone(),
             workspace: self.inner.state().workspace.clone(),
             tools: specs
                 .iter()
@@ -716,6 +718,7 @@ impl Drop for CancelOnDrop {
 
 #[derive(Clone)]
 pub struct RemoteTools {
+    namespace: Box<str>,
     tools: Vec<RemoteTool>,
     workspace: Option<PathBuf>,
 }
@@ -730,6 +733,10 @@ impl fmt::Debug for RemoteTools {
 }
 
 impl RemoteTools {
+    pub fn namespace(&self) -> &str {
+        &self.namespace
+    }
+
     #[must_use]
     pub fn workspace(&self) -> Option<&Path> {
         self.workspace.as_deref()

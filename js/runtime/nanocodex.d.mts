@@ -75,6 +75,7 @@ export type Options<Transport> = Readonly<{
 
   cua?: Readonly<{ tools: readonly import("../types.mjs").NamedTool[] }> | false | undefined;
 
+  runnerManagement?: boolean | undefined;
   runners?: readonly RunnerOptions[] | undefined;
   runnerServer?: RunnerServerOptions | undefined;
   durability?: DurabilityStore | undefined;

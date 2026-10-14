@@ -1,5 +1,6 @@
 mod driver;
 mod host;
+pub(crate) mod management;
 #[cfg(not(target_family = "wasm"))]
 mod pool;
 #[cfg(not(target_family = "wasm"))]

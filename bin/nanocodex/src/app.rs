@@ -1570,7 +1570,12 @@ impl App {
                 .action
                 .unwrap_or(crate::commands::RunnerAction::List),
             Err(error) => {
-                self.notice(NoticeLevel::Error, error.to_string());
+                let level = if error.use_stderr() {
+                    NoticeLevel::Error
+                } else {
+                    NoticeLevel::Info
+                };
+                self.notice(level, error.to_string());
                 return;
             }
         };

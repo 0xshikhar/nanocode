@@ -189,9 +189,18 @@ pub enum RunnerEvent {
     Failed { name: String, error: String },
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct RunnerPool {
     inner: Arc<PoolInner>,
+    model_management: bool,
+}
+impl Default for RunnerPool {
+    fn default() -> Self {
+        Self {
+            inner: Arc::default(),
+            model_management: true,
+        }
+    }
 }
 #[derive(Default)]
 struct PoolInner {
@@ -284,6 +293,13 @@ impl RunnerPool {
     pub fn new() -> Self {
         Self::default()
     }
+    pub fn with_model_management(mut self, enabled: bool) -> Self {
+        self.model_management = enabled;
+        self
+    }
+    pub fn model_management_enabled(&self) -> bool {
+        self.model_management
+    }
     pub fn report_failure(&self, name: impl Into<String>, failure: impl Into<String>) {
         emit(
             &mut self.inner.state(),
@@ -335,12 +351,17 @@ impl RunnerPool {
         }
         let connection = remote.connect(target)?;
         let status = watch::channel(RunnerStatus::Connecting).0;
+        let identity = Arc::new(());
         let handle = RunnerHandle {
             pool: self.clone(),
             name: config.name.clone(),
+            endpoint: config.endpoint.clone(),
+            mode: config.mode,
+            workspace: config.workspace.clone(),
+            remote: remote.clone(),
+            identity: identity.clone(),
             status: status.subscribe(),
         };
-        let identity = Arc::new(());
         let monitor = monitor(
             Arc::downgrade(&self.inner),
             config.name.clone(),
@@ -398,12 +419,24 @@ impl RunnerPool {
         receiver
     }
     pub async fn disconnect(&self, name: &str) -> Result<(), AttachmentError> {
+        self.disconnect_entry(name, None).await
+    }
+    async fn disconnect_entry(
+        &self,
+        name: &str,
+        identity: Option<&Arc<()>>,
+    ) -> Result<(), AttachmentError> {
         let remote = {
             let mut state = self.inner.state();
             let entry = state
                 .runners
                 .get_mut(name)
                 .ok_or_else(|| error(format!("runner `{name}` is not registered")))?;
+            if identity.is_some_and(|identity| !Arc::ptr_eq(&entry.identity, identity)) {
+                return Err(error(format!(
+                    "runner handle `{name}` is stale; the name belongs to a newer registration"
+                )));
+            }
             entry.active = false;
             entry.cancel.cancel();
             if let Some(monitor) = entry.monitor.take() {
@@ -596,11 +629,28 @@ fn monitor(
 pub struct RunnerHandle {
     pool: RunnerPool,
     name: String,
+    endpoint: String,
+    mode: RemoteMode,
+    workspace: Option<PathBuf>,
+    remote: RemoteRunner,
+    identity: Arc<()>,
     status: watch::Receiver<RunnerStatus>,
 }
 impl RunnerHandle {
     pub fn info(&self) -> RunnerInfo {
-        self.pool.inner.state().runners[&self.name].info(&self.name)
+        let tools = self.remote.tools_snapshot();
+        RunnerInfo {
+            name: self.name.clone(),
+            endpoint: self.endpoint.clone(),
+            mode: self.mode,
+            status: self.status(),
+            workspace: self.workspace.clone().or_else(|| {
+                tools
+                    .as_ref()
+                    .and_then(|tools| tools.workspace().map(PathBuf::from))
+            }),
+            tool_count: tools.map_or(0, |tools| tools.iter().count()),
+        }
     }
     pub fn status(&self) -> RunnerStatus {
         self.status.borrow().clone()
@@ -609,14 +659,19 @@ impl RunnerHandle {
         self.status.clone()
     }
     pub async fn disconnect(&self) -> Result<(), AttachmentError> {
-        self.pool.disconnect(&self.name).await
+        self.pool
+            .disconnect_entry(&self.name, Some(&self.identity))
+            .await
     }
     async fn ready(&self) -> Result<(), AttachmentError> {
         let mut status = self.subscribe();
         loop {
             match status.borrow().clone() {
                 RunnerStatus::Ready => return Ok(()),
-                RunnerStatus::Failed(reason) => return Err(error(reason)),
+                RunnerStatus::Failed(reason) => {
+                    let failure = self.remote.failure_status().borrow().clone();
+                    return Err(failure.unwrap_or_else(|| error(reason)));
+                }
                 RunnerStatus::Disconnected => return Err(AttachmentError::Closed),
                 RunnerStatus::Connecting => {}
             }
@@ -674,7 +729,10 @@ impl RunnerServer {
             task.await.map_err(error)?;
         }
         if let Some(inner) = self.inner.pool.upgrade() {
-            let pool = RunnerPool { inner };
+            let pool = RunnerPool {
+                inner,
+                model_management: true,
+            };
             let names = pool
                 .list()
                 .into_iter()

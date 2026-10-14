@@ -6,6 +6,8 @@ pub(super) struct Snapshot {
     provider: String,
     version: u32,
     pub(super) conversation: Conversation,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) developer_notices: Vec<(String, String)>,
     pub(super) discovered: HashSet<String>,
     pub(super) tasks: Option<Value>,
     #[serde(default)]
@@ -30,6 +32,7 @@ impl Default for Snapshot {
             provider: "claude".into(),
             version: 1,
             conversation: Conversation::default(),
+            developer_notices: Vec::new(),
             discovered: HashSet::new(),
             tasks: None,
             model: None,
@@ -54,6 +57,38 @@ impl Snapshot {
             ));
         }
         Ok(self)
+    }
+
+    pub(super) fn session_context(&self, workspace: String) -> AgentSessionContext {
+        use nanocode_types::responses::{ContentItem, MessageRole, ResponseItem};
+        let mut history = self
+            .conversation
+            .packed_messages()
+            .into_iter()
+            .map(|message| {
+                ResponseItem::message(
+                    match message.role {
+                        Role::User => MessageRole::User,
+                        Role::Assistant => MessageRole::Assistant,
+                    },
+                    message.content.into_iter().filter_map(|block| match block {
+                        ContentBlock::Text { text, .. } => Some(ContentItem::InputText {
+                            text: text.into_boxed_str(),
+                        }),
+                        _ => None,
+                    }),
+                )
+            })
+            .collect::<Vec<_>>();
+        history.extend(self.developer_notices.iter().map(|(_, text)| {
+            ResponseItem::message(
+                MessageRole::Developer,
+                [ContentItem::InputText {
+                    text: text.clone().into_boxed_str(),
+                }],
+            )
+        }));
+        AgentSessionContext::from_backend(workspace, history)
     }
 
     pub(super) const fn has_conversation(&self) -> bool {
@@ -83,6 +118,8 @@ pub(super) struct Cursor {
     pub(super) tool_search: bool,
     pub(super) operation: Option<String>,
     pub(super) prepared: bool,
+    #[serde(default)]
+    pub(super) developer_notice_ids: HashSet<String>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) frozen_prompt: Option<Prompt>,
@@ -251,6 +288,7 @@ impl State {
     pub(super) async fn snapshot(&self, conversation: &Conversation) -> Result<Snapshot> {
         Ok(Snapshot {
             conversation: conversation.clone(),
+            developer_notices: self.developer_notices.lock().await.clone(),
             discovered: self.discovered.lock().await.clone(),
             tasks: self.task_snapshot()?,
             model: Some(self.model()),
@@ -269,6 +307,7 @@ impl State {
     ) -> Result<()> {
         self.restore_tasks(snapshot.tasks)?;
         *self.discovered.lock().await = snapshot.discovered;
+        *self.developer_notices.lock().await = snapshot.developer_notices;
         *conversation = snapshot.conversation;
         Ok(())
     }
@@ -278,7 +317,9 @@ impl State {
         operation: Option<&str>,
         speed: Option<crate::Speed>,
         prompt: Option<&Prompt>,
+        developer_notice_ids: HashSet<String>,
     ) -> Result<Cursor> {
+        let update = self.persistence_update.lock().await;
         if let (Some(policy), Some(operation)) = (&self.policy, operation)
             && let Some(value) = policy.continuation(operation.to_owned()).await?
         {
@@ -300,6 +341,7 @@ impl State {
                 .map_err(recovery_error)?;
             return Ok(cursor);
         }
+        drop(update);
         let template = self.request_template(speed);
         let static_names = self
             .tools
@@ -337,6 +379,7 @@ impl State {
             tool_search: self.client_tool_search,
             operation: operation.map(str::to_owned),
             prepared: false,
+            developer_notice_ids,
             frozen_prompt: prompt
                 .filter(|prompt| {
                     matches!(
@@ -377,6 +420,14 @@ impl State {
         cursor: &mut Cursor,
         conversation: &Conversation,
     ) -> Result<()> {
+        let _update = self.persistence_update.lock().await;
+        self.advance_cursor_locked(cursor, conversation).await
+    }
+    pub(super) async fn advance_cursor_locked(
+        &self,
+        cursor: &mut Cursor,
+        conversation: &Conversation,
+    ) -> Result<()> {
         if self.code_only && !is_code_only_catalog(&cursor.template.tools) {
             cursor.template.tools = self.code_only_tools();
             self.classify_code_only_tools(cursor);
@@ -388,6 +439,7 @@ impl State {
             let encoded = serde_json::value::to_raw_value(&*cursor).map_err(provider_error);
             cursor.snapshot = Snapshot::default();
             policy.advance_encoded(operation.clone(), encoded?).await?;
+            self.persistence_ready.notify_waiters();
         }
         Ok(())
     }
@@ -397,6 +449,7 @@ impl State {
         request: &BackendPrompt,
         result: &Result<TurnResult>,
     ) -> Result<()> {
+        let _update = self.persistence_update.lock().await;
         let (Some(policy), Some(operation)) = (&self.policy, &request.request_id) else {
             return Ok(());
         };
@@ -432,6 +485,10 @@ impl State {
         if settled.is_err() {
             self.stopped.store(true, Ordering::SeqCst);
         }
+        if let Some(turn) = self.steering.lock().await.get_mut(&request.key) {
+            turn.operation = None;
+        }
+        self.persistence_ready.notify_waiters();
         settled
     }
     pub(super) async fn durable_tool(

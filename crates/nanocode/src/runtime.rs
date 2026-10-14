@@ -203,10 +203,19 @@ pub struct NanocodexBuilder<B = Unselected> {
     #[cfg(not(target_family = "wasm"))]
     runners: Vec<crate::Runner>,
     #[cfg(not(target_family = "wasm"))]
+    runner_management_disabled: bool,
+    #[cfg(not(target_family = "wasm"))]
     runner_servers: Vec<crate::RunnerServerConfig>,
 }
 
 impl<B> NanocodexBuilder<B> {
+    #[cfg(not(target_family = "wasm"))]
+    #[must_use]
+    pub fn runner_management(mut self, enabled: bool) -> Self {
+        self.runner_management_disabled = !enabled;
+        self
+    }
+
     #[cfg(not(target_family = "wasm"))]
     #[must_use]
     pub fn runner(mut self, runner: crate::Runner) -> Self {
@@ -426,15 +435,14 @@ impl<B> NanocodexBuilder<B> {
         let cua: computer::Cell = None;
         let ownership = Arc::new(Ownership::default());
         #[cfg(not(target_family = "wasm"))]
-        let runner_pool = crate::RunnerPool::new();
+        let runner_pool =
+            crate::RunnerPool::new().with_model_management(!self.runner_management_disabled);
         #[cfg(not(target_family = "wasm"))]
         let runner_agents = crate::runners::RunnerAgents::new(
             runner_pool.clone(),
             self.runners,
             self.runner_servers,
         );
-        #[cfg(not(target_family = "wasm"))]
-        runner_agents.activate();
         let backend_defaults: Vec<_> = self
             .backends
             .iter()
@@ -557,6 +565,8 @@ impl<B> NanocodexBuilder<B> {
         for (model, thinking) in backend_defaults {
             router = router.default_settings(model, thinking);
         }
+        #[cfg(not(target_family = "wasm"))]
+        runner_agents.activate();
         Ok(Nanocodex {
             inner: Arc::new(Runtime {
                 harness: router.build_tracked(Arc::downgrade(&ownership)),
@@ -603,6 +613,8 @@ impl NanocodexBuilder<Unselected> {
             subagent_continuation_disabled: self.subagent_continuation_disabled,
             #[cfg(not(target_family = "wasm"))]
             runners: self.runners,
+            #[cfg(not(target_family = "wasm"))]
+            runner_management_disabled: self.runner_management_disabled,
             #[cfg(not(target_family = "wasm"))]
             runner_servers: self.runner_servers,
         }

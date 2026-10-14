@@ -1,3 +1,4 @@
+import { isLoopback } from "../runtime/runners.mjs";
 import WebSocket, { WebSocketServer } from "ws";
 import { createServer } from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
@@ -10,6 +11,7 @@ export function connectRunnerSocket({ url, token }) {
 export async function listenRunnerSockets({ address = "127.0.0.1:0", token = randomBytes(32).toString("base64url") }, accept) {
   if (typeof token !== "string" || !token) throw new TypeError("runner server token must not be empty");
   const target = new URL("http://" + address);
+  if (!isLoopback(target.hostname)) throw new TypeError("plaintext runner listeners require a loopback address; use a TLS proxy for remote access");
   const server = createServer((request, response) => { response.writeHead(404); response.end(); });
   const sockets = new WebSocketServer({ noServer: true });
   const authenticate = request => {
@@ -21,7 +23,7 @@ export async function listenRunnerSockets({ address = "127.0.0.1:0", token = ran
     if (!authenticate(request)) { socket.end("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n"); return; }
     sockets.handleUpgrade(request, socket, head, accept);
   });
-  await new Promise((resolve, reject) => { server.once("error", reject); server.listen(Number(target.port), target.hostname, resolve); });
+  await new Promise((resolve, reject) => { server.once("error", reject); server.listen(Number(target.port), target.hostname.replace(/^\[|\]$/g, ""), resolve); });
   const bound = server.address();
   const host = bound.address.includes(":") ? "[" + bound.address + "]" : bound.address;
   let stopping;
@@ -30,5 +32,5 @@ export async function listenRunnerSockets({ address = "127.0.0.1:0", token = ran
 
 export async function runnerProcessTools(workspace) {
   const instance = await createNodeProcessTools({ workspace });
-  return { tools: Object.fromEntries(instance.tools.map(({ name, ...tool }) => [name, tool])), close: instance.close };
+  return { tools: Object.fromEntries(instance.tools.map(({ name, dispose, ...tool }) => [name, tool])), close: instance.close };
 }

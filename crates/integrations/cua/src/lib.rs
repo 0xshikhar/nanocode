@@ -42,6 +42,76 @@ pub struct ComputerConfig {
     pub args: Vec<OsString>,
     pub environment: BTreeMap<OsString, OsString>,
     provider_catalog: Option<Vec<ProviderTool>>,
+    catalog_cache: Option<CatalogCache>,
+}
+
+#[derive(Clone, Debug)]
+struct CatalogCache {
+    path: PathBuf,
+    inputs: Vec<PathBuf>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct CachedCatalog {
+    fingerprint: Value,
+    catalog: Vec<ProviderTool>,
+}
+
+impl CatalogCache {
+    fn fingerprint(&self, config: &ComputerConfig) -> Value {
+        let lossy = |value: &std::ffi::OsStr| value.to_string_lossy().into_owned();
+        let inputs = self
+            .inputs
+            .iter()
+            .map(|path| {
+                let stamp = std::fs::metadata(path).ok().map(|metadata| {
+                    let modified = metadata
+                        .modified()
+                        .ok()
+                        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|elapsed| elapsed.as_nanos().to_string());
+                    json!({"len": metadata.len(), "modified": modified})
+                });
+                json!({"path": lossy(path.as_os_str()), "stamp": stamp})
+            })
+            .collect::<Vec<_>>();
+        let inherited = PROVIDER_ENVIRONMENT
+            .iter()
+            .map(|name| json!([name, std::env::var_os(name).as_deref().map(lossy)]))
+            .collect::<Vec<_>>();
+        json!({
+            "version": env!("CARGO_PKG_VERSION"),
+            "executable": lossy(config.executable.as_os_str()),
+            "args": config.args.iter().map(|arg| lossy(arg)).collect::<Vec<_>>(),
+            "environment": config
+                .environment
+                .iter()
+                .map(|(name, value)| [lossy(name), lossy(value)])
+                .collect::<Vec<_>>(),
+            "inherited": inherited,
+            "inputs": inputs,
+        })
+    }
+
+    fn load(&self, fingerprint: &Value) -> Option<Vec<ProviderTool>> {
+        let cached: CachedCatalog = serde_json::from_slice(&std::fs::read(&self.path).ok()?).ok()?;
+        (cached.fingerprint == *fingerprint && validate_catalog(&cached.catalog).is_ok())
+            .then_some(cached.catalog)
+    }
+
+    fn store(&self, fingerprint: Value, catalog: &[ProviderTool]) -> std::io::Result<()> {
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let staged = self
+            .path
+            .with_extension(format!("json.{}.tmp", std::process::id()));
+        std::fs::write(
+            &staged,
+            serde_json::to_vec(&json!({"fingerprint": fingerprint, "catalog": catalog}))?,
+        )?;
+        std::fs::rename(&staged, &self.path)
+    }
 }
 
 impl ComputerConfig {
@@ -79,12 +149,22 @@ impl ComputerConfig {
                 "NODE_REPL_TRUSTED_SERVICES",
                 OsString::from(r#"{"sky":"@oai/sky/service"}"#),
             ),
-            ("SKY_CUA_SERVICE_PATH", service.into_os_string()),
-            ("CODEX_HOME", codex_home.into_os_string()),
+            ("SKY_CUA_SERVICE_PATH", service.clone().into_os_string()),
+            ("CODEX_HOME", codex_home.clone().into_os_string()),
         ]
         .into_iter()
         .map(|(key, value)| (OsString::from(key), value))
         .collect();
+        config.catalog_cache = Some(CatalogCache {
+            path: codex_home.join("nanocode").join("cua-catalog.json"),
+            inputs: vec![
+                config.executable.clone(),
+                base.join("bin/node"),
+                base.join("lib/node_modules/.package-map.json"),
+                service.join("Contents/Info.plist"),
+                codex_home.join("computer-use/config.json"),
+            ],
+        });
         Ok(config)
     }
 
@@ -94,6 +174,7 @@ impl ComputerConfig {
             args: Vec::new(),
             environment: BTreeMap::new(),
             provider_catalog: None,
+            catalog_cache: None,
         }
     }
 
@@ -150,7 +231,20 @@ pub struct ComputerTools {
 }
 impl ComputerTools {
     pub async fn connect(mut config: ComputerConfig) -> Result<Self, ToolError> {
+        let cache = config
+            .catalog_cache
+            .clone()
+            .map(|cache| (cache.fingerprint(&config), cache));
+        if let Some((fingerprint, cache)) = &cache
+            && let Some(catalog) = cache.load(fingerprint)
+        {
+            config.provider_catalog = Some(catalog);
+            return Ok(Self::local(config));
+        }
         let process = Process::start(&config).await?;
+        if let Some((fingerprint, cache)) = cache {
+            drop(cache.store(fingerprint, &process.catalog));
+        }
         config.provider_catalog = Some(process.catalog.clone());
         Ok(Self::local(config))
     }
@@ -534,6 +628,9 @@ impl Process {
             .as_ref()
             .is_some_and(|expected| expected != &catalog)
         {
+            if let Some(cache) = &config.catalog_cache {
+                drop(std::fs::remove_file(&cache.path));
+            }
             return Err(
                 "CUA provider catalog changed; reconnect the attachment before invoking it".into(),
             );

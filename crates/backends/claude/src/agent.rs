@@ -1481,6 +1481,9 @@ impl ClaudeBuilder {
             code_only: self.code_only,
             parallel_tools: self.parallel_tools,
             parallel_safe_tools: self.parallel_safe_tools,
+            developer_notices: Mutex::new(restored.developer_notices),
+            persistence_update: Mutex::new(()),
+            persistence_ready: Notify::new(),
             conversation: Mutex::new(restored.conversation),
             round_boundary: std::sync::RwLock::new(round_boundary),
             side_view: std::sync::RwLock::new(None),
@@ -2614,6 +2617,7 @@ struct TurnSteering {
     pending: std::collections::VecDeque<PendingSteer>,
     receipts: HashMap<String, (String, bool)>,
     operation: Option<String>,
+    developer_notice_ids: HashSet<String>,
     model_call_index: u32,
     next_index: u32,
     revision: Option<u64>,
@@ -2668,6 +2672,9 @@ struct State {
 
     parallel_safe_tools: HashSet<String>,
     conversation: Mutex<Conversation>,
+    developer_notices: Mutex<Vec<(String, String)>>,
+    persistence_update: Mutex<()>,
+    persistence_ready: Notify,
 
     round_boundary: std::sync::RwLock<Arc<Snapshot>>,
 
@@ -2950,6 +2957,13 @@ async fn start_turn(
             pending: std::collections::VecDeque::new(),
             receipts: HashMap::new(),
             operation: request_id.clone(),
+            developer_notice_ids: state
+                .developer_notices
+                .lock()
+                .await
+                .iter()
+                .map(|(id, _)| id.clone())
+                .collect(),
             model_call_index: 1,
             next_index: 0,
             revision: request.prompt.instruction_revision(),
@@ -2998,6 +3012,7 @@ async fn start_turn(
         running.cancellations.lock().await.remove(&key);
         drop(attempt);
         running.idle.notify_waiters();
+        running.persistence_ready.notify_waiters();
         let _ = sender.send(result);
     };
     #[cfg(not(target_family = "wasm"))]
@@ -3174,6 +3189,7 @@ const CLAUDE_CAPABILITIES: Capabilities = {
     capabilities.spawn = true;
     capabilities.steering = true;
     capabilities.identified_steering = true;
+    capabilities.developer_messages = true;
     capabilities.compaction = true;
     capabilities.model = Mutability::BetweenTurns;
     capabilities.thinking = Mutability::Anytime;
@@ -3318,6 +3334,7 @@ impl State {
             return Err(NanocodexError::AgentStopped);
         }
 
+        snapshot.developer_notices = self.developer_notices.lock().await.clone();
         snapshot.conversation.pending_continuation = false;
         snapshot.conversation.previous_message_id = None;
         snapshot.conversation.container = None;
@@ -4818,12 +4835,21 @@ impl State {
         }
         self.publish_side_view(None);
         let mut prompt = prompt_messages(&request.prompt)?;
+        let developer_notice_ids = self
+            .steering
+            .lock()
+            .await
+            .get(&request.key)
+            .ok_or(NanocodexError::TurnStopped)?
+            .developer_notice_ids
+            .clone();
         let mut cursor = self
             .cursor(
                 conversation,
                 request.request_id.as_deref(),
                 speed,
                 Some(&request.prompt),
+                developer_notice_ids,
             )
             .await?;
         if let (Some(policy), Some(operation)) = (&self.policy, &cursor.operation) {
@@ -4974,12 +5000,36 @@ impl State {
                 );
                 self.emit_compacted(&request.events, 0, compaction_started);
             }
+            let _update = self.persistence_update.lock().await;
+            let notices = {
+                let mut queued = self.developer_notices.lock().await;
+                let mut notices = Vec::new();
+                queued.retain(|(id, text)| {
+                    if cursor.developer_notice_ids.contains(id) {
+                        notices.push(text.clone());
+                        false
+                    } else {
+                        true
+                    }
+                });
+                notices
+            };
+            prompt.splice(
+                0..0,
+                notices.into_iter().map(|text| {
+                    Message::text(
+                        Role::User,
+                        format!("<system-reminder>\n{text}\n</system-reminder>"),
+                    )
+                }),
+            );
             pending = conversation.packed_messages();
             pending.extend(prompt);
             cursor.prepared = true;
             self.retain_pending(&mut cursor, &pending);
             cursor.usage = usage.clone();
-            self.advance_cursor(&mut cursor, conversation).await?;
+            self.advance_cursor_locked(&mut cursor, conversation)
+                .await?;
         }
         let mut previous_message_id = conversation.previous_message_id.clone();
         for index in cursor.index..u32::MAX {
@@ -6183,7 +6233,13 @@ impl LifecycleBackend for Driver {
                         operation = Some(id);
                     }
                     let cursor = state
-                        .cursor(&mut context, operation.as_deref(), state.speed(), None)
+                        .cursor(
+                            &mut context,
+                            operation.as_deref(),
+                            state.speed(),
+                            None,
+                            HashSet::new(),
+                        )
                         .await?;
                     let result = state
                         .compact_locked(
@@ -6259,14 +6315,65 @@ impl LifecycleBackend for Driver {
             receipt.await.unwrap_or(Err(NanocodexError::TurnStopped))
         })
     }
-    fn append_developer_message(
-        &self,
-        _text: String,
-    ) -> BackendFuture<Result<AgentSessionContext>> {
-        Box::pin(async {
-            Err(NanocodexError::UnsupportedCapability {
-                capability: "developer_messages",
-            })
+    fn append_developer_message(&self, text: String) -> BackendFuture<Result<AgentSessionContext>> {
+        let state = self.state.clone();
+        Box::pin(async move {
+            loop {
+                let admission = state.admission.lock().await;
+                let notified = state.persistence_ready.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+                let update = state.persistence_update.lock().await;
+                if state.stopped.load(Ordering::SeqCst) {
+                    return Err(NanocodexError::AgentStopped);
+                }
+                let mut snapshot = state.latest_boundary().await?;
+                snapshot
+                    .developer_notices
+                    .push((uuid::Uuid::new_v4().to_string(), text.clone()));
+                if let Some(policy) = &state.policy {
+                    let operation = state
+                        .steering
+                        .lock()
+                        .await
+                        .iter()
+                        .filter_map(|(key, turn)| {
+                            turn.operation.as_ref().map(|id| (key.0, id.clone()))
+                        })
+                        .min_by_key(|(key, _)| *key)
+                        .map(|(_, id)| id);
+                    if let Some(operation) = operation {
+                        let Some(mut continuation) = policy.continuation(operation.clone()).await?
+                        else {
+                            drop(update);
+                            drop(admission);
+                            notified.await;
+                            continue;
+                        };
+                        continuation["snapshot"]["developer_notices"] =
+                            json!(snapshot.developer_notices);
+                        policy.advance(operation, continuation).await?;
+                    } else {
+                        if let Err(error) = policy
+                            .checkpoint(serde_json::to_value(&snapshot).map_err(provider_error)?)
+                            .await
+                        {
+                            if error.execution_policy_disposition()
+                                == Some(nanocode_agent::ExecutionPolicyDisposition::Retry)
+                            {
+                                drop(update);
+                                drop(admission);
+                                notified.await;
+                                continue;
+                            }
+                            return Err(error);
+                        }
+                    }
+                }
+                *state.developer_notices.lock().await = snapshot.developer_notices.clone();
+                let context = snapshot.session_context(state.workspace());
+                return Ok(context);
+            }
         })
     }
     fn context(&self) -> BackendFuture<Result<AgentSessionContext>> {

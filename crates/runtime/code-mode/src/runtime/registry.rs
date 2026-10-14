@@ -266,6 +266,16 @@ impl ToolRegistry {
         if routes.is_empty() && pool.is_none() {
             return;
         }
+        if let Some(pool) = &pool {
+            if pool.model_management_enabled() {
+                self.extend([(
+                    Arc::new(crate::attachment::management::RunnerManagement { pool: pool.clone() })
+                        as Arc<dyn Tool>,
+                    ToolExposure::CodeModeOnly,
+                )]);
+            }
+        }
+        let local_names = self.by_name.keys().cloned().collect::<HashSet<_>>();
         for remote in routes.iter().flat_map(|route| route.tools.iter()) {
             let definition = remote.native_definition();
             if !self.by_name.contains_key(definition.name()) {
@@ -296,6 +306,11 @@ impl ToolRegistry {
             {
                 *tool = Arc::new(crate::attachment::routing::RoutedTool {
                     local: Arc::clone(tool),
+                    local_desktop: local_names.contains(name.as_str())
+                        || self
+                            .providers
+                            .iter()
+                            .any(|provider| provider.contains(&name)),
                     routes: Arc::clone(&routes),
                     pool: pool.clone(),
                     sessions: Arc::clone(&sessions),

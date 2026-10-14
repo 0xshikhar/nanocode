@@ -1,11 +1,12 @@
 import { tools as workspaceTools } from "./workspace.mjs";
 import { claudeWorkspaceTools } from "./claude-workspace-tools.mjs";
+import { subagentsBrand } from "./tool-configuration.mjs";
 import { ToolRouter, toolRouterBrand, toolRouterRuntime, toolRuntimeLifecycle, toolMapSource } from "./tool-router.mjs";
 import { EXEC_COMMAND_PARAMETERS, WRITE_STDIN_PARAMETERS } from "nanocodex-tools/execution-contract";
 
 const MAX = Number.MAX_SAFE_INTEGER;
 const RESULT = Symbol.for("nanocodex.toolResult");
-const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const validName = name => typeof name === "string" && /^[A-Za-z][A-Za-z0-9_-]*$/.test(name) && !name.includes("__") && !name.endsWith("_");
 const failure = (message, code = "runner_unavailable") => Object.assign(new Error(message), { code });
 
 export function createRunnerPool(platform, workspace, notify, store) {
@@ -46,7 +47,7 @@ export function createRunnerPool(platform, workspace, notify, store) {
   const mountMessage = () => "Runner mounts: " + ([...routes.values()].map(route => `/${route.name} -> ${route.workspace} (${route.status}, ${route.mode})`).join("; ") || "none") + ". Select a runner using workdir or an absolute file path under its mount. Unavailable mounts must not run locally.";
   function options(value) {
     if (!value || typeof value !== "object") throw new TypeError("runner options are required");
-    if (value.name !== undefined && !NAME.test(value.name)) throw new TypeError("invalid runner name");
+    if (value.name !== undefined && !validName(value.name)) throw new TypeError("invalid runner name");
     if (value.mode !== undefined && !["alongside", "replace"].includes(value.mode)) throw new TypeError("runner mode must be alongside or replace");
     if (value.callTimeoutMs !== undefined && (!Number.isSafeInteger(value.callTimeoutMs) || value.callTimeoutMs <= 0)) throw new TypeError("callTimeoutMs must be a positive safe integer");
     return { ...value, mode: value.mode ?? "alongside" };
@@ -76,7 +77,7 @@ export function createRunnerPool(platform, workspace, notify, store) {
             if (frame.type !== "catalog" || !Array.isArray(frame.tools) || typeof frame.runtime_id !== "string") throw failure("invalid runner catalog");
             const name = config.name ?? frame.machines?.[0]?.id;
             const root = frame.machines?.[0]?.workspace;
-            if (!NAME.test(name ?? "") || typeof root !== "string" || !root.startsWith("/")) throw failure("runner catalog requires a machine id and canonical workspace");
+            if (!validName(name) || typeof root !== "string" || !root.startsWith("/")) throw failure("runner catalog requires a machine id and canonical workspace");
             if (routes.get(name)?.status === "connected") throw failure("duplicate active runner: " + name);
             const tools = new Map();
             for (const entry of frame.tools) {
@@ -84,14 +85,14 @@ export function createRunnerPool(platform, workspace, notify, store) {
               if (tools.has(entry.definition.name)) throw failure("duplicate runner catalog tool");
               tools.set(entry.definition.name, entry);
             }
-            route = { name, workspace: root.replace(/\/$/, ""), mode: config.mode, status: "connected", tools, socket, runtimeId: frame.runtime_id };
+            route = { name, workspace: root.replace(/\/$/, ""), mode: config.mode, status: "connected", tools, socket, runtimeId: frame.runtime_id, turnLifecycle: frame.turn_lifecycle === true };
             route.invoke = (name, input, context = {}) => {
               const spec = tools.get(name);
               if (!spec || route.status !== "connected") return Promise.reject(failure(`runner ${route.name}: ${name} unavailable`));
               const signal = context.signal;
               signal?.throwIfAborted();
               const id = globalThis.crypto.randomUUID();
-              const timeout = config.callTimeoutMs ?? spec.timeout_ms;
+              const timeout = config.callTimeoutMs === undefined ? spec.timeout_ms : Math.min(config.callTimeoutMs, spec.timeout_ms);
               const deadline = timeout === MAX ? MAX : Date.now() + timeout;
               if (!Number.isSafeInteger(deadline)) return Promise.reject(failure("runner deadline exceeds protocol integer range"));
               return new Promise((resolveCall, rejectCall) => {
@@ -107,7 +108,17 @@ export function createRunnerPool(platform, workspace, notify, store) {
                 signal?.addEventListener("abort", abort, { once: true });
                 try {
                   send({ type: "call", session_id: context.sessionId ?? "javascript", ...(context.turnId ? { turn_id: context.turnId } : {}), call_id: id, model: context.model ?? "unknown", name: spec.remote_name ?? spec.definition.name, input, output_token_budget: MAX, output_byte_budget: MAX, deadline_at: deadline });
-                  if (timeout !== MAX) timer = setTimeout(abort, timeout);
+                  if (timeout !== MAX) {
+                    const waitForDeadline = () => {
+                      const remaining = deadline - Date.now();
+                      if (remaining <= 0) {
+                        try { send({ type: "cancel", call_id: id }); } catch {}
+                        finish(failure("runner call deadline elapsed after dispatch; outcome unknown", "runner_timeout"));
+                      }
+                      else timer = setTimeout(waitForDeadline, Math.min(remaining, 2 ** 31 - 1));
+                    };
+                    waitForDeadline();
+                  }
                   if (signal?.aborted) abort();
                 } catch (error) { finish(error); }
               });
@@ -116,8 +127,8 @@ export function createRunnerPool(platform, workspace, notify, store) {
             routes.set(name, route);
             send({ type: "ready" });
             emit({ type: "connected", runner: route.handle });
-            void announce().catch(error => emit({ type: "rejected", message: error.message }));
             resolve(route.handle);
+            void announce().catch(error => emit({ type: "rejected", message: error.message }));
           } else if (frame.type === "result") {
             send({ type: "ack", call_id: frame.call_id });
             const outcome = frame.outcome;
@@ -135,7 +146,8 @@ export function createRunnerPool(platform, workspace, notify, store) {
     if (closed) throw failure("runner pool closed");
     const config = options(value);
     const url = new URL(config.url);
-    if (!["ws:", "wss:"].includes(url.protocol) || url.username || url.password) throw new TypeError("runner url must be ws or wss without credentials");
+    if (!["ws:", "wss:"].includes(url.protocol) || url.username || url.password || url.hash) throw new TypeError("runner url must be ws or wss without credentials");
+    if (url.protocol === "ws:" && !isLoopback(url.hostname)) throw new TypeError("plaintext runner connections require a loopback address; use wss for remote access");
     if (!platform.connectRunnerSocket) throw failure("runner WebSocket transport unavailable", "unsupported_capability");
     return accept(await platform.connectRunnerSocket(config), config);
   }
@@ -153,6 +165,7 @@ export function createRunnerPool(platform, workspace, notify, store) {
       const name = path.split("/")[1];
       const route = routes.get(name);
       if (route) return route;
+      if (state.data.mounts.includes(name)) throw failure("runner mount unavailable: /" + name);
       if (path !== workspace && !path.startsWith(workspace + "/")) throw failure("runner mount unavailable: /" + name);
     }
     if (state.data.replacement) {
@@ -164,7 +177,7 @@ export function createRunnerPool(platform, workspace, notify, store) {
     if (replacements.length > 1) throw failure("multiple replace runners require an explicit mount");
     return replacements[0];
   }
-  function wrapTools(configuration, extra = {}) {
+  function wrapTools(configuration, extra = {}, forcedRoute) {
     if (configuration?.[toolRouterBrand]) {
       const original = configuration[toolRouterRuntime] ?? configuration;
       const router = new ToolRouter();
@@ -180,6 +193,8 @@ export function createRunnerPool(platform, workspace, notify, store) {
     const map = Array.isArray(configuration) ? Object.fromEntries(configuration.filter(tool => typeof tool.name === "string").map(({ name, ...tool }) => [name, tool])) : configuration;
     if (!map || typeof map !== "object") throw new TypeError("runner routing requires a tool array or map");
     const wrapped = Object.fromEntries(Object.entries(map).map(([name, tool]) => [name, { ...tool, async handler(input, context) {
+      const routedNames = ["exec_command", "write_stdin", "apply_patch", "view_image", "read_file", "write_file", "list_files", "remove_file", "make_directory", "Read", "Write", "Edit", "Glob", "Grep", "Bash"];
+      if (!forcedRoute && !routedNames.includes(name) && !name.startsWith("mcp__")) return tool.handler(input, context);
       const state = await stateFor(context);
       let route;
       let session;
@@ -188,7 +203,14 @@ export function createRunnerPool(platform, workspace, notify, store) {
         if (!session) throw failure("process session route unavailable: " + input.session_id);
         route = session.name === null ? undefined : routes.get(session.name);
         if (session.name !== null && (!route || route.runtimeId !== session.runtimeId)) throw failure("process session runner unavailable: " + session.name);
-      } else route = select(input, state);
+      } else {
+        if (typeof input === "string" && name === "apply_patch") {
+          const paths = [...input.matchAll(/^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+)$/gm)].map(match => match[1]);
+          const selected = paths.map(path => select({ path }, state)).filter(Boolean);
+          if (new Set(selected.map(route => route.name)).size > 1) throw failure("apply_patch spans multiple runner mounts");
+          route = forcedRoute ?? selected[0] ?? select({}, state);
+        } else route = forcedRoute ?? select(input, state);
+      }
       if (route) await update(state, data => {
         if (!data.mounts.includes(route.name)) data.mounts.push(route.name);
         if (route.mode === "replace" && !data.replacement) data.replacement = route.name;
@@ -209,11 +231,20 @@ export function createRunnerPool(platform, workspace, notify, store) {
         return result;
       };
       if (!route) return retainSession(await tool.handler(session ? { ...input, session_id: session.remoteId } : input, context));
-      const translated = session ? { ...input, session_id: session.remoteId } : { ...input };
+      let translated = session ? { ...input, session_id: session.remoteId } : typeof input === "string" ? input : { ...input };
+      if (typeof translated === "string") translated = translated.replace(/^(\*\*\* (?:Add File|Update File|Delete File|Move to): )([^\n]+)$/gm, (line, prefix, path) => {
+        if (path === "/" + route.name || path.startsWith("/" + route.name + "/")) return prefix + route.workspace + path.slice(route.name.length + 1);
+        if (path.startsWith("/") && !path.startsWith(route.workspace + "/")) throw failure("apply_patch path targets a different workspace");
+        return line;
+      });
       for (const key of ["workdir", "file_path", "path"]) if (typeof translated[key] === "string" && (translated[key] === "/" + route.name || translated[key].startsWith("/" + route.name + "/"))) {
         const suffix = translated[key].slice(route.name.length + 1);
         if (suffix.split("/").includes("..")) throw failure("runner mount path escapes workspace");
         translated[key] = route.workspace + suffix;
+      }
+      if (name.startsWith("mcp__cua_") && typeof translated === "object") {
+        if (!forcedRoute && input.workdir === undefined) throw failure("remote computer use requires a runner workdir");
+        delete translated.workdir;
       }
       if (name === "exec_command" && translated.workdir === undefined) translated.workdir = route.workspace;
       let result;
@@ -227,6 +258,7 @@ export function createRunnerPool(platform, workspace, notify, store) {
         };
         const execute = async cmd => {
           const execution = await route.invoke("exec_command", { cmd, workdir: route.workspace, login: false, yield_time_ms: 10000 }, context);
+          if (execution.structuredResult?.session_id !== undefined) throw failure("remote file operation still running; outcome unknown", "runner_ambiguous");
           if (!execution.success || execution.structuredResult?.exit_code !== 0) throw failure(execution.output);
           return execution.structuredResult.output;
         };
@@ -258,12 +290,84 @@ export function createRunnerPool(platform, workspace, notify, store) {
       } else throw failure(`runner ${route.name}: ${name} unavailable`);
       return retainSession(result);
     } }]));
+    if (wrapped.exec_command) {
+      const localEndTurn = wrapped.exec_command.endTurn;
+      wrapped.exec_command.endTurn = async (sessionId, turnId, event = "Stop") => {
+        await localEndTurn?.(sessionId, turnId, event);
+        if (typeof turnId !== "string" || !turnId) return;
+        const state = await stateFor({ sessionId });
+        for (const name of state.data.mounts) {
+          const route = routes.get(name);
+          if (route?.status === "connected" && route.turnLifecycle) route.socket.send(JSON.stringify({ type: "turn_ended", session_id: sessionId, turn_id: turnId, hook_event_name: event }));
+        }
+      };
+    }
     return Array.isArray(configuration) ? configuration.map(tool => typeof tool.name === "string" ? { name: tool.name, ...wrapped[tool.name] } : tool) : wrapped;
   }
-  return Object.freeze({ connectRunner, listenForRunners, wrapTools, mountMessage, onRunnerEvent(observer) { observers.add(observer); return () => observers.delete(observer); }, listRunners: () => [...routes.values()].map(route => route.handle), async disconnectRunner(name) { const route = routes.get(name); if (!route) throw failure("unknown runner: " + name); await route.handle.disconnect(); }, async stopRunnerListeners() { const current = [...listeners]; listeners.clear(); await Promise.all(current.map(server => server.stop())); }, async close() { closed = true; await this.stopRunnerListeners(); for (const socket of sockets) socket.close(); } });
+  function toolConfiguration(configuration) {
+    let router;
+    let lifecycle;
+    let subagents;
+    if (configuration?.[toolRouterBrand]) {
+      router = configuration[toolRouterRuntime] ?? configuration;
+      lifecycle = configuration[toolRuntimeLifecycle];
+      subagents = configuration[Symbol.for("nanocodex.runnerSubagents")];
+    } else {
+      if (Array.isArray(configuration)) {
+        const extensions = configuration.filter(tool => tool?.[subagentsBrand]);
+        if (extensions.length > 1) throw new TypeError("Subagents.create() may only be included once");
+        subagents = extensions[0]?.[subagentsBrand];
+      }
+      const map = Array.isArray(configuration) ? Object.fromEntries(configuration.filter(tool => typeof tool.name === "string").map(({ name, ...tool }) => [name, tool])) : configuration;
+      router = new ToolRouter([toolMapSource("runtime-tools", map, { kind: "cloud" })]);
+    }
+    const entries = () => [...routes.values()].flatMap(route => [...route.tools.values()].map(spec => ({ route, spec, name: route.name + "__" + spec.definition.name })));
+    router.addSource({ id: "remote-runners", kind: "attached", deferred: true, definitions: () => entries().map(({ name, spec }) => ({ ...spec.definition, name })), resolve(name) {
+      const entry = entries().find(entry => entry.name === name);
+      if (!entry) return undefined;
+      const originalName = entry.spec.definition.name;
+      return wrapTools({ [originalName]: { handler() { throw failure("runner unavailable"); }, supportsParallelToolCalls: entry.spec.parallel_safe, description: entry.spec.definition.description, definition: entry.spec.definition } }, {}, entry.route)[originalName];
+    } });
+    return { [toolRouterBrand]: true, [toolRouterRuntime]: router, [toolRuntimeLifecycle]: lifecycle, [Symbol.for("nanocodex.runnerSubagents")]: subagents };
+  }
+  return Object.freeze({ connectRunner, listenForRunners, wrapTools, toolConfiguration, mountMessage, onRunnerEvent(observer) { observers.add(observer); return () => observers.delete(observer); }, listRunners: () => [...routes.values()].map(route => route.handle), async disconnectRunner(name) { const route = routes.get(name); if (!route) throw failure("unknown runner: " + name); await route.handle.disconnect(); }, async stopRunnerListeners() { const current = [...listeners]; listeners.clear(); await Promise.all(current.map(server => server.stop())); }, async close() { closed = true; await this.stopRunnerListeners(); for (const socket of sockets) socket.close(); } });
 }
 
 export function unavailableProcessTools() {
   const handler = () => { throw failure("local process execution unavailable"); };
   return { exec_command: { description: "Run a shell command. Select a runner mount using workdir.", parameters: EXEC_COMMAND_PARAMETERS, handler }, write_stdin: { description: "Write to a shell session.", parameters: WRITE_STDIN_PARAMETERS, handler } };
+}
+
+export function runnerManagementTool(pool) {
+  const info = handle => ({ name: handle.name, workspace: handle.workspace, mode: handle.mode, status: handle.status });
+  return {
+    description: "Manage runtime runners. List, connect, disconnect, or stop listeners. Start a listener only when the user explicitly asks; listen returns a secret token needed by the runner. Use runner mount paths in workdir to select remote execution.",
+    parameters: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["list", "connect", "listen", "disconnect", "stop_listening"] },
+        url: { type: "string" }, token: { type: "string" }, name: { type: "string" },
+        address: { type: "string" }, mode: { type: "string", enum: ["alongside", "replace"] },
+        call_timeout_ms: { type: "integer", minimum: 1 },
+      },
+      required: ["action"], additionalProperties: false,
+    },
+    async handler(input) {
+      switch (input.action) {
+        case "list": return { runners: pool.listRunners().map(info) };
+        case "connect": return info(await pool.connectRunner({ url: input.url, token: input.token, name: input.name, mode: input.mode, callTimeoutMs: input.call_timeout_ms }));
+        case "listen": {
+          const server = await pool.listenForRunners({ address: input.address, token: input.token, mode: input.mode, callTimeoutMs: input.call_timeout_ms });
+          return { address: server.address, url: server.url, token: server.token };
+        }
+        case "disconnect": await pool.disconnectRunner(input.name); return { disconnected: input.name };
+        case "stop_listening": await pool.stopRunnerListeners(); return { stopped: true };
+        default: throw new TypeError("invalid runners action");
+      }
+    },
+  };
+}
+
+export function isLoopback(host) {
+  return host === "localhost" || host === "[::1]" || host === "::1" || /^127\.\d+\.\d+\.\d+$/.test(host);
 }

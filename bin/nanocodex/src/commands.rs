@@ -27,7 +27,11 @@ pub const COMMANDS: [(&str, &str); 22] = [
 ];
 
 #[derive(clap::Parser)]
-#[command(name = "/runner", disable_help_subcommand = true)]
+#[command(
+    name = "/runner",
+    about = "Manage runner connections and listeners",
+    disable_help_subcommand = true
+)]
 pub struct RunnerCommand {
     #[command(subcommand)]
     pub action: Option<RunnerAction>,
