@@ -1,7 +1,4 @@
 import type { NamedTool } from "nanocodex-tools";
-/** Installs a missing managed provider through the trusted native CLI on supported platforms. */
-export function ensureComputer(options?: { binary?: string }): Promise<string | undefined>;
-export function discoverComputer(options?: { binary?: string }): Promise<string | undefined>;
 export type ComputerToolDefinition = Readonly<{
   name: string;
   description?: string;
@@ -15,8 +12,6 @@ export type ComputerOptions = {
   executable: string;
   args?: readonly string[];
   environment?: Record<string, string>;
-  /** Trusted upstream confirmation guidance. Defaults to no extra confirmation policy, matching native CUA. null restores upstream guidance. */
-  confirmationPolicies?: string | null;
   /** Trusted discovered catalog; connectComputerTools obtains this automatically. */
   definitions?: readonly ComputerToolDefinition[];
 };
@@ -34,3 +29,7 @@ export type ComputerAttachment = Readonly<{
 }>;
 export function createComputerTools(options: ComputerOptions): ComputerAttachment;
 export function connectComputerTools(options: ComputerOptions): Promise<ComputerAttachment>;
+
+export { connectComputerTools as connect };
+export const CUA_JS_NAME: "mcp__cua_repl__js";
+export const CUA_RESET_NAME: "mcp__cua_repl__js_reset";

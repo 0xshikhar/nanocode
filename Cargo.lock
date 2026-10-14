@@ -2305,6 +2305,7 @@ dependencies = [
  "nanocode-code-mode",
  "nanocode-codex",
  "nanocode-codex-tools",
+ "nanocode-cua",
  "nanocode-durability",
  "nanocode-observability",
  "nanocode-runtime",
@@ -2475,16 +2476,12 @@ version = "0.6.7"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
- "fs2",
  "libc",
  "nanocode-codex",
  "nanocode-tools",
- "roxmltree",
  "serde",
  "serde_json",
- "sha2 0.11.0",
  "tokio",
- "url",
 ]
 
 [[package]]
@@ -3789,15 +3786,6 @@ dependencies = [
  "tokio-util",
  "tracing",
  "url",
-]
-
-[[package]]
-name = "roxmltree"
-version = "0.21.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1964b10c76125c36f8afe190065a4bf9a87bf324842c05701330bba9f1cacbb"
-dependencies = [
- "memchr",
 ]
 
 [[package]]

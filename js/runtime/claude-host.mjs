@@ -7,7 +7,7 @@ const TOOL_RESULT = Symbol.for('nanocodex.toolResult');
 const MEDIA = new Set(['input_text', 'input_image', 'input_audio', 'encrypted_content']);
 // Reserve harness-owned operations. Explicit execution capabilities share the
 // exec_command/write_stdin contracts across Codex and Claude.
-const TOOL_KEYS = new Set(['name', 'description', 'handler', 'inputSchema', 'parameters', 'strict', 'deferLoading', 'defer_loading', 'supportsParallelToolCalls']);
+const TOOL_KEYS = new Set(['name', 'description', 'handler', 'inputSchema', 'parameters', 'strict', 'deferLoading', 'defer_loading', 'supportsParallelToolCalls', 'providerDefinition', 'outputSchema', 'releaseSession', 'endTurn', 'dispose']);
 const CODEX_TOOL_NAMES = new Set([
   'exec', 'wait', 'tool_search', 'apply_patch',
   'view_image', 'update_plan', 'web__run', 'image_gen__imagegen',
@@ -101,6 +101,9 @@ export function createClaudeHost({ auth, tools = [], onEvent = () => {}, fetch, 
   const effectIdentity = createCodeEffectIdentity(codeEffectJournal);
   const code = codeOnly ? createCodeRuntime(Object.fromEntries(definitions.map(definition => [definition.name, {
     description: definition.description, parameters: definition.input_schema,
+    endTurn: tools.find(tool => tool.name === definition.name)?.endTurn,
+    releaseSession: tools.find(tool => tool.name === definition.name)?.releaseSession,
+    dispose: tools.find(tool => tool.name === definition.name)?.dispose,
     async handler(input, context) {
       if (disposed) throw new Error('Claude tool host is disposed');
       try {

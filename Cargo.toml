@@ -35,6 +35,7 @@ categories = ["api-bindings", "asynchronous", "development-tools"]
 publish = true
 
 [workspace.dependencies]
+nanocode-cua = { version = "0.6.7", path = "crates/nanocode-cua" }
 nanocode-tools = { version = "0.6.7", path = "crates/nanocode-tools" }
 nanocode-codex-tools = { version = "0.6.7", path = "crates/nanocode-codex-tools", default-features = false }
 libc = "0.2"

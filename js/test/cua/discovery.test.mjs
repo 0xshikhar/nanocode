@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { connectComputerTools, createComputerTools } from "../index.mjs";
+import { connectComputerTools, createComputerTools } from "../../node/cua.mjs";
 import { hostedAppToolCatalog } from "nanocodex-tools/hosted-catalog";
 
 const context = { sessionId: "discovery", callId: "call", parentCallId: "", model: "fixture", signal: new AbortController().signal };

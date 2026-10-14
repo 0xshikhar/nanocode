@@ -44,6 +44,7 @@ serde_json.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
+nanocode-cua.workspace = true
 # Native runtime Claude agents default to the canonical Claude file tools.
 nanocode-claude = { workspace = true, features = ["tools"] }
 nanocode-claude-tools = { workspace = true }

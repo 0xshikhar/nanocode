@@ -215,6 +215,7 @@ pub struct NanocodexBuilder {
     thinking: Option<Thinking>,
     settings: Settings,
     workspace: Option<PathBuf>,
+    cua: Option<crate::ComputerTools>,
 }
 
 impl NanocodexBuilder {
@@ -231,6 +232,15 @@ impl NanocodexBuilder {
     #[must_use]
     pub fn claude(mut self, harness: impl Into<ClaudeHarness>) -> Self {
         self.claude = Some(harness.into());
+        self
+    }
+
+    /// Adds upstream Sky CUA/Node REPL tools to every backend and spawned agent.
+    /// This shared capability is additive: backend tool selections do not replace it.
+    /// The provider routes persistent REPL state independently by agent session.
+    #[must_use]
+    pub fn cua(mut self, tools: crate::ComputerTools) -> Self {
+        self.cua = Some(tools);
         self
     }
 
@@ -321,13 +331,13 @@ impl NanocodexBuilder {
         if let Some(codex) = self.codex {
             recipes.push((
                 HarnessFamily::Codex,
-                codex_recipe(codex, &self.settings, &workspace),
+                codex_recipe(codex, &self.settings, &workspace, self.cua.clone()),
             ));
         }
         if let Some(claude) = self.claude {
             recipes.push((
                 HarnessFamily::Claude,
-                claude_recipe(claude, &self.settings, &workspace),
+                claude_recipe(claude, &self.settings, &workspace, self.cua.clone()),
             ));
         }
         let mut router = Harness::builder();
@@ -623,15 +633,26 @@ impl AgentSpec {
 }
 fn exposed(
     tools: crate::Tools,
+    cua: Option<&crate::ComputerTools>,
 ) -> std::result::Result<crate::Tools, nanocode_code_mode::ToolsBuildError> {
-    tools
+    let mut builder = tools
         .into_builder()
-        .exposure(nanocode_code_mode::ToolExposure::CodeModeOnly)
-        .build()
+        .exposure(nanocode_code_mode::ToolExposure::CodeModeOnly);
+    if let Some(cua) = cua {
+        for tool in cua.tools() {
+            builder = builder.tool(tool);
+        }
+    }
+    builder.build()
 }
 
 #[cfg(feature = "openai")]
-fn codex_recipe(harness: CodexHarness, runtime: &Settings, workspace: &Arc<Path>) -> Recipe {
+fn codex_recipe(
+    harness: CodexHarness,
+    runtime: &Settings,
+    workspace: &Arc<Path>,
+    cua: Option<crate::ComputerTools>,
+) -> Recipe {
     let CodexHarness {
         client,
         settings,
@@ -640,6 +661,7 @@ fn codex_recipe(harness: CodexHarness, runtime: &Settings, workspace: &Arc<Path>
     let settings = settings.or(runtime);
     let workspace = Arc::clone(workspace);
     Arc::new(move |spec: AgentSpec| {
+        let cua = cua.clone();
         let client = client.clone();
         let settings = spec.settings.or(&settings);
         let configure = configure.clone();
@@ -667,7 +689,8 @@ fn codex_recipe(harness: CodexHarness, runtime: &Settings, workspace: &Arc<Path>
                 let tools = settings
                     .tools
                     .unwrap_or_else(|| AgentTools::Shared(crate::Tools::default()));
-                builder = builder.tools_factory(move |handle| exposed(tools.materialize(handle)?));
+                builder = builder
+                    .tools_factory(move |handle| exposed(tools.materialize(handle)?, cua.as_ref()));
             }
             if let Some(checkpoint) = spec.checkpoint {
                 builder = builder.resume(checkpoint)?;
@@ -681,7 +704,12 @@ fn codex_recipe(harness: CodexHarness, runtime: &Settings, workspace: &Arc<Path>
         })
     })
 }
-fn claude_recipe(harness: ClaudeHarness, runtime: &Settings, workspace: &Arc<Path>) -> Recipe {
+fn claude_recipe(
+    harness: ClaudeHarness,
+    runtime: &Settings,
+    workspace: &Arc<Path>,
+    cua: Option<crate::ComputerTools>,
+) -> Recipe {
     let ClaudeHarness {
         client,
         settings,
@@ -690,6 +718,7 @@ fn claude_recipe(harness: ClaudeHarness, runtime: &Settings, workspace: &Arc<Pat
     let settings = settings.or(runtime);
     let workspace = Arc::clone(workspace);
     Arc::new(move |spec: AgentSpec| {
+        let cua = cua.clone();
         let client = client.clone();
         let settings = spec.settings.or(&settings);
         let configure = configure.clone();
@@ -733,7 +762,7 @@ fn claude_recipe(harness: ClaudeHarness, runtime: &Settings, workspace: &Arc<Pat
                         jobs.clone(),
                     ),
                 }
-                .and_then(exposed)
+                .and_then(|tools| exposed(tools, cua.as_ref()))
                 .map_err(|error| NanocodexError::InvalidRequest(error.to_string()))?;
                 let native = claude_tools::install(&selected, root.clone(), &handle)?;
                 Ok(native.adapter_shutdown(move || {

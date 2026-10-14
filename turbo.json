@@ -68,17 +68,6 @@
       ],
       "outputs": []
     },
-    "nanocodex-computer#test": {
-      "dependsOn": [
-        "^build"
-      ],
-      "cache": false,
-      "passThroughEnv": [
-        "NANOCODEX_TEST_NATIVE_APP",
-        "NANOCODEX_TEST_BROWSER"
-      ],
-      "outputs": []
-    },
     "dev": {
       "dependsOn": [
         "^build"

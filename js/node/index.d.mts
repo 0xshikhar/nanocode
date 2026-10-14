@@ -73,3 +73,5 @@ export * as Claude from "./Claude.mjs";
 export function modelCapabilities(): readonly import("../types.mjs").ModelCapabilityEntry[];
 
 export * as Nanocodex from "./Nanocodex.mjs";
+
+export * as Cua from "./cua.mjs";

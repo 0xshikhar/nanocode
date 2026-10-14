@@ -12,8 +12,10 @@ import { resolveResponsesTransport } from "./responses-transport.mjs";
 import { tools as workspaceTools } from "./workspace.mjs";
 import { claudeWorkspaceTools } from "./claude-workspace-tools.mjs";
 
+import { toolRouterBrand, toolRouterRuntime, toolMapSource } from "./tool-router.mjs";
+
 const FAMILIES = Object.freeze(["codex", "claude"]);
-const RUNTIME_KEYS = new Set(["backends", "harness", "model", "thinking", "instructions", "workspace", "filesystem", "codeEvaluator", "module"]);
+const RUNTIME_KEYS = new Set(["backends", "harness", "model", "thinking", "instructions", "workspace", "filesystem", "codeEvaluator", "module", "cua"]);
 const RUNTIME_REJECTED = Object.freeze({
   tools: "tools belong to each backend: backends.codex.tools / backends.claude.tools",
   codeMode: "Code Mode is always enabled",
@@ -97,9 +99,42 @@ function snapshotRuntime(options, platform) {
     instructions: options.instructions,
     workspace,
     filesystem,
+    cua: snapshotCua(options.cua),
     codeEvaluator: options.codeEvaluator,
     module: options.module,
   });
+}
+
+// The embedding owns the upstream connection. Agent hosts release only their
+// own sessions; closing one agent must not dispose another backend's provider.
+function snapshotCua(cua) {
+  if (cua === undefined) return undefined;
+  if (!cua || !Array.isArray(cua.tools)) throw new TypeError("cua must be a connected Sky tools capability");
+  const names = new Set();
+  return Object.freeze(cua.tools.map(tool => {
+    if (!tool || typeof tool.name !== "string" || !tool.name.startsWith("mcp__cua_repl__")
+        || typeof tool.handler !== "function" || names.has(tool.name)) {
+      throw new TypeError("cua requires unique upstream mcp__cua_repl__ tools");
+    }
+    names.add(tool.name);
+    const { dispose, ...shared } = tool;
+    return Object.freeze(shared);
+  }));
+}
+function withCua(tools, cua) {
+  if (!cua?.length) return tools;
+  const extra = Object.fromEntries(cua.map(({ name, ...tool }) => [name, tool]));
+  if (tools?.[toolRouterBrand]) {
+    tools[toolRouterRuntime].addSource(toolMapSource("cua", extra, { kind: "local" }));
+    return tools;
+  }
+  if (Array.isArray(tools)) {
+    const names = new Set(tools.map(tool => tool.name));
+    for (const tool of cua) if (names.has(tool.name)) throw new TypeError("duplicate CUA tool: " + tool.name);
+    return [...tools, ...cua];
+  }
+  for (const name of Object.keys(extra)) if (tools && Object.hasOwn(tools, name)) throw new TypeError("duplicate CUA tool: " + name);
+  return { ...tools, ...extra };
 }
 
 function backendEntry(value, family, isTransport) {
@@ -326,10 +361,10 @@ async function prepareWorkspace(config, platform) {
 }
 
 /** An explicit tool selection replaces the defaults, including an empty array. */
-function withFilesystemTools(tools, filesystem, family) {
-  if (tools !== undefined) return tools;
-  if (family === "claude") return claudeWorkspaceTools(filesystem);
-  return Object.entries(workspaceTools(filesystem)).map(([name, tool]) => ({ name, ...tool }));
+function withFilesystemTools(tools, filesystem, family, cua) {
+  if (tools === undefined) tools = family === "claude" ? claudeWorkspaceTools(filesystem)
+    : Object.entries(workspaceTools(filesystem)).map(([name, tool]) => ({ name, ...tool }));
+  return withCua(tools, cua);
 }
 
 async function codexChild(config, catalog, defaults, created) {
@@ -337,7 +372,7 @@ async function codexChild(config, catalog, defaults, created) {
   const { model, thinking } = childSelection(catalog, defaults, "codex");
   const workspace = config.workspace;
   const recipe = { transport: backend.transport, model, thinking, toolMode: toolMode(backend),
-    tools: withFilesystemTools(await materializeTools(backend.tools, { harness: "codex", role: "child" }, created), config.filesystem, "codex") };
+    tools: withFilesystemTools(await materializeTools(backend.tools, { harness: "codex", role: "child" }, created), config.filesystem, "codex", config.cua) };
   if (workspace !== undefined) recipe.workspace = workspace;
   if (config.codeEvaluator !== undefined) recipe.codeEvaluator = config.codeEvaluator;
   for (const key of CODEX_CHILD_KEYS) if (backend.extras[key] !== undefined) recipe[key] = backend.extras[key];
@@ -349,7 +384,7 @@ async function claudeChild(config, catalog, defaults, created) {
   const { model, thinking } = childSelection(catalog, defaults, "claude");
   const workspace = config.workspace;
   const recipe = { ...backend.auth, model, toolMode: toolMode(backend),
-    tools: withFilesystemTools(await materializeTools(backend.tools, { harness: "claude", role: "child" }, created), config.filesystem, "claude") ?? [] };
+    tools: withFilesystemTools(await materializeTools(backend.tools, { harness: "claude", role: "child" }, created), config.filesystem, "claude", config.cua) ?? [] };
   if (thinking !== undefined) recipe.thinking = thinking;
   if (workspace !== undefined) recipe.workspace = workspace;
   if (config.codeEvaluator !== undefined) recipe.codeEvaluator = config.codeEvaluator;
@@ -372,7 +407,7 @@ async function agentOptions(config, catalog, defaults, family, settings, created
   if (family === "codex") {
     const workspace = config.workspace;
     const options = { ...backend.extras, ...shared, transport: backend.transport, toolMode: toolMode(backend),
-      tools: await materializeTools(backend.tools, { harness: "codex", role: "root" }, created) };
+      tools: withCua(await materializeTools(backend.tools, { harness: "codex", role: "root" }, created), config.cua) };
     if (settings.model !== undefined) options.model = settings.model;
     if (settings.thinking !== undefined) options.thinking = settings.thinking;
     if (workspace !== undefined) options.workspace = workspace;
@@ -383,7 +418,7 @@ async function agentOptions(config, catalog, defaults, family, settings, created
   const workspace = config.workspace;
   const options = { ...backend.extras, ...backend.auth, ...shared, harness: "claude", model: settings.model,
     toolMode: toolMode(backend), subagents: backend.extras.subagents ?? {},
-    tools: withFilesystemTools(await materializeTools(backend.tools, { harness: "claude", role: "root" }, created), config.filesystem, "claude") ?? [] };
+    tools: withFilesystemTools(await materializeTools(backend.tools, { harness: "claude", role: "root" }, created), config.filesystem, "claude", config.cua) ?? [] };
   if (settings.thinking !== undefined) options.thinking = settings.thinking;
   if (workspace !== undefined) options.workspace = workspace;
   if (config.backends.codex !== undefined) options.harnesses = { codex: await codexChild(config, catalog, defaults, created) };

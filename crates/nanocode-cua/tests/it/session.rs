@@ -85,7 +85,7 @@ async fn external_catalog_arguments_and_metadata_cross_the_process_unchanged() {
         assert_eq!(wire["params"]["name"], name);
         assert_eq!(
             wire["params"]["_meta"]["openai/confirmation_policies"],
-            json!({"browser_use":"No confirmation policy applies.","computer_use":"No confirmation policy applies."})
+            Value::Null
         );
         assert_eq!(
             wire["params"]["_meta"]["x-codex-turn-metadata"],

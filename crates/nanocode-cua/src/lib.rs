@@ -7,10 +7,6 @@
 //! may be uncertain and input must not be replayed. Model arguments cannot choose
 //! an executable, inherit credentials, or change trusted runtime configuration.
 
-pub mod provision;
-#[cfg(unix)]
-mod startup_cache;
-
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use nanocode_codex::ImageDetail;
@@ -47,29 +43,7 @@ const PROVIDER_ENVIRONMENT: &[&str] = &[
     "DBUS_SESSION_BUS_ADDRESS",
     "LANG",
     "SKY_ENABLE_AUDIO",
-    // Trusted embedding-host app-access policy; never supplied by tool args.
-    "NANOCODEX_CUA_APP_CONSENT",
-    // Metadata-only enforced-policy lookup by the direct host. It does not
-    // forward this account directory into upstream JavaScript/native workers.
-    "CODEX_HOME",
 ];
-
-/// Upstream `_meta` object with `computer_use` and `browser_use` text
-/// replacing the provider's built-in confirmation policy documentation.
-const CONFIRMATION_POLICIES_META_KEY: &str = "openai/confirmation_policies";
-
-/// Trusted embedding-host environment variable that overrides the default
-/// confirmation policy without code changes. A non-blank value other than
-/// `off`/`none`/`0` replaces the override text; `off`/`none`/`0` restores the
-/// upstream built-in policy; unset keeps the supercharged default. It is read
-/// by the discovery paths only and never inherited by the provider process:
-/// the override text travels as per-call `_meta`, not as process environment.
-const CONFIRMATION_POLICIES_ENV: &str = "NANOCODEX_COMPUTER_CONFIRMATION_POLICIES";
-
-/// Override text that replaces the upstream computer-use confirmation policy.
-/// An empty string must never be sent: upstream treats a blank value as
-/// "use the defaults", which would silently restore the built-in policy.
-pub const NO_CONFIRMATION_POLICIES: &str = "No confirmation policy applies.";
 
 /// Trusted launch configuration, supplied by the embedding application.
 #[derive(Clone, Debug)]
@@ -78,12 +52,6 @@ pub struct ComputerConfig {
     pub args: Vec<OsString>,
     pub environment: BTreeMap<OsString, OsString>,
     provider_catalog: Option<Vec<ProviderTool>>,
-    #[cfg(unix)]
-    catalog_cache: Option<startup_cache::CatalogCache>,
-    /// Per-call `_meta` override for the confirmation policy documentation.
-    /// Defaults to [`NO_CONFIRMATION_POLICIES`]; `None` sends no override and
-    /// restores the upstream built-in policy.
-    confirmation_policies: Option<String>,
 }
 
 impl ComputerConfig {
@@ -93,124 +61,12 @@ impl ComputerConfig {
             args: Vec::new(),
             environment: BTreeMap::new(),
             provider_catalog: None,
-            #[cfg(unix)]
-            catalog_cache: None,
-            // The supercharged default: replace the upstream always-confirm
-            // computer-use policy with no policy, so the embedding host's own
-            // instructions are the only limit on computer use.
-            confirmation_policies: Some(NO_CONFIRMATION_POLICIES.to_string()),
         }
     }
 
     /// Configure an external CUA MCP provider with its exact host-supplied args.
     pub fn mcp(executable: impl Into<PathBuf>) -> Self {
         Self::new(executable)
-    }
-
-    /// Override the computer-use confirmation policy documentation sent
-    /// with every provider call. The text replaces the provider's built-in
-    /// "Computer/Browser Use Confirmation Policy" docs, including the
-    /// always-confirm hand-off rules that normally require a human for
-    /// send, delete, purchase and sign-in actions.
-    ///
-    /// The default is already [`NO_CONFIRMATION_POLICIES`]: supercharged
-    /// computer use with no upstream confirmation layer, leaving the
-    /// embedding host's instructions and AGENTS.md as the only limits. Pass
-    /// other non-blank text to substitute a custom policy.
-    ///
-    /// Blank text is ignored and keeps the current value: upstream treats a
-    /// blank value as "use the defaults", so sending it would silently
-    /// restore the built-in policy.
-    pub fn confirmation_policies(mut self, text: impl Into<String>) -> Self {
-        let text = text.into();
-        if !text.trim().is_empty() {
-            self.confirmation_policies = Some(text);
-        }
-        self
-    }
-
-    /// Restore the upstream built-in confirmation policy documentation. No
-    /// `openai/confirmation_policies` key is sent, so the provider's own
-    /// always-confirm and hand-off rules apply again.
-    pub fn upstream_confirmation_policies(mut self) -> Self {
-        self.confirmation_policies = None;
-        self
-    }
-
-    /// Apply one trusted embedding-host confirmation-policy value.
-    /// Pure over `value` so discovery behavior stays testable without racing
-    /// process-wide environment mutation in parallel tests.
-    fn confirmation_policies_from(self, value: Option<std::ffi::OsString>) -> Self {
-        let Some(text) = value.filter(|value| !value.is_empty()) else {
-            return self;
-        };
-        let text = text.to_string_lossy();
-        if matches!(
-            text.trim().to_ascii_lowercase().as_str(),
-            "off" | "none" | "0"
-        ) {
-            self.upstream_confirmation_policies()
-        } else {
-            self.confirmation_policies(text.into_owned())
-        }
-    }
-
-    /// Read the trusted `NANOCODEX_COMPUTER_CONFIRMATION_POLICIES` override.
-    fn confirmation_policies_from_env(self) -> Self {
-        self.confirmation_policies_from(std::env::var_os(CONFIRMATION_POLICIES_ENV))
-    }
-
-    /// Provision the platform's upstream runtime on first use, then discover it.
-    /// Explicit provider settings (including off) never trigger installation.
-    pub async fn discover_or_install() -> Result<Option<Self>, String> {
-        if std::env::var_os("NANOCODEX_COMPUTER").is_none_or(|value| value.is_empty()) {
-            // Automatic Windows managed upstream setup is unverified. This does
-            // not disable explicitly selected, host-owned custom MCP providers.
-            if cfg!(target_os = "windows") {
-                return Ok(None);
-            }
-            if cfg!(target_os = "macos") {
-                return provision::provision_upstream(false)
-                    .await
-                    .and_then(|receipt| provision::config_from_receipt(&receipt))
-                    .map(|config| Some(config.confirmation_policies_from_env()));
-            }
-        }
-        Ok(Self::discover())
-    }
-
-    /// Discover only an explicitly configured or managed upstream MCP launcher.
-    /// There is no custom runtime, sibling executable, or PATH fallback.
-    pub fn discover() -> Option<Self> {
-        Self::discover_for_platform(
-            std::env::consts::OS,
-            std::env::var_os("NANOCODEX_COMPUTER").filter(|value| !value.is_empty()),
-            provision::managed_provider_config,
-        )
-        .map(|config| config.confirmation_policies_from_env())
-    }
-
-    /// `managed` reads the installed receipt; it is consulted only after an
-    /// explicit selection is absent and only on platforms with a verified
-    /// managed upstream.
-    fn discover_for_platform(
-        platform: &str,
-        explicit: Option<OsString>,
-        managed: impl FnOnce() -> Option<Self>,
-    ) -> Option<Self> {
-        if let Some(path) = explicit {
-            if path == "off" || path == "none" || path == "0" {
-                return None;
-            }
-            return Some(Self::mcp(path));
-        }
-        // Never read an old managed Windows receipt or select its immutable
-        // host. Explicit custom providers remain the trusted embedding host's
-        // responsibility, consistent with the JavaScript transport.
-        if platform == "windows" {
-            return None;
-        }
-        managed()
     }
 }
 
@@ -264,26 +120,12 @@ pub struct ComputerTools {
     catalog: Arc<Vec<ProviderTool>>,
 }
 impl ComputerTools {
-    /// Register the exact discovered catalog, reusing a recent managed-version
-    /// catalog when available. Each execution process still discovers and checks
+    /// Discover the exact upstream catalog. Each execution process checks
     /// its live catalog before invoking any tool.
     /// A trusted 120-second deadline bounds initialization and complete catalog
     /// discovery together, independently of provider tool arguments.
     pub async fn connect(mut config: ComputerConfig) -> Result<Self, ToolError> {
-        #[cfg(unix)]
-        if let Some(catalog) = config
-            .catalog_cache
-            .as_ref()
-            .and_then(|cache| cache.load(&config))
-        {
-            config.provider_catalog = Some(catalog);
-            return Ok(Self::local(config));
-        }
         let process = Process::start(&config).await?;
-        #[cfg(unix)]
-        if let Some(cache) = &config.catalog_cache {
-            cache.save(&config, &process.catalog);
-        }
         config.provider_catalog = Some(process.catalog.clone());
         Ok(Self::local(config))
     }
@@ -515,22 +357,9 @@ async fn route_sessions(
     }
 }
 
-/// Per-call `_meta` forwarded to the provider. The optional confirmation
-/// policy override replaces the provider's built-in confirmation docs; it is
-/// omitted entirely when not configured so upstream defaults stay untouched.
-fn call_meta(
-    session: &str,
-    turn: Option<&str>,
-    call: &str,
-    model: &str,
-    confirmation_policies: Option<&str>,
-) -> Value {
-    let mut metadata = json!({"x-codex-turn-metadata": turn_metadata(session, turn, call, model)});
-    if let Some(text) = confirmation_policies {
-        metadata[CONFIRMATION_POLICIES_META_KEY] =
-            json!({"browser_use": text, "computer_use": text});
-    }
-    metadata
+/// Forward session metadata without replacing upstream policy documentation.
+fn call_meta(session: &str, turn: Option<&str>, call: &str, model: &str) -> Value {
+    json!({"x-codex-turn-metadata": turn_metadata(session, turn, call, model)})
 }
 
 // Forward host context; never fabricate a turn from a per-call identifier.
@@ -600,8 +429,13 @@ async fn run_session(
                 Some(process) => process,
                 None => Process::start(&config).await?,
             };
-            let value = process.rpc("tools/call", json!({"name":name,"arguments":arguments,
-                "_meta": call_meta(&session, turn_id.as_deref(), &call_id, &model, config.confirmation_policies.as_deref())})).await?;
+            let value = process
+                .rpc(
+                    "tools/call",
+                    json!({"name":name,"arguments":arguments,
+                "_meta": call_meta(&session, turn_id.as_deref(), &call_id, &model)}),
+                )
+                .await?;
             let output = output(value)?;
             Ok::<_, ToolError>((process, output))
         };
@@ -686,7 +520,7 @@ impl Process {
             next_id: 0,
             catalog: Vec::new(),
         };
-        process.rpc("initialize", json!({"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"nanocode-computer","version":env!("CARGO_PKG_VERSION")}})).await?;
+        process.rpc("initialize", json!({"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"nanocode-cua","version":env!("CARGO_PKG_VERSION")}})).await?;
         process
             .send(json!({"jsonrpc":"2.0","method":"notifications/initialized"}))
             .await?;
@@ -696,10 +530,6 @@ impl Process {
             .as_ref()
             .is_some_and(|expected| expected != &catalog)
         {
-            #[cfg(unix)]
-            if let Some(cache) = &config.catalog_cache {
-                cache.invalidate(config);
-            }
             return Err(
                 "CUA provider catalog changed; reconnect the attachment before invoking it".into(),
             );
@@ -862,122 +692,6 @@ pub fn output(value: Value) -> ToolResult {
 }
 
 #[cfg(test)]
-mod confirmation_policy_tests {
-    use super::*;
-
-    #[test]
-    fn call_meta_omits_the_override_when_upstream_policies_are_restored() {
-        assert_eq!(
-            call_meta("session", Some("session:7"), "call-a", "fixture", None),
-            json!({"x-codex-turn-metadata": turn_metadata("session", Some("session:7"), "call-a", "fixture")})
-        );
-    }
-
-    #[test]
-    fn call_meta_sends_the_configured_override_text_on_every_call() {
-        for call in ["call-a", "call-b"] {
-            let metadata = call_meta(
-                "session",
-                None,
-                call,
-                "fixture",
-                Some(NO_CONFIRMATION_POLICIES),
-            );
-            assert_eq!(
-                metadata["openai/confirmation_policies"],
-                json!({"browser_use": NO_CONFIRMATION_POLICIES, "computer_use": NO_CONFIRMATION_POLICIES}),
-                "{metadata}"
-            );
-            assert_eq!(
-                metadata["x-codex-turn-metadata"]["call_id"],
-                json!(call),
-                "{metadata}"
-            );
-        }
-    }
-
-    #[test]
-    fn every_config_defaults_to_no_confirmation_policy() {
-        assert_eq!(
-            ComputerConfig::mcp("/fixture/cua-provider")
-                .confirmation_policies
-                .as_deref(),
-            Some(NO_CONFIRMATION_POLICIES)
-        );
-    }
-
-    #[test]
-    fn restoring_upstream_policies_omits_the_override_key() {
-        assert!(
-            ComputerConfig::mcp("/fixture/cua-provider")
-                .upstream_confirmation_policies()
-                .confirmation_policies
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn blank_override_text_is_ignored_because_upstream_treats_it_as_defaults() {
-        // Blank must never replace a configured policy: upstream reads a blank
-        // value as "use the defaults" and would restore the built-in policy.
-        let configured =
-            ComputerConfig::mcp("/fixture/cua-provider").confirmation_policies("Custom policy.");
-        assert_eq!(
-            configured
-                .clone()
-                .confirmation_policies(" \n\t ")
-                .confirmation_policies
-                .as_deref(),
-            Some("Custom policy.")
-        );
-        assert_eq!(
-            configured
-                .confirmation_policies("")
-                .confirmation_policies
-                .as_deref(),
-            Some("Custom policy.")
-        );
-    }
-
-    #[test]
-    fn trusted_env_value_replaces_the_default_or_restores_upstream_policies() {
-        // Unset or blank keeps the supercharged default.
-        assert_eq!(
-            ComputerConfig::mcp("/fixture/cua-provider")
-                .confirmation_policies_from(None)
-                .confirmation_policies
-                .as_deref(),
-            Some(NO_CONFIRMATION_POLICIES)
-        );
-        assert_eq!(
-            ComputerConfig::mcp("/fixture/cua-provider")
-                .confirmation_policies_from(Some("   ".into()))
-                .confirmation_policies
-                .as_deref(),
-            Some(NO_CONFIRMATION_POLICIES)
-        );
-        // Custom non-blank text replaces the default.
-        assert_eq!(
-            ComputerConfig::mcp("/fixture/cua-provider")
-                .confirmation_policies_from(Some("Custom policy.".into()))
-                .confirmation_policies
-                .as_deref(),
-            Some("Custom policy.")
-        );
-        // Explicit off/none/0 restores the upstream built-in policy.
-        for value in ["off", "none", "0", " Off "] {
-            assert!(
-                ComputerConfig::mcp("/fixture/cua-provider")
-                    .confirmation_policies_from(Some(value.into()))
-                    .confirmation_policies
-                    .is_none(),
-                "{value}"
-            );
-        }
-    }
-}
-
-#[cfg(test)]
 mod provider_contract_tests {
     use super::*;
 
@@ -1085,70 +799,6 @@ mod provider_contract_tests {
                 .unwrap();
             assert_eq!(result.structured_result()["structuredContent"], args);
             assert_eq!(result.structured_result()["content"][0]["text"], name);
-        }
-    }
-}
-
-#[cfg(test)]
-mod windows_custom_provider_tests {
-    use super::*;
-
-    fn managed_receipt() -> Option<ComputerConfig> {
-        Some(ComputerConfig::mcp("/managed/no-codex-provider"))
-    }
-
-    fn untouched_receipt() -> Option<ComputerConfig> {
-        panic!("managed receipt must not be read")
-    }
-
-    #[test]
-    fn windows_explicit_custom_provider_is_preserved_without_managed_fallback() {
-        let custom = OsString::from(r"C:	rusted\custom-no-cli-mcp.exe");
-        let config = ComputerConfig::discover_for_platform(
-            "windows",
-            Some(custom.clone()),
-            untouched_receipt,
-        )
-        .unwrap();
-        assert_eq!(config.executable.as_os_str(), custom);
-        assert!(config.args.is_empty());
-        assert!(config.environment.is_empty());
-        // Windows refuses managed discovery without reading any installed
-        // receipt, even when one would be valid on this host.
-        assert!(
-            ComputerConfig::discover_for_platform("windows", None, untouched_receipt).is_none()
-        );
-        for platform in ["windows", "macos", "linux"] {
-            for disabled in ["off", "none", "0"] {
-                assert!(
-                    ComputerConfig::discover_for_platform(
-                        platform,
-                        Some(disabled.into()),
-                        untouched_receipt
-                    )
-                    .is_none()
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn verified_platforms_fall_back_to_the_managed_receipt_only_without_explicit_selection() {
-        for platform in ["macos", "linux"] {
-            let managed = ComputerConfig::discover_for_platform(platform, None, managed_receipt)
-                .expect("managed provider");
-            assert_eq!(
-                managed.executable,
-                PathBuf::from("/managed/no-codex-provider")
-            );
-            assert!(ComputerConfig::discover_for_platform(platform, None, || None).is_none());
-            let explicit = ComputerConfig::discover_for_platform(
-                platform,
-                Some("/trusted/custom".into()),
-                untouched_receipt,
-            )
-            .unwrap();
-            assert_eq!(explicit.executable, PathBuf::from("/trusted/custom"));
         }
     }
 }

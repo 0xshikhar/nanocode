@@ -1,102 +1,10 @@
-import { execFile, spawn } from "node:child_process";
-import { access, stat } from "node:fs/promises";
-import { constants, readFileSync } from "node:fs";
-import { isAbsolute, join, resolve, sep } from "node:path";
-import { homedir } from "node:os";
-import { promisify } from "node:util";
+import { spawn } from "node:child_process";
 import { namedTool } from "nanocodex-tools/named-tool";
 import { toolResult } from "nanocodex-tools/runtime/code-runtime";
-
-const runSetup = promisify(execFile);
-const preparations = new Map();
-// Match the native attachment's supported upstream per-call policy setting.
-// This affects provider guidance, not OS permissions or action authorization.
-function confirmationPolicy(options) {
-  if (options.confirmationPolicies === null) return undefined;
-  if (typeof options.confirmationPolicies === "string" && options.confirmationPolicies.trim()) return options.confirmationPolicies;
-  const configured = process.env.NANOCODEX_COMPUTER_CONFIRMATION_POLICIES;
-  if (["off", "none", "0"].includes(configured?.trim().toLowerCase())) return undefined;
-  return configured?.trim() ? configured : "No confirmation policy applies.";
-}
 const interruptedGuidance = "Upstream/native input may still be running and effects are uncertain; do not replay uncertain input. Call cua_repl.js_reset, then inspect the surface before continuing. Reset does not prove earlier input stopped.";
-// Automatic installation follows the native helper's supported platforms.
-const supportsManagedComputer = () => process.platform === "darwin";
-const managedRoot = () => join(process.env.NANOCODEX_DIR || join(process.env.HOME || process.env.USERPROFILE || homedir(), ".nanocodex"), "runtimes", "openai-cua");
-function managedProvider() {
-  if (!supportsManagedComputer()) return undefined;
-  let source;
-  try { source = readFileSync(join(managedRoot(), "provider.json"), "utf8"); }
-  catch (error) { if (error.code === "ENOENT") return undefined; throw error; }
-  if (source.length > 65536) throw new Error("Invalid managed CUA receipt; run nanocodex2 computer setup");
-  const value = JSON.parse(source);
-  if (value?.dependency_contract !== "nanocodex-direct-cua-v2" || value?.environment?.CODEX_CLI_PATH !== undefined) {
-    throw new Error("Invalid managed CUA receipt: this generation does not provide the complete direct browser and computer integration without Codex; run nanocodex2 computer setup");
-  }
-  if (value?.status !== "installed" || value.transport !== "mcp" || typeof value.executable !== "string" || !isAbsolute(value.executable)
-    || !Array.isArray(value.args) || !value.args.every(arg => typeof arg === "string")
-    || !value.environment || typeof value.environment !== "object" || Array.isArray(value.environment) || !Object.values(value.environment).every(v => typeof v === "string")) {
-    throw new Error("Invalid managed CUA receipt; run nanocodex2 computer setup");
-  }
-  return value;
-}
-const managedComputer = () => managedProvider()?.executable;
-function managedOptions(options) {
-  // Explicit external commands must not inspect or inherit unrelated managed
-  // state. Only automatic managed-root candidates use receipt metadata.
-  if (process.env.NANOCODEX_COMPUTER || !supportsManagedComputer()
-    || !resolve(options.executable).startsWith(resolve(managedRoot()) + sep)) return options;
-  const managed = managedProvider();
-  if (!managed || resolve(options.executable) !== resolve(managed.executable)) return options;
-  return { ...options, args: options.args ?? managed.args, environment: { ...managed.environment, ...options.environment } };
-}
-async function executableExists(path) {
-  try { if (!path) return false; await access(path, constants.X_OK); return (await stat(path)).isFile(); } catch { return false; }
-}
-
-/** Select the installed helper’s current host once per process and install root. */
-export async function ensureComputer({ binary } = {}) {
-  if (process.env.NANOCODEX_COMPUTER || !supportsManagedComputer()) return discoverComputer({ binary });
-  const retry = "Run nanocodex2 computer setup to retry, or set NANOCODEX_COMPUTER to an explicit provider (off disables CUA).";
-  if (!binary) {
-    const executable = managedComputer();
-    if (await executableExists(executable)) return executable;
-    throw new Error(`OpenAI CUA setup requires the installed Nanocodex native helper. Reinstall Nanocodex. ${retry}`);
-  }
-  const identity = JSON.stringify([resolve(binary), resolve(managedRoot())]);
-  if (preparations.has(identity)) return preparations.get(identity);
-  const preparation = (async () => {
-    try {
-      // Setup needs the selected install root, not account/model credentials.
-      const env = Object.fromEntries(["PATH", "HOME", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "TMPDIR", "TEMP", "SystemRoot", "NANOCODEX_DIR", "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY"]
-        .filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]]));
-      const { stdout } = await runSetup(binary, ["computer", "setup"], { env, windowsHide: true, timeout: 600_000, maxBuffer: 1024 * 1024 });
-      const receipt = JSON.parse(stdout);
-      const installed = managedComputer();
-      if (receipt.status !== "installed" || receipt.transport !== "mcp" || typeof receipt.executable !== "string"
-        || !installed || resolve(receipt.executable) !== resolve(installed) || !await executableExists(installed)) {
-        throw new Error(receipt.status === "unsupported" ? "The native helper does not support OpenAI CUA on this platform." : "The native helper did not publish the managed OpenAI CUA executable.");
-      }
-      return installed;
-    } catch (error) {
-      throw new Error(`OpenAI CUA setup failed: ${String(error.message).slice(0, 200)} ${retry}`, { cause: error });
-    }
-  })();
-  preparations.set(identity, preparation);
-  try { return await preparation; } catch (error) { preparations.delete(identity); throw error; }
-}
-
-/** Read-only discovery of trusted installed providers; no app or browser starts. */
-export async function discoverComputer({ binary } = {}) {
-  const explicit = process.env.NANOCODEX_COMPUTER;
-  if (["off", "none", "0"].includes(explicit)) return undefined;
-  if (explicit) return explicit;
-  if (supportsManagedComputer() && await executableExists(managedComputer())) return managedComputer();
-}
-
 /** Discover the provider's actual MCP declarations before publishing tools. */
 export async function connectComputerTools(options) {
   if (!options?.executable) throw new TypeError("A trusted CUA executable is required");
-  options = managedOptions(options);
   const providerProcess = new ComputerProcess(options.executable, options.args ?? [], options.environment ?? {});
   try {
     const definitions = await providerProcess.start();
@@ -106,11 +14,10 @@ export async function connectComputerTools(options) {
 
 /** A native attachment owns the executable/configuration, each conversation a JS scope. */
 export function createComputerTools(options) {
-  const { executable, args = [], environment = {}, definitions } = managedOptions(options);
+  const { executable, args = [], environment = {}, definitions } = options;
   if (!executable) throw new TypeError("A trusted CUA executable is required");
   if (definitions === undefined) throw new TypeError("MCP providers require connectComputerTools discovery or a trusted catalog");
   const catalog = validateCatalog(definitions);
-  const policy = confirmationPolicy(options);
   const sessions = new Map();
   let disposed = false;
   const releaseSession = id => {
@@ -159,7 +66,7 @@ export function createComputerTools(options) {
         if (name !== "turn_ended" && typeof context.turnId === "string" && context.turnId.trim()) session.turns.set(context.turnId, { callId: context.callId, model: context.model });
         const result = await session.process.rpc("tools/call", {
           name, arguments: input,
-          _meta: { ...(policy === undefined ? {} : { "openai/confirmation_policies": { browser_use: policy, computer_use: policy } }), "x-codex-turn-metadata": {
+          _meta: { "x-codex-turn-metadata": {
             session_id: id,
             ...(context.turnId == null ? {} : { turn_id: context.turnId }),
             thread_id: id, call_id: context.callId, model: context.model,
@@ -204,7 +111,7 @@ export function createComputerTools(options) {
       try {
         const result = await session.process.rpc("tools/call", {
           name: "turn_ended", arguments: arguments_,
-          _meta: { ...(policy === undefined ? {} : { "openai/confirmation_policies": { browser_use: policy, computer_use: policy } }),
+          _meta: { 
             "x-codex-turn-metadata": { session_id: sessionId, thread_id: sessionId, turn_id: turnId, call_id: previous.callId, model: previous.model } },
         });
         if (result.isError === true) throw new Error("CUA turn cleanup failed; no retry was attempted");
@@ -243,7 +150,7 @@ function interruptible(result, signal, cancellationReason) {
 
 class ComputerProcess {
   constructor(executable, args, environment) {
-    const env = Object.fromEntries(["PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "TEMP", "SystemRoot", "LOCALAPPDATA", "LANG", "CODEX_HOME", "NANOCODEX_CUA_APP_CONSENT", "SKY_ENABLE_AUDIO"]
+    const env = Object.fromEntries(["PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "TEMP", "SystemRoot", "LOCALAPPDATA", "LANG", "SKY_ENABLE_AUDIO"]
       .filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]]));
     this.child = spawn(executable, args, { env: { ...env, ...environment }, stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
     this.pending = new Map(); this.sequence = 0; this.lines = new LineBuffer();
@@ -281,7 +188,7 @@ class ComputerProcess {
     } finally { clearTimeout(timer); }
   }
   async initialize() {
-    await this.rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "nanocodex-computer", version: "0.1.0" } });
+    await this.rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "nanocode-cua", version: "0.1.0" } });
     await this.send({ jsonrpc: "2.0", method: "notifications/initialized" });
   }
   async discover() {
@@ -392,3 +299,7 @@ function modelVisible(tool) {
   const visibility = tool._meta?.ui?.visibility;
   return !Array.isArray(visibility) || visibility.includes("model");
 }
+
+export const connect = connectComputerTools;
+export const CUA_JS_NAME = "mcp__cua_repl__js";
+export const CUA_RESET_NAME = "mcp__cua_repl__js_reset";

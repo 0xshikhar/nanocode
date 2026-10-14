@@ -98,6 +98,10 @@
     "./tools/environment": {
       "types": "./tools/environment.d.mts",
       "import": "./tools/environment.mjs"
+    },
+    "./node/cua": {
+      "types": "./node/cua.d.mts",
+      "import": "./node/cua.mjs"
     }
   },
   "files": [
@@ -126,7 +130,7 @@
     "build": "bash scripts/build-js-package.sh --release",
     "check:package": "node scripts/check-package.mjs",
     "prepack": "npm run check:package",
-    "test": "node --test test/*.test.mjs && npm run test:performance && npm run test:typecheck && npm run check:package",
+    "test": "node --test test/*.test.mjs test/cua/*.test.mjs && npm run test:performance && npm run test:typecheck && npm run check:package",
     "test:performance": "node --expose-gc --test test/performance.bench.mjs",
     "test:typecheck": "tsc -p test/tsconfig.json"
   },

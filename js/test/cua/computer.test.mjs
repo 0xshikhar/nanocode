@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { connectComputerTools, createComputerTools, outputContent } from "../index.mjs";
+import { connectComputerTools, createComputerTools, outputContent } from "../../node/cua.mjs";
 import { catalog, provider, png } from "./provider-fixture.mjs";
 
 const context = (sessionId, signal = new AbortController().signal) => ({ sessionId, signal, callId: "test", parentCallId: "", model: "fixture" });
@@ -31,32 +31,6 @@ test("provider owns arguments, errors, and post-error behavior", async t => {
   assert.equal((await js.handler({}, context("contracts"))).success, true);
 });
 
-test("JavaScript attachments forward the native confirmation defaults and trusted overrides", async t => {
-  const original = process.env.NANOCODEX_COMPUTER_CONFIRMATION_POLICIES;
-  t.after(() => {
-    if (original === undefined) delete process.env.NANOCODEX_COMPUTER_CONFIRMATION_POLICIES;
-    else process.env.NANOCODEX_COMPUTER_CONFIRMATION_POLICIES = original;
-  });
-  for (const [configured, option, expected] of [
-    [undefined, undefined, "No confirmation policy applies."],
-    ["upstream host policy", undefined, "upstream host policy"],
-    ["off", undefined, undefined],
-    ["upstream host policy", null, undefined],
-    ["off", "task host policy", "task host policy"],
-  ]) {
-    if (configured === undefined) delete process.env.NANOCODEX_COMPUTER_CONFIRMATION_POLICIES;
-    else process.env.NANOCODEX_COMPUTER_CONFIRMATION_POLICIES = configured;
-    const computer = await connectComputerTools({ ...provider(), confirmationPolicies: option });
-    t.after(computer.close);
-    const result = await computer.tool("js").handler({ source: "1 + 1" }, { ...context("policy"), turnId: "turn" });
-    const call = JSON.parse(result.output[0].text);
-    assert.deepEqual(call._meta["openai/confirmation_policies"], expected === undefined ? undefined : { browser_use: expected, computer_use: expected });
-    assert.deepEqual(call._meta["x-codex-turn-metadata"], {
-      session_id: "policy", thread_id: "policy", turn_id: "turn", call_id: "test", model: "fixture",
-    });
-    assert.deepEqual(call.arguments, { source: "1 + 1" });
-  }
-});
 
 test("queued cancellation rejects promptly without running or resetting the active process", async t => {
   const computer = await open(t), js = computer.tool("js");

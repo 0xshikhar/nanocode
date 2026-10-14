@@ -119,6 +119,12 @@ pub use nanocode_claude_tools as claude_tools;
 #[doc(inline)]
 pub use nanocode_observability as observability;
 
+/// Thin transport for the official upstream Sky CUA/Node REPL provider.
+#[cfg(not(target_family = "wasm"))]
+pub use nanocode_cua as cua;
+#[cfg(not(target_family = "wasm"))]
+pub use nanocode_cua::{ComputerConfig, ComputerTools};
+
 /// Common imports for the golden owned-agent path.
 pub mod prelude {
     #[cfg(not(target_family = "wasm"))]
@@ -145,6 +151,8 @@ pub mod prelude {
     #[cfg(feature = "openai")]
     #[cfg_attr(docsrs, doc(cfg(feature = "openai")))]
     pub use crate::{CodexBuilder, OpenAi};
+    #[cfg(not(target_family = "wasm"))]
+    pub use crate::{ComputerConfig, ComputerTools};
 }
 
 #[cfg(not(target_family = "wasm"))]
