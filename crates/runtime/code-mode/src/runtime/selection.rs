@@ -168,6 +168,8 @@ pub struct Tools {
     #[cfg(not(target_family = "wasm"))]
     pub(crate) remote_runners: Vec<crate::attachment::routing::Route>,
     #[cfg(not(target_family = "wasm"))]
+    pub(crate) process_route_store: Option<Arc<dyn crate::attachment::ProcessRouteStore>>,
+    #[cfg(not(target_family = "wasm"))]
     pub(super) deferred_tools_guidance_enabled: bool,
 
     pub(crate) embedded_host: Option<Arc<dyn crate::embedded::CodeModeHost>>,
@@ -203,6 +205,8 @@ impl Default for Tools {
             workspace_tools: None,
             #[cfg(not(target_family = "wasm"))]
             remote_runners: Vec::new(),
+            #[cfg(not(target_family = "wasm"))]
+            process_route_store: None,
             #[cfg(not(target_family = "wasm"))]
             deferred_tools_guidance_enabled: false,
 
@@ -286,6 +290,14 @@ impl Tools {
     #[must_use]
     pub fn builder() -> ToolsBuilder {
         ToolsBuilder::default()
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub fn with_process_route_store(
+        self,
+        store: Arc<dyn crate::attachment::ProcessRouteStore>,
+    ) -> Self {
+        self.into_builder().process_route_store(store).tools
     }
 
     #[must_use]
@@ -394,6 +406,15 @@ impl ToolsBuilder {
     )]
     pub fn add<S: ToolSource>(self, source: S) -> Self {
         source.install(self)
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub fn process_route_store(
+        mut self,
+        store: Arc<dyn crate::attachment::ProcessRouteStore>,
+    ) -> Self {
+        self.tools.process_route_store = Some(store);
+        self
     }
 
     #[cfg(not(target_family = "wasm"))]

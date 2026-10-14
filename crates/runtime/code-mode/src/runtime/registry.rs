@@ -257,12 +257,27 @@ impl ToolRegistry {
         }
     }
 
-    pub(super) fn route_workspaces(&mut self, routes: &[crate::attachment::routing::Route]) {
+    pub(super) fn route_workspaces(
+        &mut self,
+        routes: &[crate::attachment::routing::Route],
+        store: Option<Arc<dyn crate::attachment::ProcessRouteStore>>,
+    ) {
         if routes.is_empty() {
             return;
         }
+        for remote in routes.iter().flat_map(|route| route.tools.iter()) {
+            let definition = remote.native_definition();
+            if !self.by_name.contains_key(definition.name()) {
+                let local: Arc<dyn Tool> = Arc::new(crate::attachment::routing::RemoteOnlyTool {
+                    definition,
+                    providers: self.providers.clone(),
+                });
+                self.extend([(local, ToolExposure::CodeModeOnly)]);
+            }
+        }
         let routes = Arc::new(routes.to_vec());
-        let sessions = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let sessions = Arc::new(crate::attachment::process_routes::ProcessRoutes::new(store));
+        let local_runtime_id: Arc<str> = uuid::Uuid::new_v4().to_string().into();
         for (index, tool) in self.ordered.iter_mut().enumerate() {
             let name = tool.definition().name().to_owned();
             if matches!(
@@ -278,6 +293,7 @@ impl ToolRegistry {
                     local: Arc::clone(tool),
                     routes: Arc::clone(&routes),
                     sessions: Arc::clone(&sessions),
+                    local_runtime_id: Arc::clone(&local_runtime_id),
                 });
                 self.definitions[index] = tool.definition();
             }

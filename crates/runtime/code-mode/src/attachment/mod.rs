@@ -1,6 +1,8 @@
 mod driver;
 mod host;
+pub(crate) mod process_routes;
 mod protocol;
+pub use process_routes::ProcessRouteStore;
 pub(crate) mod routing;
 mod runner;
 pub use routing::RemoteMode;
@@ -567,6 +569,15 @@ pub enum AttachmentError {
 
     #[error("attachment transport failed: {0}")]
     Transport(Box<str>),
+
+    #[error(
+        "attachment call `{call_id}` timed out on runner `{runner}` (outcome: {outcome:?}); a dispatched call may have executed"
+    )]
+    Timeout {
+        runner: Box<str>,
+        call_id: Box<str>,
+        outcome: AttachmentCallOutcome,
+    },
 
     #[error("attachment is closed")]
     Closed,

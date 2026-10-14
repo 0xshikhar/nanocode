@@ -1,11 +1,13 @@
-use super::{RemoteTool, RemoteTools};
+use super::{
+    RemoteTool, RemoteTools,
+    process_routes::{ProcessRoutes, SessionMapping},
+};
 use crate::{Tool, ToolContext, ToolDefinition, ToolInput, ToolResult};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::{
-    collections::HashMap,
     path::{Component, Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -24,14 +26,48 @@ pub(crate) struct Route {
 pub(crate) struct RoutedTool {
     pub local: Arc<dyn Tool>,
     pub routes: Arc<Vec<Route>>,
-    pub sessions: Arc<Mutex<HashMap<i64, SessionMapping>>>,
+    pub sessions: Arc<ProcessRoutes>,
+    pub local_runtime_id: Arc<str>,
 }
 
-#[derive(Clone, Eq, PartialEq)]
-pub(crate) struct SessionMapping {
-    original: i64,
-    route: Option<usize>,
-    runtime_id: Option<Box<str>>,
+pub(crate) struct RemoteOnlyTool {
+    pub definition: ToolDefinition,
+    pub providers: Vec<Arc<dyn crate::DynamicToolProvider>>,
+}
+#[async_trait]
+impl Tool for RemoteOnlyTool {
+    fn definition(&self) -> ToolDefinition {
+        self.definition.clone()
+    }
+    fn supports_parallel_tool_calls(&self) -> bool {
+        self.providers
+            .iter()
+            .find(|provider| provider.contains(self.definition.name()))
+            .is_some_and(|provider| provider.supports_parallel_tool_calls(self.definition.name()))
+    }
+    async fn execute(&self, input: ToolInput, context: ToolContext<'_>) -> ToolResult {
+        let ToolInput::Function(input) = input else {
+            return Err("dynamic provider requires object arguments".into());
+        };
+        let value: Value = serde_json::from_str(input.get())?;
+        for provider in &self.providers {
+            if let Some(output) = provider
+                .execute(self.definition.name(), value.clone(), context)
+                .await
+            {
+                return Ok(output);
+            }
+        }
+        Err(format!(
+            "local workspace does not provide `{}`; select an attached runner workdir",
+            self.definition.name()
+        )
+        .into())
+    }
+}
+
+fn cua(name: &str) -> bool {
+    matches!(name, "mcp__cua_repl__js" | "mcp__cua_repl__reset")
 }
 
 fn normalize(path: &Path) -> Result<PathBuf, crate::contract::ToolError> {
@@ -55,6 +91,13 @@ fn normalize(path: &Path) -> Result<PathBuf, crate::contract::ToolError> {
 }
 
 impl Route {
+    pub(crate) fn namespace(&self) -> &str {
+        self.tools
+            .iter()
+            .next()
+            .expect("validated remote catalog")
+            .namespace()
+    }
     fn remote(&self, name: &str) -> Option<RemoteTool> {
         self.tools
             .iter()
@@ -107,12 +150,33 @@ impl Tool for RoutedTool {
         }
         if let ToolDefinition::Function { parameters, .. } = &mut definition {
             let mut schema = parameters.as_value().clone();
-            if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
+            if let Some(object) = schema.as_object_mut() {
                 if !matches!(
                     definition_name(&self.local).as_str(),
                     "exec_command" | "write_stdin" | "view_image"
                 ) {
-                    properties.insert("workdir".into(), serde_json::json!({"type":"string","description":"Logical workspace root selecting the local host or a remote runner."}));
+                    if let Some(properties) = object
+                        .entry("properties")
+                        .or_insert_with(|| serde_json::json!({}))
+                        .as_object_mut()
+                    {
+                        properties.insert("workdir".into(), serde_json::json!({"type":"string","description":"Logical workspace root selecting the local host or a remote runner."}));
+                    }
+                }
+            }
+            if cua(definition_name(&self.local).as_str()) {
+                if let Some(object) = schema.as_object_mut() {
+                    let required = object
+                        .entry("required")
+                        .or_insert_with(|| serde_json::json!([]));
+                    if let Some(required) = required.as_array_mut() {
+                        if !required.iter().any(|field| field == "workdir") {
+                            required.push("workdir".into());
+                        }
+                    }
+                    if definition_name(&self.local) == "mcp__cua_repl__js" {
+                        object.insert("required".into(), serde_json::json!(["workdir"]));
+                    }
                 }
             }
             *parameters = schema.into();
@@ -153,25 +217,57 @@ impl Tool for RoutedTool {
         let input = match input {
             ToolInput::Function(raw) => {
                 let mut value: Value = serde_json::from_str(raw.get())?;
+                if cua(name) {
+                    let workdir = value
+                        .get("workdir")
+                        .and_then(Value::as_str)
+                        .ok_or("CUA requires an explicit workdir selecting an attached desktop")?;
+                    let path = normalize(Path::new(workdir))?;
+                    selected = self
+                        .routes
+                        .iter()
+                        .position(|route| path.starts_with(route.mount()));
+                    let index = selected.ok_or_else(|| {
+                        format!("selected root `{workdir}` has no attached desktop")
+                    })?;
+                    let remote = self.routes[index].remote(name).ok_or_else(|| {
+                        format!("selected root `{workdir}` has no desktop providing `{name}`")
+                    })?;
+                    if name == "mcp__cua_repl__js"
+                        && value.as_object().is_some_and(|object| object.len() == 1)
+                    {
+                        return Ok(crate::ToolOutput::json(&serde_json::json!({"workdir":workdir, "tools":self.routes[index].tools.iter().filter(|tool| cua(tool.remote_name())).map(|tool| tool.native_definition()).collect::<Vec<_>>() })).with_structured_result(serde_json::json!({"workdir":workdir,"definition":remote.native_definition()})));
+                    }
+                }
                 if name == "write_stdin" {
                     if let Some(session) = value.get("session_id").and_then(Value::as_i64) {
-                        let stored = self.sessions.lock().unwrap().get(&session).cloned();
-                        if let Some(stored) = stored {
-                            if let Some(index) = stored.route {
-                                let current = self.routes[index]
-                                    .remote(name)
-                                    .and_then(|tool| tool.runtime_id());
-                                if current != stored.runtime_id {
-                                    return Err(
-                                        "process session belongs to a restarted runner".into()
-                                    );
-                                }
+                        let stored = self
+                            .sessions
+                            .get(context.session_id(), i32::try_from(session)?)
+                            .await?;
+                        selected = if let Some(namespace) = &stored.namespace {
+                            let index = self
+                                .routes
+                                .iter()
+                                .position(|route| route.namespace() == &**namespace)
+                                .ok_or("process runner is no longer attached")?;
+                            let current = self.routes[index]
+                                .remote(name)
+                                .and_then(|tool| tool.runtime_id());
+                            if current != stored.runtime_id {
+                                return Err("process session belongs to a restarted runner".into());
                             }
-                            value["session_id"] = stored.original.into();
-                            selected = stored.route;
+                            Some(index)
                         } else {
-                            return Err("unknown logical process session".into());
-                        }
+                            if stored.runtime_id.as_deref() != Some(&*self.local_runtime_id) {
+                                return Err(
+                                    "local process session belongs to a previous SDK runtime"
+                                        .into(),
+                                );
+                            }
+                            None
+                        };
+                        value["session_id"] = stored.original.into();
                     }
                 } else {
                     let key = if value.get("workdir").is_some() {
@@ -297,26 +393,14 @@ impl Tool for RoutedTool {
                 if let Some(original) = result.get("session_id").and_then(Value::as_i64) {
                     let mapping = SessionMapping {
                         original,
-                        route: selected,
-                        runtime_id: runtime_id.clone(),
+                        namespace: selected.map(|index| self.routes[index].namespace().into()),
+                        runtime_id: if selected.is_some() {
+                            runtime_id.clone()
+                        } else {
+                            Some(self.local_runtime_id.to_string().into())
+                        },
                     };
-                    let mut sessions = self.sessions.lock().unwrap();
-                    let existing = sessions
-                        .iter()
-                        .find(|(_, stored)| **stored == mapping)
-                        .map(|(id, _)| *id);
-                    let id = match existing {
-                        Some(id) => id,
-                        None => sessions
-                            .keys()
-                            .max()
-                            .copied()
-                            .unwrap_or(0)
-                            .checked_add(1)
-                            .ok_or("session identifier space exhausted")?,
-                    };
-                    i32::try_from(id)?;
-                    sessions.insert(id, mapping);
+                    let id = self.sessions.insert(context.session_id(), mapping).await?;
                     result["session_id"] = id.into();
                     output = output.with_structured_result(result.clone());
                     output.output = crate::contract::ToolOutputBody::Text(result.to_string());

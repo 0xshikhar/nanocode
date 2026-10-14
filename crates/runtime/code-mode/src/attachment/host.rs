@@ -54,6 +54,7 @@ struct State {
     pending: HashMap<Box<str>, Pending>,
     last_turn_ended: Option<[Box<str>; 3]>,
     deferred_frames: Vec<String>,
+    call_timeout_ms: Option<u64>,
 }
 
 struct Connection {
@@ -144,6 +145,18 @@ impl RemoteRunner {
         })
     }
 
+    pub fn with_call_timeout(self, timeout: Duration) -> Result<Self, AttachmentError> {
+        let timeout_ms = u64::try_from(timeout.as_millis()).map_err(transport_error)?;
+        if timeout_ms == 0
+            || timeout_ms > JSON_SAFE_INTEGER_MAX
+            || Duration::from_millis(timeout_ms) != timeout
+        {
+            return Err(AttachmentError::Transport("call timeout must be positive whole milliseconds within the protocol integer range".into()));
+        }
+        self.inner.state().call_timeout_ms = Some(timeout_ms);
+        Ok(self)
+    }
+
     #[must_use]
     pub fn namespace(&self) -> &str {
         &self.inner.namespace
@@ -194,6 +207,11 @@ impl RemoteRunner {
                 "runner must publish its catalog first".into(),
             ));
         };
+        if !valid_identifier(&runtime_id) {
+            return Err(AttachmentError::Catalog(
+                "invalid runner runtime identity".into(),
+            ));
+        }
         let (generation, mut outbound, backlog) = self.inner.attach(&runtime_id, tools)?;
         let _lease = ConnectionLease {
             inner: Arc::clone(&self.inner),
@@ -467,10 +485,14 @@ impl Inner {
         };
         let call_id: Box<str> = uuid::Uuid::new_v4().to_string().into();
         let now = now_ms();
-        let deadline_at = if spec.timeout_ms == JSON_SAFE_INTEGER_MAX {
+        let timeout_ms = self
+            .state()
+            .call_timeout_ms
+            .map_or(spec.timeout_ms, |policy| policy.min(spec.timeout_ms));
+        let deadline_at = if timeout_ms == JSON_SAFE_INTEGER_MAX {
             JSON_SAFE_INTEGER_MAX
         } else {
-            now.checked_add(spec.timeout_ms)
+            now.checked_add(timeout_ms)
                 .filter(|value| *value <= JSON_SAFE_INTEGER_MAX)
                 .ok_or_else(|| {
                     AttachmentError::Transport(
@@ -516,17 +538,43 @@ impl Inner {
             receipt,
         )
         .await;
+        let dispatched = self
+            .state()
+            .pending
+            .get(&guard.call_id)
+            .is_some_and(|pending| pending.sent);
+        let call_id = guard.call_id.clone();
         drop(guard);
         match waited {
-            Ok(Ok(outcome)) => Ok(outcome),
+            Ok(Ok(outcome)) => {
+                if matches!(
+                    outcome.0.get("message").and_then(Value::as_str),
+                    Some("tool deadline elapsed" | "tool deadline elapsed before execution")
+                ) {
+                    return Err(AttachmentError::Timeout {
+                        runner: self.namespace.clone(),
+                        call_id,
+                        outcome: if outcome.0.get("status").and_then(Value::as_str)
+                            == Some("ambiguous")
+                        {
+                            super::AttachmentCallOutcome::Ambiguous
+                        } else {
+                            super::AttachmentCallOutcome::Unavailable
+                        },
+                    });
+                }
+                Ok(outcome)
+            }
             Ok(Err(_)) => Err(AttachmentError::Closed),
-            Err(_) => Err(AttachmentError::Transport(
-                format!(
-                    "runner `{}` returned no receipt before the call deadline",
-                    self.namespace
-                )
-                .into(),
-            )),
+            Err(_) => Err(AttachmentError::Timeout {
+                runner: self.namespace.clone(),
+                call_id,
+                outcome: if dispatched {
+                    super::AttachmentCallOutcome::Ambiguous
+                } else {
+                    super::AttachmentCallOutcome::Unavailable
+                },
+            }),
         }
     }
 
@@ -626,6 +674,17 @@ impl RemoteTool {
     pub(crate) fn runtime_id(&self) -> Option<Box<str>> {
         self.runner.state().runtime_id.clone()
     }
+    pub(crate) fn native_definition(&self) -> ToolDefinition {
+        let mut definition = self.spec.definition.clone();
+        match &mut definition {
+            ToolDefinition::Function { name, .. } | ToolDefinition::Custom { name, .. } => {
+                *name = self.spec.remote_name.clone()
+            }
+            _ => {}
+        }
+        definition
+    }
+
     #[must_use]
     pub fn name(&self) -> &str {
         self.spec.definition.name()

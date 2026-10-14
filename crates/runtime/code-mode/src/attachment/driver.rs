@@ -690,18 +690,13 @@ fn start_call(
                     AttachmentCallOutcome::Unavailable,
                 )
             } else {
-                let duration = Duration::from_millis(
-                    remaining
-                        .saturating_sub(EXECUTION_DEADLINE_MARGIN_MS)
-                        .max(1)
-                        .min(tool_timeout),
-                );
+                let duration = Duration::from_millis(remaining.min(tool_timeout));
                 let call = PreparedToolCall::new(
                     task_identity.model.to_string(),
                     task_identity.session_id.to_string(),
                     task_identity.call_id.to_string(),
                     task_identity.name.to_string(),
-                    clamp_shell_yield(&task_identity.name, task_identity.input.clone(), remaining),
+                    task_identity.input.clone(),
                     if task_identity.output_token_budget == protocol::JSON_SAFE_INTEGER_MAX {
                         crate::contract::DEFAULT_TOOL_OUTPUT_TOKENS
                     } else {
@@ -764,46 +759,6 @@ fn start_call(
     let abort = task.abort_handle();
     active.push(InFlight { task });
     abort
-}
-
-const EXECUTION_DEADLINE_MARGIN_MS: u64 = 1_000;
-
-const SHELL_YIELD_DEADLINE_MARGIN_MS: u64 = 3_000;
-
-const MIN_SHELL_YIELD_MS: u64 = 250;
-
-fn clamp_shell_yield(name: &str, mut input: Value, remaining_ms: u64) -> Value {
-    let exec = name == crate::StandardTool::ExecCommand.name();
-    if !exec && name != crate::StandardTool::WriteStdin.name() {
-        return input;
-    }
-    let Some(object) = input.as_object_mut() else {
-        return input;
-    };
-    let budget = remaining_ms
-        .saturating_sub(SHELL_YIELD_DEADLINE_MARGIN_MS)
-        .max(MIN_SHELL_YIELD_MS);
-    let requested = match object.get("yield_time_ms") {
-        Some(Value::Number(value)) => value.as_u64(),
-        Some(Value::Null) | None => None,
-
-        Some(_) => return input,
-    };
-    let effective = requested.unwrap_or_else(|| {
-        let polling = object
-            .get("chars")
-            .and_then(Value::as_str)
-            .is_none_or(str::is_empty);
-        match (exec, polling) {
-            (true, _) => crate::shell::DEFAULT_EXEC_YIELD_MS,
-            (false, true) => crate::shell::DEFAULT_POLL_YIELD_MS,
-            (false, false) => crate::shell::DEFAULT_WRITE_YIELD_MS,
-        }
-    });
-    if effective > budget {
-        object.insert("yield_time_ms".to_owned(), Value::from(budget));
-    }
-    input
 }
 
 struct ExecutionPhase<'a> {
