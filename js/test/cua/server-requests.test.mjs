@@ -59,4 +59,3 @@ for (const [method, params] of [
     }
   });
 }
-

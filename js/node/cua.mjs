@@ -111,7 +111,7 @@ export function createComputerTools(options) {
       try {
         const result = await session.process.rpc("tools/call", {
           name: "turn_ended", arguments: arguments_,
-          _meta: { 
+          _meta: {
             "x-codex-turn-metadata": { session_id: sessionId, thread_id: sessionId, turn_id: turnId, call_id: previous.callId, model: previous.model } },
         });
         if (result.isError === true) throw new Error("CUA turn cleanup failed; no retry was attempted");
