@@ -26,9 +26,12 @@ impl ClaudeAccessToken {
                 "the Claude access token is empty or contains characters outside the OAuth token alphabet",
             ));
         }
-        let mut authorization = HeaderValue::from_str(&format!("Bearer {token}")).map_err(|_| {
-            ClaudeAuthUnavailable::new("the Claude access token is not a valid HTTP header value")
-        })?;
+        let mut authorization =
+            HeaderValue::from_str(&format!("Bearer {token}")).map_err(|_| {
+                ClaudeAuthUnavailable::new(
+                    "the Claude access token is not a valid HTTP header value",
+                )
+            })?;
         authorization.set_sensitive(true);
         Ok(Self {
             authorization,
@@ -51,6 +54,13 @@ impl ClaudeAccessToken {
 
 pub trait ClaudeTokenSource: Send + Sync {
     fn refresh(&self) -> ClaudeAuthFuture<'_, Result<ClaudeAccessToken, ClaudeAuthUnavailable>>;
+
+    fn refresh_rejected<'a>(
+        &'a self,
+        _rejected: &'a HeaderValue,
+    ) -> ClaudeAuthFuture<'a, Result<Option<ClaudeAccessToken>, ClaudeAuthUnavailable>> {
+        Box::pin(async { Ok(None) })
+    }
 }
 
 pub struct RefreshingClaudeAuth {
@@ -105,6 +115,17 @@ impl ClaudeAuthProvider for RefreshingClaudeAuth {
                 .is_some_and(|token| rejected.get(AUTHORIZATION) == Some(&token.authorization))
             {
                 *cached = None;
+            }
+            let Some(rejected) = rejected.get(AUTHORIZATION) else {
+                return Ok(true);
+            };
+            if let Some(token) = self.source.refresh_rejected(rejected).await? {
+                if !token.usable(self.refresh_margin) {
+                    return Err(ClaudeAuthUnavailable::new(
+                        "the refreshed Claude access token is already expired or within its refresh margin",
+                    ));
+                }
+                *cached = Some(token);
             }
             Ok(true)
         })

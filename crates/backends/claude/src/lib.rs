@@ -1071,7 +1071,9 @@ impl ClaudeClient {
                 ClientAuth::ApiKey(key) => {
                     let mut headers = reqwest::header::HeaderMap::new();
                     let mut value = reqwest::header::HeaderValue::from_str(key).map_err(|_| {
-                        ClaudeAuthUnavailable::new("the Claude API key is not a valid HTTP header value")
+                        ClaudeAuthUnavailable::new(
+                            "the Claude API key is not a valid HTTP header value",
+                        )
                     })?;
                     value.set_sensitive(true);
                     headers.insert("x-api-key", value);
@@ -1160,9 +1162,10 @@ impl ClaudeClient {
                 betas.push(FAST_MODE_BETA);
             }
             if !betas.is_empty() {
-                let value = reqwest::header::HeaderValue::from_str(&betas.join(",")).map_err(|_| {
-                    ClaudeAuthUnavailable::new("the combined anthropic-beta header is invalid")
-                })?;
+                let value =
+                    reqwest::header::HeaderValue::from_str(&betas.join(",")).map_err(|_| {
+                        ClaudeAuthUnavailable::new("the combined anthropic-beta header is invalid")
+                    })?;
                 headers.insert("anthropic-beta", value);
             }
             if self.subscription_compatibility {
