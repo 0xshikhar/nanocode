@@ -23,6 +23,7 @@ nanocode-backend-codex.workspace = true
 nanocode-tools.workspace = true
 nanocode-backend-claude = { workspace = true }
 nanocode-durability = { workspace = true   }
+nanocode-subagents.workspace = true
 nanocode-code-mode = { path = "../runtime/code-mode", version = "0.6.7"   }
 serde_json.workspace = true
 uuid.workspace = true

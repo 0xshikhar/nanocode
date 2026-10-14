@@ -121,6 +121,23 @@ impl ModelConfig {
 
 impl Default for ModelConfig {
     fn default() -> Self {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let mut config = Self {
+                auth: OpenAiAuth::codex_home(),
+                ..Self::api_key_defaults()
+            };
+            let mode = config.auth.mode();
+            super::apply_mode_defaults(&mut config, mode);
+            config
+        }
+        #[cfg(target_family = "wasm")]
+        Self::api_key_defaults()
+    }
+}
+
+impl ModelConfig {
+    fn api_key_defaults() -> Self {
         Self {
             model: Model::default(),
             model_id_prefix: None,

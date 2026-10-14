@@ -271,6 +271,22 @@ mod store {
         formats: Formats,
     }
 
+    pub trait IntoSessionStore {
+        fn into_session_store(self) -> Result<SessionStore>;
+    }
+
+    impl IntoSessionStore for SessionStore {
+        fn into_session_store(self) -> Result<SessionStore> {
+            Ok(self)
+        }
+    }
+
+    impl<S: StateStore + 'static> IntoSessionStore for S {
+        fn into_session_store(self) -> Result<SessionStore> {
+            SessionStore::new(self)
+        }
+    }
+
     impl SessionStore {
         #[must_use]
         pub fn same_store(&self, other: &Self) -> bool {
@@ -284,12 +300,8 @@ mod store {
             })
         }
 
-        #[must_use]
-        pub fn with_format(&self, format: Arc<dyn CheckpointFormat>) -> Self {
-            Self {
-                store: self.store.clone(),
-                formats: self.formats.with(format),
-            }
+        pub fn register_format(&self, format: Arc<dyn CheckpointFormat>) -> Result<()> {
+            self.formats.register(format)
         }
 
         pub async fn list(&self) -> Result<Vec<SessionSummary>> {

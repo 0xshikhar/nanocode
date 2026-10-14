@@ -175,6 +175,12 @@ impl OpenAiAuth {
         }
     }
 
+    #[cfg(not(target_family = "wasm"))]
+    #[must_use]
+    pub fn codex_home() -> Self {
+        Self::managed_chatgpt(Arc::new(CodexHomeAuth::default()))
+    }
+
     #[doc(hidden)]
     #[must_use]
     pub fn managed_chatgpt(source: Arc<dyn OpenAiAuthSource>) -> Self {
@@ -223,6 +229,51 @@ impl From<String> for OpenAiAuth {
 impl From<&str> for OpenAiAuth {
     fn from(api_key: &str) -> Self {
         Self::api_key(api_key.to_owned())
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[derive(Default)]
+struct CodexHomeAuth {
+    loaded: std::sync::Mutex<Option<OpenAiAuth>>,
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl CodexHomeAuth {
+    fn load(&self) -> Result<OpenAiAuth, OpenAiAuthError> {
+        let mut loaded = self
+            .loaded
+            .lock()
+            .map_err(|_| OpenAiAuthError::Unavailable(Arc::from("Codex login cache poisoned")))?;
+        if let Some(auth) = &*loaded {
+            return Ok(auth.clone());
+        }
+        let home = nanocode_home::AgentHome::from_env()
+            .map_err(|error| OpenAiAuthError::Unavailable(Arc::from(error.to_string())))?;
+        let auth = load_chatgpt_auth(home.codex_home().join("auth.json")).map_err(|error| {
+            OpenAiAuthError::LoginRequired(Arc::from(format!("{error}; run `codex login`")))
+        })?;
+        *loaded = Some(auth.clone());
+        Ok(auth)
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl OpenAiAuthSource for CodexHomeAuth {
+    fn validate(&self) -> Result<(), OpenAiAuthError> {
+        Ok(())
+    }
+
+    fn snapshot(&self) -> OpenAiAuthFuture<'_, Result<OpenAiAuthSnapshot, OpenAiAuthError>> {
+        Box::pin(async move { self.load()?.snapshot().await })
+    }
+
+    fn recover_unauthorized(
+        &self,
+        rejected: &OpenAiAuthSnapshot,
+    ) -> OpenAiAuthFuture<'_, Result<(), OpenAiAuthError>> {
+        let rejected = rejected.clone();
+        Box::pin(async move { self.load()?.recover_unauthorized(&rejected).await })
     }
 }
 

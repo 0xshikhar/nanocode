@@ -16,6 +16,7 @@ pub use config::ModelConfig;
 pub use config::ModelConfig as ResponsesServiceConfig;
 
 #[derive(Clone)]
+#[cfg_attr(not(target_family = "wasm"), derive(Default))]
 pub struct OpenAi<F = StandardServiceFactory> {
     config: ModelConfig,
     factory: F,

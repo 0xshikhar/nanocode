@@ -23,8 +23,9 @@ backend or database dependencies and builds for native and WASM.
 
 Each backend implements `DurableAgentExt`, `DurableBackendRegistration`, and a
 `CheckpointFormat` in its own `durability` module. Third-party backends use the
-same traits. `SessionStore::with_format` registers formats;
-`nanocode::session_store` registers the Codex and Claude formats.
+same traits. `SessionStore::register_format` registers a format on every clone of
+the store; the SDK runtime registers the Codex, Claude, and configured backend
+formats on the store passed to `.durability(...)`, which accepts any `StateStore`.
 
 Stores are separate crates: `nanocode-store-sqlite` and `nanocode-store-postgres`.
 WASM hosts implement `StateStore` over their own storage.

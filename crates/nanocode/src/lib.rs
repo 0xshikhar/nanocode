@@ -32,17 +32,18 @@ pub use nanocode_durability::DurableAgentExt;
 pub fn session_store<S: durability::StateStore + 'static>(
     store: S,
 ) -> durability::Result<durability::SessionStore> {
-    Ok(builtin_formats(&durability::SessionStore::new(store)?))
+    let store = durability::SessionStore::new(store)?;
+    register_builtin_formats(&store)?;
+    Ok(store)
 }
 
-pub(crate) fn builtin_formats(store: &durability::SessionStore) -> durability::SessionStore {
-    store
-        .with_format(std::sync::Arc::new(
-            nanocode_backend_codex::durability::CodexCheckpointFormat,
-        ))
-        .with_format(std::sync::Arc::new(
-            nanocode_backend_claude::durability::ClaudeCheckpointFormat,
-        ))
+pub(crate) fn register_builtin_formats(store: &durability::SessionStore) -> durability::Result<()> {
+    store.register_format(std::sync::Arc::new(
+        nanocode_backend_codex::durability::CodexCheckpointFormat,
+    ))?;
+    store.register_format(std::sync::Arc::new(
+        nanocode_backend_claude::durability::ClaudeCheckpointFormat,
+    ))
 }
 #[cfg(not(target_family = "wasm"))]
 pub use runtime::ClaudeHarness;
@@ -115,7 +116,8 @@ pub mod prelude {
     pub use crate::{Agent, ClaudeModel, HarnessFamily, Model, ModelSelection, Thinking};
     pub use crate::{Claude, ClaudeClient};
 
-    pub use crate::{CodexBuilder, OpenAi};
+    pub use crate::durability::{MemoryStore, SessionStore};
+    pub use crate::{AgentEvents, CodexBuilder, OpenAi};
     #[cfg(not(target_family = "wasm"))]
     pub use crate::{ComputerConfig, ComputerTools};
 }

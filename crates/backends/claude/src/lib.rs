@@ -6,6 +6,8 @@ use serde_json::Value;
 use thiserror::Error;
 
 mod auth;
+#[cfg(not(target_family = "wasm"))]
+mod claude_code;
 mod hooks;
 mod prompt;
 pub use hooks::{

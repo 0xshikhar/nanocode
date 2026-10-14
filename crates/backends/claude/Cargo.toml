@@ -40,7 +40,9 @@ libc.workspace = true
 nix = { workspace = true, features = ["fs"]  }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread"] }
+tokio = { workspace = true, features = ["fs", "process", "rt-multi-thread"] }
+nanocode-tls.workspace = true
+tracing.workspace = true
 ignore = { workspace = true  }
 globset = { version = "0.4.19"  }
 tempfile = { workspace = true  }

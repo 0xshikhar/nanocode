@@ -177,7 +177,8 @@ pub struct NanocodexBuilder<B = Unselected> {
     selection: PhantomData<fn() -> B>,
     backends: Vec<Arc<dyn RegisteredBackend>>,
 
-    durability: Option<crate::durability::SessionStore>,
+    durability:
+        Option<std::result::Result<crate::durability::SessionStore, Arc<crate::durability::Error>>>,
 
     codex: Option<CodexHarness>,
     claude: Option<ClaudeHarness>,
@@ -188,6 +189,8 @@ pub struct NanocodexBuilder<B = Unselected> {
     workspace: Option<PathBuf>,
     cua: Option<crate::ComputerTools>,
     cua_disabled: bool,
+    max_subagents: Option<usize>,
+    subagents_disabled: bool,
 }
 
 impl<B> NanocodexBuilder<B> {
@@ -198,8 +201,21 @@ impl<B> NanocodexBuilder<B> {
     }
 
     #[must_use]
-    pub fn durability(mut self, store: crate::durability::SessionStore) -> Self {
-        self.durability = Some(store);
+    pub fn durability(mut self, store: impl crate::durability::IntoSessionStore) -> Self {
+        self.durability = Some(store.into_session_store().map_err(Arc::new));
+        self
+    }
+
+    #[must_use]
+    pub const fn max_subagents(mut self, limit: usize) -> Self {
+        self.max_subagents = Some(limit);
+        self.subagents_disabled = false;
+        self
+    }
+
+    #[must_use]
+    pub const fn without_subagents(mut self) -> Self {
+        self.subagents_disabled = true;
         self
     }
 
@@ -243,7 +259,11 @@ impl<B> NanocodexBuilder<B> {
         self
     }
 
-    pub fn build(self) -> Result<Nanocodex> {
+    pub fn build(mut self) -> Result<Nanocodex> {
+        if self.codex.is_none() && self.claude.is_none() && self.backends.is_empty() {
+            self.codex = Some(OpenAi::default().into());
+            self.claude = Some(ClaudeClient::default().into());
+        }
         let mut configured = Vec::new();
 
         if self.codex.is_some() {
@@ -338,25 +358,54 @@ impl<B> NanocodexBuilder<B> {
                 (model, thinking)
             })
             .collect();
-        let durability = self.durability.map(|store| {
-            self.backends
-                .iter()
-                .fold(crate::builtin_formats(&store), |store, backend| {
-                    store.with_format(backend.checkpoint_format())
-                })
+        let store = match self.durability {
+            Some(store) => store.map_err(|error| NanocodexError::Backend {
+                backend: "durability",
+                source: error,
+            })?,
+            None => crate::durability::SessionStore::new(
+                crate::durability::MemoryStore::new().map_err(catalog_error)?,
+            )
+            .map_err(catalog_error)?,
+        };
+        crate::register_builtin_formats(&store).map_err(catalog_error)?;
+        for backend in &self.backends {
+            store
+                .register_format(backend.checkpoint_format())
+                .map_err(catalog_error)?;
+        }
+        let durability = Some(store);
+        let subagents = (!self.subagents_disabled).then(|| {
+            let (registry, _, _) = nanocode_subagents::channel(
+                self.max_subagents
+                    .unwrap_or(nanocode_subagents::DEFAULT_MAX_SUBAGENTS),
+            );
+            registry
         });
         let mut recipes: Vec<(HarnessFamily, Recipe)> = Vec::new();
 
         if let Some(codex) = self.codex {
             recipes.push((
                 HarnessFamily::Codex,
-                codex_recipe(codex, &self.settings, &workspace, cua.clone()),
+                codex_recipe(
+                    codex,
+                    &self.settings,
+                    &workspace,
+                    cua.clone(),
+                    subagents.clone(),
+                ),
             ));
         }
         if let Some(claude) = self.claude {
             recipes.push((
                 HarnessFamily::Claude,
-                claude_recipe(claude, &self.settings, &workspace, cua.clone()),
+                claude_recipe(
+                    claude,
+                    &self.settings,
+                    &workspace,
+                    cua.clone(),
+                    subagents,
+                ),
             ));
         }
         for backend in self.backends {
@@ -420,6 +469,8 @@ impl NanocodexBuilder<Unselected> {
             workspace: self.workspace,
             cua: self.cua,
             cua_disabled: self.cua_disabled,
+            max_subagents: self.max_subagents,
+            subagents_disabled: self.subagents_disabled,
         }
     }
 }
@@ -824,6 +875,7 @@ fn codex_recipe(
     runtime: &Settings,
     workspace: &Arc<Path>,
     cua: Option<Arc<tokio::sync::OnceCell<crate::ComputerTools>>>,
+    subagents: Option<Arc<nanocode_subagents::Registry>>,
 ) -> Recipe {
     let CodexHarness {
         client,
@@ -838,6 +890,7 @@ fn codex_recipe(
         let settings = spec.settings.or(&settings);
         let configure = configure.clone();
         let workspace = Arc::clone(&workspace);
+        let subagents = subagents.clone();
         Box::pin(async move {
             let cua = if let Some(cua) = cua {
                 Some(
@@ -874,8 +927,17 @@ fn codex_recipe(
                 let tools = settings
                     .tools
                     .unwrap_or_else(|| AgentTools::Shared(crate::Tools::default()));
-                builder = builder
-                    .tools_factory(move |handle| exposed(tools.materialize(handle)?, cua.as_ref()));
+                builder = builder.tools_factory(move |handle| {
+                    let mut selected = tools.materialize(handle.clone())?;
+                    if let Some(registry) = &subagents {
+                        selected = nanocode_subagents::install_tools(
+                            selected,
+                            handle,
+                            Arc::clone(registry),
+                        )?;
+                    }
+                    exposed(selected, cua.as_ref())
+                });
             }
             if spec.options.stateless_http {
                 builder = builder.stateless_http();
@@ -902,6 +964,7 @@ fn claude_recipe(
     runtime: &Settings,
     workspace: &Arc<Path>,
     cua: Option<Arc<tokio::sync::OnceCell<crate::ComputerTools>>>,
+    subagents: Option<Arc<nanocode_subagents::Registry>>,
 ) -> Recipe {
     let ClaudeHarness {
         client,
@@ -916,6 +979,7 @@ fn claude_recipe(
         let settings = spec.settings.or(&settings);
         let configure = configure.clone();
         let workspace = Arc::clone(&workspace);
+        let subagents = subagents.clone();
         Box::pin(async move {
             let cua = if let Some(cua) = cua {
                 Some(
@@ -957,7 +1021,7 @@ fn claude_recipe(
                     .map(|tools| tools.materialize(handle.clone()))
                     .transpose()
                     .map_err(|error| NanocodexError::InvalidRequest(error.to_string()))?;
-                let additive = cua
+                let mut additive: Vec<Arc<dyn nanocode_tools::Tool>> = cua
                     .as_ref()
                     .map(|cua| {
                         cua.tools()
@@ -965,6 +1029,14 @@ fn claude_recipe(
                             .collect()
                     })
                     .unwrap_or_default();
+                if let Some(registry) = &subagents {
+                    let Ok(SharedTools(tools)) = nanocode_subagents::install_claude_tools(
+                        SharedTools(Vec::new()),
+                        handle.clone(),
+                        Arc::clone(registry),
+                    );
+                    additive.extend(tools);
+                }
                 nanocode_backend_claude::install_default_tools(
                     root.clone(),
                     &handle,
@@ -984,6 +1056,20 @@ fn claude_recipe(
             builder.build()
         })
     })
+}
+
+struct SharedTools(Vec<Arc<dyn nanocode_tools::Tool>>);
+
+impl nanocode_tools::ToolCollection for SharedTools {
+    type Error = std::convert::Infallible;
+
+    fn add_shared_tool(
+        mut self,
+        tool: Arc<dyn nanocode_tools::Tool>,
+    ) -> std::result::Result<Self, Self::Error> {
+        self.0.push(tool);
+        Ok(self)
+    }
 }
 
 fn resolve_workspace(workspace: Option<PathBuf>) -> Result<PathBuf> {

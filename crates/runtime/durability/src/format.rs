@@ -1,4 +1,9 @@
-use std::{fmt, future::Future, pin::Pin, sync::Arc};
+use std::{
+    fmt,
+    future::Future,
+    pin::Pin,
+    sync::{Arc, RwLock, RwLockReadGuard},
+};
 
 use nanocode_agent::{HarnessFamily, SessionCheckpoint, session::TranscriptItem};
 use serde_json::Value;
@@ -42,33 +47,38 @@ pub trait CheckpointFormat: Send + Sync {
 }
 
 #[derive(Clone, Default)]
-pub(crate) struct Formats(Vec<Arc<dyn CheckpointFormat>>);
+pub(crate) struct Formats(Arc<RwLock<Vec<Arc<dyn CheckpointFormat>>>>);
 
 impl Formats {
-    pub(crate) fn with(&self, format: Arc<dyn CheckpointFormat>) -> Self {
-        let mut formats: Vec<_> = self
-            .0
-            .iter()
-            .filter(|known| known.family() != format.family())
-            .cloned()
-            .collect();
-        formats.push(format);
-        Self(formats)
+    fn read(&self) -> Result<RwLockReadGuard<'_, Vec<Arc<dyn CheckpointFormat>>>> {
+        self.0
+            .read()
+            .map_err(|_| Error::InvalidState("checkpoint format registry poisoned".into()))
     }
 
-    pub(crate) fn family(&self, family: HarnessFamily) -> Result<&dyn CheckpointFormat> {
-        self.0
+    pub(crate) fn register(&self, format: Arc<dyn CheckpointFormat>) -> Result<()> {
+        let mut formats = self
+            .0
+            .write()
+            .map_err(|_| Error::InvalidState("checkpoint format registry poisoned".into()))?;
+        formats.retain(|known| known.family() != format.family());
+        formats.push(format);
+        Ok(())
+    }
+
+    pub(crate) fn family(&self, family: HarnessFamily) -> Result<Arc<dyn CheckpointFormat>> {
+        self.read()?
             .iter()
             .find(|format| format.family() == family)
-            .map(AsRef::as_ref)
+            .cloned()
             .ok_or_else(|| Error::UnsupportedFamily(family.to_string()))
     }
 
-    pub(crate) fn owner(&self, checkpoint: &Value) -> Result<&dyn CheckpointFormat> {
-        self.0
+    pub(crate) fn owner(&self, checkpoint: &Value) -> Result<Arc<dyn CheckpointFormat>> {
+        self.read()?
             .iter()
             .find(|format| format.owns(checkpoint))
-            .map(AsRef::as_ref)
+            .cloned()
             .ok_or_else(|| {
                 Error::InvalidState("no registered checkpoint format owns this checkpoint".into())
             })
@@ -77,9 +87,11 @@ impl Formats {
 
 impl fmt::Debug for Formats {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_list()
-            .entries(self.0.iter().map(|format| format.family()))
-            .finish()
+        let families: Vec<_> = self
+            .0
+            .read()
+            .map(|formats| formats.iter().map(|format| format.family()).collect())
+            .unwrap_or_default();
+        formatter.debug_list().entries(families).finish()
     }
 }

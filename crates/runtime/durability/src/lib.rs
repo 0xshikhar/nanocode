@@ -16,8 +16,8 @@ pub use backend::{Branches, DurableAgentExt, DurableBackendRegistration, agent_e
 pub use branch::{BranchTurn, CheckpointBranch};
 pub use catalog::{BranchBoundary, InitialSettings, SessionRecord};
 pub use catalog::{
-    BranchPoint, LIST_LIMIT, SessionStore, SessionSummary, StoredSession, StoredTurn,
-    TranscriptItem, TurnStatus,
+    BranchPoint, IntoSessionStore, LIST_LIMIT, SessionStore, SessionSummary, StoredSession,
+    StoredTurn, TranscriptItem, TurnStatus,
 };
 pub use format::{AdmittedTurn, CheckpointFormat, FormatFuture};
 pub use memory::MemoryStore;
