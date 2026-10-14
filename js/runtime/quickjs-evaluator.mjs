@@ -4,16 +4,16 @@ const DEFAULT_MEMORY_LIMIT_BYTES = 64 * 1024 * 1024;
 const DEFAULT_STACK_LIMIT_BYTES = 512 * 1024;
 const DEFAULT_INTERRUPT_CYCLES = 1_000_000;
 
-/**
- * Builds a Code Mode evaluator for runtimes that reject eval/new Function.
- * Pass an asyncified QuickJS WASM module from quickjs-emscripten-core.
- */
+
+
+
+
 export function createQuickJsEvaluator(quickJs, options = {}) {
   if (!quickJs || typeof quickJs.newContext !== "function") {
     throw new TypeError("quickJs must be an asyncified QuickJS WASM module");
   }
-  // One agent's waiting cell must not prevent its child from running. Keep
-  // cell ordering within each session while giving other sessions a context.
+
+
   const queues = new Map();
   const anonymousSession = Symbol("anonymous evaluator session");
   return (source, environment) => {
@@ -96,9 +96,9 @@ async function evaluate(quickJs, source, environment, options) {
       logger?.(...values);
     });
 
-    // Catalogs discovered mid-thread can be large. Transfer them as JSON data,
-    // not object-literal source requiring an AST for every schema property.
-    // Each fresh context still receives its exact admitted catalog.
+
+
+
     const catalogJson = JSON.stringify(environment.toolDefinitions);
     if (catalogJson !== undefined) {
       vm.newString(catalogJson).consume(handle =>
@@ -208,8 +208,6 @@ const tools = (${createCodeTools.toString()})(
   (name, input) => __nanocodex_call_tool(name, JSON.stringify(input ?? null)).then(__nanocodex_decode),
 );
 const ALL_TOOLS = Object.freeze(typeof __nanocodex_catalog === "undefined" ? undefined : JSON.parse(__nanocodex_catalog));
-// Models often label values as text("label:", value); keep every argument
-// visible instead of silently dropping all but the first.
 const text = (...values) => __nanocodex_emit("text", JSON.stringify(values.length > 1
   ? values.map(__nanocodex_stringify).join(" ")
   : __nanocodex_stringify(values[0])));
@@ -274,7 +272,7 @@ function serializeToolError(error) {
       ...(typeof error.stack === "string" ? { stack: error.stack } : {}),
       ...(Object.hasOwn(error, "code") ? { code: error.code } : {}),
       ...(Object.hasOwn(error, "details") ? { details: error.details } : {}),
-      // Structured tool failures carry their fields as own properties.
+
       ...Object.fromEntries(Object.entries(error).filter(([key, value]) =>
         !["message", "stack", "name", "cause"].includes(key) && typeof value !== "function")),
     };

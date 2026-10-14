@@ -1,6 +1,6 @@
-// Browser-only barrel for dev-tunnels-ssh. The upstream CommonJS root eagerly
-// evaluates Node stream classes even though its crypto implementation correctly
-// selects Web Crypto. Export only the browser-safe protocol surface we use.
+
+
+
 export { SshAlgorithms, Encryption, ECDsa, Rsa, } from "@microsoft/dev-tunnels-ssh/algorithms/sshAlgorithms.js";
 export { SshDataReader } from "@microsoft/dev-tunnels-ssh/io/sshData.js";
 export { DerReader, DerWriter } from "@microsoft/dev-tunnels-ssh/io/derData.js";

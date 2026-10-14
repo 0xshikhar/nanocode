@@ -3,7 +3,7 @@ import type { NamedTool, Workspace, ToolContext } from "./types.mjs";
 
 export type JustBashExecutionEvent = Readonly<{
   phase: "queued" | "started" | "finished";
-  /** Fixed allowlist label; other includes dynamic or unrecognized first words. */
+
   command: string;
   command_scope: "first_literal";
   queue_ms?: number;
@@ -11,7 +11,7 @@ export type JustBashExecutionEvent = Readonly<{
   status?: "success" | "error";
   exit_code?: number | null;
   category?: "none" | "search_admission" | "resource_limit" | "timeout" | "cancelled" | "syntax" | "command_not_found" | "command_exit" | "input_validation" | "exception";
-  /** Best-effort allowlisted command from a search admission diagnostic. */
+
   admission_command?: "rg" | "grep" | "fgrep" | "egrep" | "sed" | "awk";
   output_truncated?: boolean;
 }>;
@@ -49,25 +49,25 @@ export type JustBashCustomCommand = Readonly<{
 }>;
 
 export type JustBashNetworkOptions = Readonly<{
-  /** Explicitly permit credential-free HTTP(S) requests to arbitrary origins. */
+
   dangerouslyAllowFullInternetAccess?: boolean | undefined;
-  /** Otherwise, allow only these exact origin/path prefixes. */
+
   allowedUrlPrefixes?: readonly string[] | undefined;
-  /** Defaults to GET and HEAD in Just Bash. */
+
   allowedMethods?: readonly string[] | undefined;
 }>;
 
 export type JustBashRuntime = Readonly<{
-  /**
-   * The authoritative workspace handle while this runtime is mounted. All mutations must use
-   * this handle so Bash's bounded metadata view remains synchronized.
-   */
+
+
+
+
   filesystem: Workspace;
-  /** Model instructions derived from the actual shell descriptor. */
+
   instructions: string;
-  /** Exact command, workspace, limit, network, and escalation boundary. */
+
   descriptor: JustBashDescriptor;
-  /** One-shot, cancellable `exec_command` tool backed by Just Bash. */
+
   tool: NamedTool;
 }>;
 
@@ -83,34 +83,34 @@ export type JustBashDescriptor = Readonly<{
   sandboxEscalation: false;
 }>;
 
-/**
- * Mounts a caller-owned workspace into an in-isolate Just Bash runtime.
- *
- * Do not mutate the source `filesystem` handle while the runtime is mounted. Use the returned
- * `filesystem` for every mutation so the shell's metadata view remains authoritative.
- */
+
+
+
+
+
+
 export function justBash(options: {
-  /** Caller-owned durable workspace. See `JustBashRuntime.filesystem` for mutation ownership. */
+
   filesystem: Workspace;
-  /** Refresh metadata before each serialized command; defer the initial scan until a command or filesystem mutation. */
+
   refreshFilesystemBeforeExec?: boolean | undefined;
-  /** Defer interpreter module evaluation and construction until the first command. */
+
   lazyInitialize?: boolean | undefined;
-  /** Host-specific standalone module loader; defaults to the package entry. */
+
   loadInterpreter?: (() => Promise<Pick<typeof import("just-bash/browser"), "Bash" | "defineCommand">>) | undefined;
   binaryIO?: ShellBinaryIO | undefined;
-  /** Content-safe lifecycle telemetry; observer failures never alter execution. */
+
   onExecution?: JustBashExecutionObserver | undefined;
   executionTimeoutMs?: number | undefined;
-  /** Finite resource ceilings; overrides must match the host memory envelope. */
+
   executionLimits?: Readonly<Record<string, number>> | undefined;
   maxEntries?: number | undefined;
   maxOutputTokens?: number | undefined;
   network?: false | JustBashNetworkOptions | undefined;
-  /** Stable host-owned name for the actual network boundary exposed in the descriptor. */
+
   networkMode?: string | undefined;
-  /** Host-owned fetch boundary used by curl and app-owned commands. */
+
   fetch?: JustBashFetch | undefined;
-  /** Application commands registered directly in the embedded interpreter. */
+
   customCommands?: readonly JustBashCustomCommand[] | undefined;
 }): Promise<JustBashRuntime>;

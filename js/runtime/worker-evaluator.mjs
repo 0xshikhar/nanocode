@@ -1,7 +1,7 @@
 const WORKER_PROTOCOL = "nanocodex.code-evaluator.v1";
 let nextEvaluation = 1;
 
-/** Creates the browser's per-cell, synchronously terminable Code Mode boundary. */
+
 export function createWorkerEvaluator(options = {}) {
   const createWorker = options.createWorker ?? createCodeEvaluatorWorker;
   if (options.createWorker === undefined && typeof globalThis.Worker !== "function") {
@@ -33,8 +33,8 @@ export function createWorkerEvaluator(options = {}) {
     };
     const onAbort = () => {
       const reason = environment.signal?.reason ?? new Error("Code Mode execution was cancelled");
-      // AbortSignal dispatch is synchronous. Let every parent-held nested tool
-      // observe cancellation before terminating its guest evaluator boundary.
+
+
       queueMicrotask(() => fail(reason));
     };
 
@@ -115,9 +115,9 @@ export function createWorkerEvaluator(options = {}) {
   });
 }
 
-// Vite recognizes only this literal Worker + URL shape as a worker entry. Keep
-// the test factory above out of the production construction path so the
-// evaluator and its imports are emitted as one runnable browser asset.
+
+
+
 function createCodeEvaluatorWorker() {
   return new Worker(
     new URL("./code-evaluator.worker.mjs", import.meta.url),

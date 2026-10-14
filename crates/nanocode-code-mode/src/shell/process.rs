@@ -53,8 +53,6 @@ pub(super) struct SpawnedProcess {
     pub(super) process_group: SharedProcessGroup,
 }
 
-// The session owns this handle and its termination guard; the task owns the
-// OS child so it keeps reaping even while nobody polls the session.
 pub(super) struct ProcessChild {
     wait: Option<JoinHandle<io::Result<i32>>>,
     completed: Option<io::Result<i32>>,
@@ -71,9 +69,6 @@ impl ProcessChild {
         let _ = io_driver_available;
         let group = process_group.clone();
         let wait = tokio::spawn(async move {
-            // Subscribe before observing exit so an exit between the check and
-            // recv is retained by the signal stream. SIGCHLD is broadcast: each
-            // waiter still checks only its own child under the identity guard.
             #[cfg(unix)]
             let mut exited = if io_driver_available {
                 match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::child()) {
@@ -84,20 +79,12 @@ impl ProcessChild {
                     }
                 }
             } else {
-                // Portable PTYs also work on time-only Tokio runtimes. There
-                // is no public reactor-capability probe, so do not call signal
-                // (which would panic) without a successfully spawned Tokio pipe
-                // child proving this runtime has the required I/O driver.
                 None
             };
             loop {
-                // Serialize reaping and guard retirement with signals/drop.
-                // Never leave an exited child's guard armed until a later poll.
                 {
                     let mut guard = group.0.lock().unwrap_or_else(|e| e.into_inner());
-                    // Observe exit without releasing the PID, clean up its
-                    // group, then reap. A mutex alone cannot prevent the OS
-                    // from recycling a PID between try_wait and killpg.
+
                     let ready = guard.prepare_to_reap();
                     match ready.and_then(|ready| if ready { try_wait() } else { Ok(None) }) {
                         Ok(None) => {}
@@ -105,12 +92,9 @@ impl ProcessChild {
                             guard.disarm();
                             return Ok(status);
                         }
-                        // Exit may already have been observed. Do not wait for
-                        // another signal after an interrupted reap attempt.
+
                         Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                         Err(error) => {
-                            // ECHILD can mean another waiter already reaped
-                            // this PID. Do not signal an unverified identity.
                             guard.disarm();
                             return Err(error);
                         }
@@ -123,8 +107,7 @@ impl ProcessChild {
                     }
                     continue;
                 }
-                // Unsupported platforms or failed notification registration
-                // retain the existing autonomous reaping fallback.
+
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
         });
@@ -137,7 +120,6 @@ impl ProcessChild {
 
     pub(super) async fn wait(&mut self) -> io::Result<i32> {
         if self.completed.is_none() {
-            // Borrow the handle: cancelling a tool poll must not lose the result.
             let result = self
                 .wait
                 .as_mut()
@@ -157,8 +139,6 @@ impl ProcessChild {
 
 impl Drop for ProcessChild {
     fn drop(&mut self) {
-        // Dropping a JoinHandle detaches it. Signal first, then let the waiter
-        // reap the child rather than aborting the task and abandoning ownership.
         let _ = self.process_group.terminate_and_disarm();
     }
 }
@@ -264,7 +244,6 @@ fn spawn_pipes(
         child: ProcessChild::new(
             move || child.try_wait().map(|status| status.map(exit_code)),
             process_group.clone(),
-            // Tokio pipe spawning has already required a working I/O reactor.
             true,
         ),
         process_group,
@@ -297,8 +276,6 @@ fn spawn_pty(
         command.env(name, value);
     }
 
-    // Allocate fallible I/O handles before spawning so an allocation error
-    // cannot leave a child running without its termination guard and waiter.
     let reader = pair.master.try_clone_reader().map_err(pty_error)?;
     let writer = pair.master.take_writer().map_err(pty_error)?;
     let mut child = pair.slave.spawn_command(command).map_err(pty_error)?;
@@ -359,8 +336,6 @@ impl ProcessGroupGuard {
         Self { process_group }
     }
 
-    // These Unix targets expose waitid through rustix. WNOWAIT keeps the
-    // exited leader waitable, reserving its PID until group cleanup finishes.
     #[cfg(all(
         unix,
         not(any(
@@ -391,8 +366,6 @@ impl ProcessGroupGuard {
         }
     }
 
-    // Without a non-reaping exit observation, retire the guard on completion
-    // without sending a post-reap signal to a potentially recycled identifier.
     #[cfg(not(all(
         unix,
         not(any(
@@ -438,9 +411,7 @@ impl ProcessGroupGuard {
         let Some(process_group) = self.process_group else {
             return Ok(());
         };
-        // `taskkill /T` is the Windows analogue of killing a Unix process group: it terminates
-        // the child and processes descended from it. A non-zero exit commonly means the child
-        // exited between the wait and cleanup paths, which is equivalent to ESRCH on Unix.
+
         std::process::Command::new("taskkill.exe")
             .args(["/PID", &process_group.to_string(), "/T", "/F"])
             .stdin(Stdio::null())
@@ -478,8 +449,6 @@ pub(super) fn sanitized_environment(
     let mut environment = Vec::new();
     let mut secrets = Vec::new();
     for (name, value) in env::vars_os() {
-        // The launching process's own session identity never leaks into a
-        // tool; only an explicitly bound session (an override) provides it.
         if crate::SessionEnvironment::controls(&name) {
             continue;
         }
@@ -513,28 +482,6 @@ fn normalize_environment(environment: &mut Vec<(OsString, OsString)>) {
     }
 }
 
-/// Returns the ambient environment variables the shell tool withholds from tool
-/// subprocesses because their names look sensitive.
-///
-/// Pass the result to
-/// [`ToolsBuilder::process_environment`](crate::ToolsBuilder::process_environment)
-/// when the embedder's tools legitimately need them. That is the case behind a
-/// credential-injecting proxy, where the variable holds a marker the proxy
-/// substitutes at the network boundary rather than a secret — a tool that cannot
-/// send the marker cannot authenticate at all, so withholding it only breaks the
-/// tool. Forwarded UTF-8 values of at least eight bytes still join the existing
-/// redaction list, so they stay masked in tool output.
-///
-/// Selecting by name is deliberate: forwarding the whole ambient environment
-/// would also override the shell normalization (`TERM`, `PAGER`, `NO_COLOR`, ...)
-/// that keeps tool output machine-readable.
-///
-/// # Security
-///
-/// This function selects variables by name and cannot distinguish proxy-safe
-/// markers from real secrets. Passing its result to a tool runtime grants every
-/// tool subprocess access to every returned value. Only use it when the embedding
-/// boundary deliberately permits that access.
 #[cfg(feature = "code-mode")]
 #[must_use]
 pub fn ambient_sensitive_environment() -> Vec<(OsString, OsString)> {

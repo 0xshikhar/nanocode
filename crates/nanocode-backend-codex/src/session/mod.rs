@@ -8,7 +8,7 @@ pub use contract::{
     SessionCheckpoint, SessionInfo, TurnBoundary,
 };
 
-#[cfg(any(feature = "openai", feature = "rollout"))]
+#[cfg(feature = "openai")]
 use crate::client::Model;
 #[cfg(feature = "openai")]
 use crate::client::responses::MessageRole;
@@ -19,29 +19,26 @@ pub use crate::client::session::SessionId;
 
 #[cfg(feature = "openai")]
 use crate::model::run::ModelCheckpoint;
-#[cfg(any(feature = "openai", feature = "rollout"))]
+#[cfg(feature = "openai")]
 use crate::{NanocodexError, Result};
 
-#[cfg(any(feature = "openai", feature = "rollout"))]
+#[cfg(feature = "openai")]
 const SESSION_SNAPSHOT_VERSION: u32 = 1;
 
-/// How a local driver came to exist, used for telemetry and rollout metadata.
 #[cfg_attr(not(feature = "openai"), allow(dead_code))]
-#[cfg(any(feature = "openai", feature = "rollout"))]
+#[cfg(feature = "openai")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SessionStart {
-    /// A new conversation with the given provenance.
     New(Origin),
-    /// An existing conversation reopened as a root through the builder.
+
     Resume,
-    /// An evicted child rehydrated by its parent with its original identity.
+
     Restore,
 }
 
 #[cfg_attr(not(feature = "openai"), allow(dead_code))]
-#[cfg(any(feature = "openai", feature = "rollout"))]
+#[cfg(feature = "openai")]
 impl SessionStart {
-    /// Stable telemetry label; unchanged from the historical string origins.
     pub(crate) const fn kind(self) -> &'static str {
         match self {
             Self::New(Origin::Root) => "root",
@@ -55,7 +52,7 @@ impl SessionStart {
     }
 }
 
-pub use nanocode_agent::session::{TranscriptItem, ToolOutcome};
+pub use nanocode_agent::session::{ToolOutcome, TranscriptItem};
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub(crate) struct ContextSnapshot {
@@ -84,18 +81,15 @@ pub(crate) struct EnvironmentSnapshot {
     pub(crate) timezone: String,
 }
 
-/// One immutable model boundary shared by forks, durable snapshots, and rollout projection.
 #[derive(Clone)]
 #[cfg(feature = "openai")]
 pub(crate) struct CommittedSession {
     lineage_id: Arc<str>,
     selected_model: Model,
     model: ModelCheckpoint,
-    // Runtime preparation may normalize context IDs, images, and request prefix.
-    // Until another boundary is committed, snapshot the retained boundary exactly.
+
     retained_snapshot: Option<SessionSnapshot>,
-    // Session settings recorded with every snapshot of this boundary, so a
-    // stored session resumes with its actual policy rather than a default.
+
     thinking: crate::Thinking,
     service_tier: crate::ServiceTier,
 }
@@ -136,21 +130,6 @@ impl CommittedSession {
         self.selected_model
     }
 
-    #[allow(dead_code, reason = "consumed by the native rollout boundary only")]
-    pub(crate) fn rollout_history(&self) -> crate::client::responses::ResponseHistory {
-        self.model.history()
-    }
-
-    #[allow(dead_code, reason = "consumed by the native rollout boundary only")]
-    pub(crate) const fn history_revision(&self) -> u64 {
-        self.model.history_revision()
-    }
-
-    #[cfg(all(feature = "openai", not(target_family = "wasm")))]
-    pub(crate) const fn context_baseline(&self) -> &ContextBaseline {
-        self.model.context_baseline()
-    }
-
     pub(crate) fn snapshot(&self) -> SessionSnapshot {
         if let Some(snapshot) = &self.retained_snapshot {
             let mut snapshot = snapshot.clone();
@@ -178,7 +157,6 @@ impl CommittedSession {
     }
 }
 
-/// Accounting basis for exactly the history retained at a durable boundary.
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
 pub(crate) struct ContextUsage {
     pub(crate) usage: Option<Usage>,
@@ -188,16 +166,6 @@ pub(crate) struct ContextUsage {
     pub(crate) is_estimate: bool,
 }
 
-/// Versioned, serializable state for resuming a completed session boundary.
-///
-/// Its fields are intentionally private: callers may persist or transfer the
-/// value, but Nanocodex remains responsible for interpreting model history and
-/// cache state. Provider response IDs are deliberately excluded: the first
-/// resumed request replays the authoritative typed history, then subsequent
-/// requests follow the configured history policy. The stored request prefix
-/// records the completed boundary; a resumed runtime replaces it with its
-/// current instructions and tool definitions while retaining conversation
-/// history and cache lineage.
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
 pub struct SessionSnapshot {
     version: u32,
@@ -219,22 +187,19 @@ pub struct SessionSnapshot {
     context_usage: Option<ContextUsage>,
     #[serde(default)]
     reasoning: crate::reasoning::ReasoningState,
-    /// Reasoning effort selected for the session at this boundary. Snapshots
-    /// written before it was recorded omit it; see [`Self::thinking`].
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     thinking: Option<crate::Thinking>,
-    /// Processing tier selected for the session at this boundary.
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     service_tier: Option<crate::ServiceTier>,
 }
 
-/// Session metadata separated from independently persisted conversation items.
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
 #[serde(transparent)]
 pub struct SessionSnapshotHead(SessionSnapshot);
 
 impl SessionSnapshotHead {
-    /// Reassembles the exact snapshot with its stored context records.
     #[must_use]
     pub fn with_context(
         mut self,
@@ -259,7 +224,6 @@ impl fmt::Debug for SessionSnapshot {
 }
 
 impl SessionSnapshot {
-    /// Separates metadata from conversation bodies for record-based persistence.
     #[must_use]
     pub fn into_context_parts(
         mut self,
@@ -273,83 +237,31 @@ impl SessionSnapshot {
         (SessionSnapshotHead(self), history, prefix)
     }
 
-    #[cfg(all(feature = "rollout", not(target_family = "wasm")))]
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn from_rollout(
-        model: Model,
-        thread_id: String,
-        prompt_cache_key: String,
-        workspace: String,
-        base_instructions: Option<String>,
-        history: Vec<ResponseItem>,
-        client_authored: std::collections::BTreeSet<String>,
-        context_snapshot: Option<ContextBaseline>,
-        reasoning: crate::reasoning::ReasoningState,
-    ) -> Result<Self> {
-        let canonical_context = history
-            .iter()
-            .find(|item| item.is_user_message())
-            .cloned()
-            .ok_or_else(|| {
-                NanocodexError::InvalidCheckpoint(
-                    "rollout does not contain a user message".to_owned(),
-                )
-            })?;
-        Ok(Self {
-            version: SESSION_SNAPSHOT_VERSION,
-            model: model.as_str().to_owned(),
-            lineage_id: thread_id,
-            prompt_cache_key,
-            workspace,
-            base_instructions,
-            request_prefix: None,
-            canonical_context,
-            history,
-            client_authored,
-            context_snapshot,
-            context_usage: None,
-            reasoning,
-            thinking: None,
-            service_tier: None,
-        })
-    }
-
-    /// Reasoning effort the session had selected at this boundary.
-    ///
-    /// `None` only for snapshots written before the setting was recorded
-    /// (and for rollout imports, which do not carry it); their owner falls
-    /// back to the model's default.
     #[must_use]
     pub const fn thinking(&self) -> Option<crate::Thinking> {
         self.thinking
     }
 
-    /// Processing tier the session had selected at this boundary;
-    /// `None` for older snapshots, which fall back to the standard tier.
     #[must_use]
     pub const fn service_tier(&self) -> Option<crate::ServiceTier> {
         self.service_tier
     }
 
-    /// Snapshot format version understood by this Nanocodex release.
     #[must_use]
     pub const fn version(&self) -> u32 {
         self.version
     }
 
-    /// Returns the absolute workspace retained by this session boundary.
     #[must_use]
     pub fn workspace(&self) -> &str {
         &self.workspace
     }
 
-    /// Cache lineage of the conversation tree this boundary belongs to.
     #[cfg(feature = "openai")]
     pub(crate) fn lineage_id(&self) -> &str {
         &self.lineage_id
     }
 
-    /// Model pinned by this boundary.
     #[cfg(feature = "openai")]
     pub(crate) fn model(&self) -> Result<Model> {
         self.model.parse::<Model>().map_err(|error| {

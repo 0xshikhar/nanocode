@@ -1,8 +1,8 @@
-use super::*;
 use super::handle::request_fork;
+use super::*;
 pub use nanocode_agent::backend::AgentFactory;
 pub use nanocode_agent::backend::*;
-/// Resolves a public fork point against this Codex conversation tree.
+
 #[cfg(feature = "openai")]
 pub(super) fn resolve_fork_point(
     point: crate::session::ForkPoint,
@@ -15,7 +15,6 @@ pub(super) fn resolve_fork_point(
                 .boundary()
                 .ok_or(NanocodexError::ReplayedCheckpointUnavailable)?;
             let Some(committed) = boundary.downcast::<CommittedSession>() else {
-                // Only another family's boundary needs materializing to be identified.
                 if !boundary.is::<super::checkpoint::ReplayedBoundary>()
                     && let Ok(checkpoint) = boundary.checkpoint()
                 {
@@ -49,11 +48,10 @@ pub(super) struct LocalLifecycle {
     pub(super) execution: Execution,
     pub(super) shutdown: DriverShutdown,
     pub(super) checkpoints: Arc<CheckpointSource>,
-    /// Resolves once the driver persisted a durable child's first checkpoint.
+
     pub(super) initial_ready: Arc<std::sync::Mutex<Option<oneshot::Receiver<Result<()>>>>>,
 }
 
-/// Lifecycle operations supported by the local Codex driver.
 #[cfg(feature = "openai")]
 const CODEX_CAPABILITIES: Capabilities = {
     let mut capabilities = Capabilities::NONE;
@@ -83,7 +81,7 @@ impl LifecycleBackend for LocalLifecycle {
 
     fn capabilities(&self) -> Capabilities {
         let mut capabilities = CODEX_CAPABILITIES;
-        // Processing tiers are offered per model by the shared capability source.
+
         let model = self
             .child_handle
             .harness_model()
@@ -96,12 +94,7 @@ impl LifecycleBackend for LocalLifecycle {
     }
 
     fn persistence(&self) -> Option<Persistence> {
-        let durable = self.execution.durable_state_id().map(Persistence::durable);
-        #[cfg(not(target_family = "wasm"))]
-        if let Some(rollout) = self.execution.info().cloned() {
-            return Some(durable.unwrap_or_default().with_rollout(rollout));
-        }
-        durable
+        self.execution.durable_state_id().map(Persistence::durable)
     }
 
     fn submit(&self, request: BackendPrompt) -> BackendFuture<Result<BackendTurn>> {
@@ -264,7 +257,7 @@ impl LifecycleBackend for LocalLifecycle {
         })
     }
 
-    fn set_harness_model(&self, model: crate::HarnessModel) -> BackendFuture<Result<()>> {
+    fn set_harness_model(&self, model: crate::ModelSelection) -> BackendFuture<Result<()>> {
         let Some(model) = model.as_codex() else {
             return Box::pin(async {
                 Err(NanocodexError::InvalidRequest(

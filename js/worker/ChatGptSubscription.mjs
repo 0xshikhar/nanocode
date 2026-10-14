@@ -5,7 +5,7 @@ import { openSubscription } from "../runtime/chatgpt-subscription.mjs";
 
 let initialization;
 
-/** Opens the Rust-owned ChatGPT lifecycle in a module Worker. */
+
 export async function open(options) {
   installHostBridge();
   if (options?.module === undefined) {
@@ -15,8 +15,8 @@ export async function open(options) {
   return openSubscription(
     options,
     (config) => WasmChatGptSubscription.open(config),
-    // A Cloudflare isolate can outlive an evicted Durable Object instance.
-    // Rebind its stable subscription ID to the reconstructed instance.
+
+
     { replaceHost: true },
   );
 }

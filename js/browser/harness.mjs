@@ -1,7 +1,7 @@
 import { createWorkerEvaluator } from "../runtime/worker-evaluator.mjs";
 import { browser } from "../tools/browser/index.mjs";
 
-/** Builds the one canonical browser Agent harness used by every browser surface. */
+
 export async function createBrowserHarness(options) {
   if (!options || typeof options !== "object" || Array.isArray(options)) {
     throw new TypeError("browser harness options must be an object");

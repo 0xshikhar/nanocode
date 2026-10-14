@@ -6,7 +6,6 @@ use web_time::Instant;
 
 use crate::client::{attempt::ResponsesAttemptKind, service_error::FailurePhase};
 
-/// Stable transport identifier emitted in agent telemetry.
 pub const TRANSPORT: &str = "responses_websocket_v2";
 
 pub(crate) fn serialize_compact_raw_json<S>(

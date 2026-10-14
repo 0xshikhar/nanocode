@@ -1,16 +1,16 @@
-// Process-local monotonic anchors are deliberately never serialized across hosts.
+
 const retryAnchors = new WeakMap();
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-/** Parse once at header receipt. Epoch milliseconds are portable across JS/WASM. */
+
 export function retryAfterAdvice(value, receivedAt = Date.now(), receivedMonotonic = monotonicNow()) {
   if (typeof value !== "string" || !Number.isSafeInteger(receivedAt) || receivedAt < 0) return {};
   value = value.replace(/^[ \t]+|[ \t]+$/g, "");
   let seconds;
   let deadline;
-  // Decimal seconds preserve existing host bridge compatibility; signs/exponents are not advice.
+
   if (/^(?:\d+(?:\.\d+)?|\.\d+)$/.test(value)) {
     seconds = Number(value);
     const milliseconds = seconds * 1_000;
@@ -30,7 +30,7 @@ export function retryAfterAdvice(value, receivedAt = Date.now(), receivedMonoton
   return advice;
 }
 
-/** Read an already-captured deadline, never restart it after body/observer work. */
+
 export function retryAfterRemaining(advice, now = Date.now(), currentMonotonic = monotonicNow()) {
   const deadline = advice?.retry_after_deadline_ms;
   if (!Number.isSafeInteger(deadline) || deadline < 0) return undefined;
@@ -41,7 +41,7 @@ export function retryAfterRemaining(advice, now = Date.now(), currentMonotonic =
   return Number.isSafeInteger(now) && now >= 0 ? Math.max(0, deadline - now) : undefined;
 }
 
-/** Transfer metadata and its process-local anchor when an error changes JS layers. */
+
 export function attachRetryAfterAdvice(target, advice) {
   Object.assign(target, advice);
   const anchor = retryAnchors.get(advice);
@@ -77,7 +77,7 @@ function httpDate(value, receivedAt) {
   const month = MONTHS.indexOf(monthName);
   const deadline = Date.UTC(Number(year), month, Number(day), Number(hour), Number(minute), Number(second));
   const date = new Date(deadline);
-  // Date.parse alone accepts rollover dates, local zones and non-HTTP date syntax.
+
   if (Number(year) < 1601 || date.getUTCFullYear() !== Number(year)
     || date.getUTCMonth() !== month || date.getUTCDate() !== Number(day)
     || date.getUTCHours() !== Number(hour) || date.getUTCMinutes() !== Number(minute)

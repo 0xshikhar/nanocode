@@ -1,4 +1,3 @@
-//! X11 metadata and XI2 mouse-only observation. Xwayland is deliberately refused.
 use super::*;
 use std::{
     io,
@@ -15,8 +14,6 @@ use x11rb::{
 };
 use x11rb_protocol::RawFdContainer;
 
-// x11rb's default poll has no deadline. Nonblocking reads/writes remain native;
-// short bounded sleeps permit retries without an unbounded native poll call.
 struct DeadlineStream {
     inner: DefaultStream,
     deadline: std::sync::Mutex<Instant>,
@@ -53,7 +50,6 @@ impl Stream for DeadlineStream {
     }
 }
 fn failed(_: impl fmt::Display) -> ObserverError {
-    // Do not include server-controlled text or authentication diagnostics.
     ObserverError::new(
         "native_observation_failed",
         "X11 metadata unavailable, disconnected, or timed out",
@@ -97,7 +93,7 @@ impl Observer {
                 )
             })?,
         };
-        // No TCP connection, network timeout, or remote desktop authentication.
+
         if !display.starts_with(':') && !display.starts_with("unix:") {
             return Err(ObserverError::new(
                 "unsupported_display",
@@ -158,7 +154,7 @@ impl Observer {
             .map_err(failed)?
             .reply()
             .map_err(failed)?;
-        // XIAllMasterDevices = 1. Never select key or raw-motion events.
+
         connection
             .xinput_xi_select_events(
                 root,
@@ -207,8 +203,7 @@ impl Observer {
             )
         })
     }
-    /// Read only the selected drawable, never the root framebuffer. Refuse
-    /// obscuration because core X11 gives undefined pixels for covered regions.
+
     pub(super) fn frame(&mut self, expected: &ForegroundContext) -> Result<ObservedFrame> {
         use x11rb::protocol::xproto::{ImageFormat, ImageOrder};
         self.connection.stream().arm();
@@ -408,8 +403,7 @@ impl Observer {
     }
     fn process_id(&self, window: u32) -> Option<u32> {
         use x11rb::protocol::res::{ClientIdMask, ClientIdSpec, ConnectionExt as _};
-        // XRes obtains the client's PID from the X server. _NET_WM_PID is a
-        // client-controlled property and cannot attest process identity.
+
         self.connection
             .res_query_client_ids(&[ClientIdSpec {
                 client: window,
@@ -426,8 +420,7 @@ impl Observer {
             })
             .filter(|id| *id != 0)
     }
-    /// Privacy check only. X11 may queue input while waiting for replies, but
-    /// this method never removes events or advances the public sample baseline.
+
     pub(super) fn context(&mut self) -> Result<(ForegroundContext, SensitiveInput)> {
         self.connection.stream().arm();
         let window = self.foreground()?;
@@ -469,8 +462,7 @@ impl Observer {
         }
         let mut events = Vec::new();
         let mut focus_transition = false;
-        // Bound work and memory even if the desktop floods input. Overflow is an
-        // error, never silently represented as a complete observation.
+
         for count in 0..=256 {
             let Some(event) = self.connection.poll_for_event().map_err(failed)? else {
                 break;
@@ -568,8 +560,7 @@ fn read_private(path: std::path::PathBuf, limit: u64) -> Result<Vec<u8>> {
     }
     Ok(bytes)
 }
-// Parse the Hand's private Xauthority without changing XAUTHORITY globally or
-// logging cookies. Require an exact display or the server's wildcard record.
+
 fn private_auth(bytes: &[u8], display: u16) -> Result<(Vec<u8>, Vec<u8>)> {
     fn field<'a>(bytes: &mut &'a [u8]) -> Option<&'a [u8]> {
         let length = u16::from_be_bytes(bytes.get(..2)?.try_into().ok()?) as usize;
@@ -611,8 +602,7 @@ fn sensitivity(pid: Option<u32>) -> (SensitiveInput, Option<AccessibilitySummary
     };
     let unknown = || (SensitiveInput::Unknown, None);
     let Some(pid) = pid else { return unknown() };
-    // AT-SPI is optional. Interpreter/import/bus/permission/timeout failures all
-    // remain Unknown. Embedded fixed script emits only allowlisted constants.
+
     let Ok(mut child) = Command::new("python3")
         .args(["-I", "-c", include_str!("atspi.py"), &pid.to_string()])
         .stdin(Stdio::null())

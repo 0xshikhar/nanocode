@@ -9,7 +9,7 @@ use schema_types::render_json_schema_to_typescript;
 
 const DEFERRED_NESTED_TOOLS_GUIDANCE: &str = r"Some deferred nested tools may be omitted from this description. They are still available on the global `tools` object and listed in `ALL_TOOLS`.
 To find one, filter `ALL_TOOLS` by `name` and `description`.";
-// Based on https://modelcontextprotocol.io/specification/draft/schema#calltoolresult.
+
 const MCP_TYPESCRIPT_PREAMBLE: &str = r#"type Role = "user" | "assistant";
 type MetaObject = Record<string, unknown>;
 type Annotations = {

@@ -3,11 +3,6 @@ pub use preservation::{
     BeforeCompaction, BeforeCompactionRequest, CompactionMessage, CompactionReceipt,
 };
 
-#[cfg(not(target_family = "wasm"))]
-#[path = "native.rs"]
-mod platform;
-
-#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 #[path = "disabled.rs"]
 mod platform;
 
@@ -22,127 +17,84 @@ use crate::{
 };
 
 #[cfg(not(target_family = "wasm"))]
-use crate::rollout::{RolloutConfig, RolloutInfo};
-
-/// Boxed operation returned by an [`ExecutionPolicy`].
-#[cfg(not(target_family = "wasm"))]
 pub type ExecutionFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-/// Boxed operation returned by an [`ExecutionPolicy`].
 #[cfg(target_family = "wasm")]
 pub type ExecutionFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
-/// Result of admitting one identified execution into an attached policy.
 pub enum ExecutionAdmission {
-    /// Execute a newly accepted operation.
     Execute,
-    /// Resume an unfinished operation admitted by an earlier host instance.
+
     Resume,
-    /// Return an already completed operation without executing it again.
+
     Completed {
-        /// Session boundary committed with the output.
         snapshot: SessionSnapshot,
-        /// Previously completed turn output.
+
         output: ExecutionOutput,
     },
-    /// Return an already failed operation without executing it again.
+
     Failed {
-        /// Session boundary committed with the failure.
         snapshot: SessionSnapshot,
-        /// Previously retained failure detail.
+
         error: String,
     },
-    /// The operation was explicitly cancelled.
+
     Cancelled,
 }
 
-/// Result of beginning one externally observable execution step.
 pub enum ExecutionStepAdmission {
-    /// Perform the effect.
     Execute,
-    /// Reuse the exact JSON output retained by a prior attempt.
+
     Replay(String),
 }
 
-/// Current execution metadata and the active model context.
-/// Hosts persist context records independently from the small execution position.
 pub struct ExecutionContinuation {
-    /// Serialized execution position and settings, excluding conversation bodies.
     pub state_json: String,
-    /// Active conversation items in model order.
+
     pub history: Vec<crate::client::responses::ResponseItem>,
-    /// Frozen request prefix for the current execution.
+
     pub prefix: Vec<crate::client::responses::ResponseItem>,
 }
 
-/// One live steering input retained for deterministic operation recovery.
 #[derive(Clone, Debug)]
 pub struct ExecutionSteer {
-    /// Stable one-based FIFO position within the operation.
     pub index: u32,
-    /// Model call that was current when the steering input was accepted.
+
     pub accepted_after_model_call_index: u32,
-    /// Model-call ordinal before which this input was applied, when known.
+
     pub model_call_index: Option<u32>,
-    /// Exact serialized [`crate::client::Prompt`] accepted by the turn.
+
     pub input_json: String,
 }
 
-/// Optional caller identity paired with a retained steering input.
 pub type IdentifiedExecutionSteer = (Option<String>, ExecutionSteer);
 
-/// Serializable result retained at a completed agent boundary.
 #[derive(Clone, Deserialize, Serialize)]
 pub struct ExecutionOutput {
-    /// Final assistant message.
     pub final_message: String,
-    /// Exact token and cost accounting for the turn.
+
     pub usage: TurnUsage,
 }
 
-/// Model, reasoning effort and processing tier a just-created child starts with.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InitialSettings {
-    /// Model the child runs.
     pub model: crate::Model,
-    /// Reasoning effort of the child's turns.
+
     pub thinking: crate::Thinking,
-    /// Processing tier of the child's turns.
+
     pub service_tier: ServiceTier,
 }
 
-/// Optional higher-layer policy for admitting executions and intercepting effects.
-///
-/// The core agent invokes this interface at its existing transactional
-/// boundaries but does not choose a persistence format, retry policy, storage
-/// backend, or recovery algorithm. Higher crates may implement those choices
-/// without becoming a dependency of `nanocode-runtime`.
 #[cfg(not(target_family = "wasm"))]
 pub trait ExecutionPolicy: Send + Sync {
-    /// Identity of the durable state this policy persists the session to,
-    /// reported by [`crate::Nanocodex::persistence`]. Defaults to none.
     fn durable_state_id(&self) -> Option<String> {
         None
     }
 
-    /// Supplies the policy that persists a fork, side conversation, subagent
-    /// or restored subagent of this session as its own resumable state. The
-    /// default `None` rejects every child of a policy-owned session with
-    /// [`NanocodexError::ExecutionPolicyBranchUnsupported`] instead of
-    /// starting an unsaved one. Called before the child starts; the child
-    /// policy is owned by that child alone, and a restored subagent receives
-    /// the policy for its existing session ID.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error to reject the child.
     fn branch(&self, _child: &crate::SessionInfo) -> Result<Option<Arc<dyn ExecutionPolicy>>> {
         Ok(None)
     }
 
-    /// Resolves a failed attempt against the authoritative operation state.
-    /// A pending operation must return a retry/reopen disposition, even when
-    /// its original failure was not a transport or storage error.
     fn recover_failure<'a>(
         &'a self,
         _operation_id: String,
@@ -151,17 +103,10 @@ pub trait ExecutionPolicy: Send + Sync {
         Box::pin(async move { error })
     }
 
-    /// Releases policy-owned lifecycle state after all Agent work has stopped.
-    ///
-    /// The default is a no-op so existing stateless policies remain source
-    /// compatible. Stateful policies should make this operation idempotent.
     fn shutdown<'a>(&'a self) -> ExecutionFuture<'a, Result<()>> {
         Box::pin(async { Ok(()) })
     }
 
-    /// Commits a model-only resumable boundary such as standalone compaction.
-    /// The default fails closed so omission cannot acknowledge an uncommitted
-    /// boundary.
     fn commit_checkpoint<'a>(
         &'a self,
         _snapshot: SessionSnapshot,
@@ -173,13 +118,6 @@ pub trait ExecutionPolicy: Send + Sync {
         })
     }
 
-    /// Persists the first checkpoint of a just-created fork, side
-    /// conversation, subagent or restored subagent, so the child is listed
-    /// and resumable before its first turn. A state that already holds a
-    /// checkpoint keeps it: restoring a child never replaces its history.
-    /// A fresh subagent has no conversation yet (`None`): its state records
-    /// only its catalog identity and the settings it was created with. The
-    /// default persists nothing.
     fn commit_initial_checkpoint<'a>(
         &'a self,
         _snapshot: Option<SessionSnapshot>,
@@ -188,33 +126,24 @@ pub trait ExecutionPolicy: Send + Sync {
         Box::pin(async { Ok(()) })
     }
 
-    /// Retracts state written only by [`Self::commit_initial_checkpoint`]
-    /// when the child's creation is abandoned, such as a failed atomic batch.
-    /// Never removes history the state held before. The default does nothing.
     fn discard_initial_checkpoint<'a>(&'a self) -> ExecutionFuture<'a, Result<()>> {
         Box::pin(async { Ok(()) })
     }
 
-    /// Admits a caller-identified operation.
     fn admit<'a>(
         &'a self,
         operation_id: String,
         input_json: String,
     ) -> ExecutionFuture<'a, Result<ExecutionAdmission>>;
 
-    /// Admits an automatically identified operation, recovering an unfinished
-    /// compatible operation when the policy selects one.
     fn admit_automatic<'a>(
         &'a self,
         candidate_operation_id: String,
         input_json: String,
     ) -> ExecutionFuture<'a, Result<(String, ExecutionAdmission)>>;
 
-    /// Releases a live claim when command acceptance is abandoned.
     fn release<'a>(&'a self, operation_id: String) -> ExecutionFuture<'a, ()>;
 
-    /// Marks an admitted operation as cancelled. The default fails closed so
-    /// omission cannot terminalize an operation by merely returning success.
     fn cancel<'a>(
         &'a self,
         _operation_id: String,
@@ -227,10 +156,8 @@ pub trait ExecutionPolicy: Send + Sync {
         })
     }
 
-    /// Starts another attempt for an admitted operation.
     fn begin_attempt<'a>(&'a self, operation_id: String) -> ExecutionFuture<'a, Result<()>>;
 
-    /// Retains steering input before acknowledging it to the caller.
     fn accept_steer<'a>(
         &'a self,
         _operation_id: String,
@@ -244,13 +171,10 @@ pub trait ExecutionPolicy: Send + Sync {
         })
     }
 
-    /// Whether identified steering acceptance atomically retains replay receipts.
     fn supports_steer_receipts(&self) -> bool {
         false
     }
 
-    /// Atomically retains caller identity with input. `None` replays a prior acceptance.
-    /// Policies without receipt support retain their existing acceptance behavior.
     fn accept_identified_steer<'a>(
         &'a self,
         operation_id: String,
@@ -269,7 +193,6 @@ pub trait ExecutionPolicy: Send + Sync {
         })
     }
 
-    /// Returns steering inputs retained for the current operation attempt.
     fn retained_steers<'a>(
         &'a self,
         _operation_id: String,
@@ -277,8 +200,6 @@ pub trait ExecutionPolicy: Send + Sync {
         Box::pin(async { Ok(Vec::new()) })
     }
 
-    /// Returns optional caller identities alongside retained steering inputs.
-    /// Existing policies keep their original uncorrelated return type.
     fn retained_identified_steers<'a>(
         &'a self,
         operation_id: String,
@@ -290,7 +211,6 @@ pub trait ExecutionPolicy: Send + Sync {
         })
     }
 
-    /// Durably removes the latest unbound steering input.
     fn withdraw_steer<'a>(
         &'a self,
         _operation_id: String,
@@ -303,7 +223,6 @@ pub trait ExecutionPolicy: Send + Sync {
         })
     }
 
-    /// Binds retained steering input to the model boundary that consumes it.
     fn bind_steer<'a>(
         &'a self,
         _operation_id: String,
@@ -317,20 +236,17 @@ pub trait ExecutionPolicy: Send + Sync {
         })
     }
 
-    /// Reads the current conversation and execution position of an interrupted turn.
     fn continuation<'a>(
         &'a self,
         operation_id: String,
     ) -> ExecutionFuture<'a, Result<Option<ExecutionContinuation>>>;
 
-    /// Atomically replaces the current execution state and retires its settled effects.
     fn advance<'a>(
         &'a self,
         operation_id: String,
         continuation: ExecutionContinuation,
     ) -> ExecutionFuture<'a, Result<()>>;
 
-    /// Begins or replays one typed external effect.
     fn begin_step<'a>(
         &'a self,
         operation_id: String,
@@ -339,7 +255,6 @@ pub trait ExecutionPolicy: Send + Sync {
         input_json: String,
     ) -> ExecutionFuture<'a, Result<ExecutionStepAdmission>>;
 
-    /// Commits the output of one executed effect.
     fn complete_step<'a>(
         &'a self,
         operation_id: String,
@@ -347,7 +262,6 @@ pub trait ExecutionPolicy: Send + Sync {
         output_json: String,
     ) -> ExecutionFuture<'a, Result<()>>;
 
-    /// Atomically commits a terminal turn output and its resumable boundary.
     fn complete<'a>(
         &'a self,
         operation_id: String,
@@ -355,14 +269,12 @@ pub trait ExecutionPolicy: Send + Sync {
         output: ExecutionOutput,
     ) -> ExecutionFuture<'a, Result<()>>;
 
-    /// Records a failed attempt that may be resumed later.
     fn fail_attempt<'a>(
         &'a self,
         operation_id: String,
         error: String,
     ) -> ExecutionFuture<'a, Result<()>>;
 
-    /// Atomically commits a failed turn and its resumable boundary.
     fn fail<'a>(
         &'a self,
         operation_id: String,
@@ -371,36 +283,16 @@ pub trait ExecutionPolicy: Send + Sync {
     ) -> ExecutionFuture<'a, Result<()>>;
 }
 
-/// Optional higher-layer policy for admitting executions and intercepting effects.
-///
-/// JavaScript host futures remain isolate-local, while the policy handle stays
-/// thread-safe so cheap agent capabilities retain their public `Send + Sync`
-/// guarantees on every target.
 #[cfg(target_family = "wasm")]
 pub trait ExecutionPolicy: Send + Sync {
-    /// Identity of the durable state this policy persists the session to,
-    /// reported by [`crate::Nanocodex::persistence`]. Defaults to none.
     fn durable_state_id(&self) -> Option<String> {
         None
     }
 
-    /// Supplies the policy that persists a fork, side conversation, subagent
-    /// or restored subagent of this session as its own resumable state. The
-    /// default `None` rejects every child of a policy-owned session with
-    /// [`NanocodexError::ExecutionPolicyBranchUnsupported`] instead of
-    /// starting an unsaved one. Called before the child starts; the child
-    /// policy is owned by that child alone, and a restored subagent receives
-    /// the policy for its existing session ID.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error to reject the child.
     fn branch(&self, _child: &crate::SessionInfo) -> Result<Option<Arc<dyn ExecutionPolicy>>> {
         Ok(None)
     }
 
-    /// Resolves a failed attempt against the authoritative operation state.
-    /// Pending work must remain recoverable regardless of the original error.
     fn recover_failure<'a>(
         &'a self,
         _operation_id: String,
@@ -409,16 +301,10 @@ pub trait ExecutionPolicy: Send + Sync {
         Box::pin(async move { error })
     }
 
-    /// Releases policy-owned lifecycle state after all Agent work has stopped.
-    ///
-    /// The default is a no-op so existing stateless policies remain source
-    /// compatible. Stateful policies should make this operation idempotent.
     fn shutdown<'a>(&'a self) -> ExecutionFuture<'a, Result<()>> {
         Box::pin(async { Ok(()) })
     }
 
-    /// Commits a model-only resumable boundary such as standalone compaction.
-    /// The default fails closed.
     fn commit_checkpoint<'a>(
         &'a self,
         _snapshot: SessionSnapshot,
@@ -430,13 +316,6 @@ pub trait ExecutionPolicy: Send + Sync {
         })
     }
 
-    /// Persists the first checkpoint of a just-created fork, side
-    /// conversation, subagent or restored subagent, so the child is listed
-    /// and resumable before its first turn. A state that already holds a
-    /// checkpoint keeps it: restoring a child never replaces its history.
-    /// A fresh subagent has no conversation yet (`None`): its state records
-    /// only its catalog identity and the settings it was created with. The
-    /// default persists nothing.
     fn commit_initial_checkpoint<'a>(
         &'a self,
         _snapshot: Option<SessionSnapshot>,
@@ -445,28 +324,24 @@ pub trait ExecutionPolicy: Send + Sync {
         Box::pin(async { Ok(()) })
     }
 
-    /// Retracts state written only by [`Self::commit_initial_checkpoint`]
-    /// when the child's creation is abandoned, such as a failed atomic batch.
-    /// Never removes history the state held before. The default does nothing.
     fn discard_initial_checkpoint<'a>(&'a self) -> ExecutionFuture<'a, Result<()>> {
         Box::pin(async { Ok(()) })
     }
 
-    /// Admits a caller-identified operation.
     fn admit<'a>(
         &'a self,
         operation_id: String,
         input_json: String,
     ) -> ExecutionFuture<'a, Result<ExecutionAdmission>>;
-    /// Admits or recovers an automatically identified operation.
+
     fn admit_automatic<'a>(
         &'a self,
         candidate_operation_id: String,
         input_json: String,
     ) -> ExecutionFuture<'a, Result<(String, ExecutionAdmission)>>;
-    /// Releases an abandoned live claim.
+
     fn release<'a>(&'a self, operation_id: String) -> ExecutionFuture<'a, ()>;
-    /// Marks an operation as cancelled. The default fails closed.
+
     fn cancel<'a>(
         &'a self,
         _operation_id: String,
@@ -478,9 +353,9 @@ pub trait ExecutionPolicy: Send + Sync {
             })
         })
     }
-    /// Starts another operation attempt.
+
     fn begin_attempt<'a>(&'a self, operation_id: String) -> ExecutionFuture<'a, Result<()>>;
-    /// Retains steering input before acknowledging it to the caller.
+
     fn accept_steer<'a>(
         &'a self,
         _operation_id: String,
@@ -493,13 +368,11 @@ pub trait ExecutionPolicy: Send + Sync {
             })
         })
     }
-    /// Whether identified steering acceptance atomically retains replay receipts.
+
     fn supports_steer_receipts(&self) -> bool {
         false
     }
 
-    /// Atomically retains caller identity with input. `None` replays a prior acceptance.
-    /// Policies without receipt support retain their existing acceptance behavior.
     fn accept_identified_steer<'a>(
         &'a self,
         operation_id: String,
@@ -518,15 +391,13 @@ pub trait ExecutionPolicy: Send + Sync {
         })
     }
 
-    /// Returns steering inputs retained for the current operation attempt.
     fn retained_steers<'a>(
         &'a self,
         _operation_id: String,
     ) -> ExecutionFuture<'a, Result<Vec<ExecutionSteer>>> {
         Box::pin(async { Ok(Vec::new()) })
     }
-    /// Returns optional caller identities alongside retained steering inputs.
-    /// Existing policies keep their original uncorrelated return type.
+
     fn retained_identified_steers<'a>(
         &'a self,
         operation_id: String,
@@ -538,7 +409,6 @@ pub trait ExecutionPolicy: Send + Sync {
         })
     }
 
-    /// Durably removes the latest unbound steering input.
     fn withdraw_steer<'a>(
         &'a self,
         _operation_id: String,
@@ -551,7 +421,6 @@ pub trait ExecutionPolicy: Send + Sync {
         })
     }
 
-    /// Binds retained steering input to the model boundary that consumes it.
     fn bind_steer<'a>(
         &'a self,
         _operation_id: String,
@@ -564,20 +433,18 @@ pub trait ExecutionPolicy: Send + Sync {
             })
         })
     }
-    /// Reads the current conversation and execution position of an interrupted turn.
+
     fn continuation<'a>(
         &'a self,
         operation_id: String,
     ) -> ExecutionFuture<'a, Result<Option<ExecutionContinuation>>>;
 
-    /// Atomically replaces the current execution state and retires its settled effects.
     fn advance<'a>(
         &'a self,
         operation_id: String,
         continuation: ExecutionContinuation,
     ) -> ExecutionFuture<'a, Result<()>>;
 
-    /// Begins or replays one external effect.
     fn begin_step<'a>(
         &'a self,
         operation_id: String,
@@ -585,27 +452,27 @@ pub trait ExecutionPolicy: Send + Sync {
         kind: String,
         input_json: String,
     ) -> ExecutionFuture<'a, Result<ExecutionStepAdmission>>;
-    /// Commits one effect output.
+
     fn complete_step<'a>(
         &'a self,
         operation_id: String,
         step_id: String,
         output_json: String,
     ) -> ExecutionFuture<'a, Result<()>>;
-    /// Commits a terminal turn and resumable boundary.
+
     fn complete<'a>(
         &'a self,
         operation_id: String,
         snapshot: SessionSnapshot,
         output: ExecutionOutput,
     ) -> ExecutionFuture<'a, Result<()>>;
-    /// Records a failed attempt.
+
     fn fail_attempt<'a>(
         &'a self,
         operation_id: String,
         error: String,
     ) -> ExecutionFuture<'a, Result<()>>;
-    /// Commits a failed turn and resumable boundary.
+
     fn fail<'a>(
         &'a self,
         operation_id: String,
@@ -636,11 +503,6 @@ impl ExecutionPolicyRecipe {
 }
 
 impl ExecutionConfig {
-    #[cfg(not(target_family = "wasm"))]
-    pub(crate) fn set_rollout(&mut self, rollout: RolloutConfig) {
-        self.platform.set_rollout(rollout);
-    }
-
     pub(crate) fn set_policy(&mut self, policy: Arc<dyn ExecutionPolicy>) {
         self.policy = Some(ExecutionPolicyRecipe::Shared(policy));
     }
@@ -652,19 +514,12 @@ impl ExecutionConfig {
         self.policy = Some(ExecutionPolicyRecipe::PerAgent(factory));
     }
 
-    // Root execution policies never propagate into children: every fork, side
-    // conversation, subagent and restored subagent of a policy-owned session
-    // runs under its own policy from [`ExecutionPolicy::branch`], and records
-    // its own rollout beside the parent's.
     pub(crate) fn for_new_thread(
         &self,
         operation: &'static str,
         branch_policy: Option<Arc<dyn ExecutionPolicy>>,
         journal_backed: bool,
     ) -> Result<Self> {
-        // A durable parent never silently creates an unsaved child. A durable
-        // root without a session catalog still saves the subagents it spawns
-        // or restores in its task-tree journal; a fork has no such home.
         let saved_by_journal = journal_backed && operation != "fork";
         if self.policy.is_some() && branch_policy.is_none() && !saved_by_journal {
             return Err(NanocodexError::ExecutionPolicyBranchUnsupported { operation });
@@ -778,10 +633,7 @@ impl Execution {
             input: prompt.instruction.clone(),
         };
         self.platform.accepted_input(input.clone()).await?;
-        events.emit(
-            crate::client::events::AgentEventKind::InputAccepted,
-            &input,
-        )?;
+        events.emit(crate::client::events::AgentEventKind::InputAccepted, &input)?;
         Ok(())
     }
 
@@ -796,11 +648,6 @@ impl Execution {
             }
             (_, _, outcome) => outcome,
         }
-    }
-
-    #[cfg(not(target_family = "wasm"))]
-    pub(crate) const fn info(&self) -> Option<&RolloutInfo> {
-        self.platform.info()
     }
 
     pub(crate) const fn identifies_prompts(&self) -> bool {
@@ -858,9 +705,6 @@ impl Execution {
         }
     }
 
-    /// Retires an operation whose attempt never began, without a checkpoint.
-    /// The durable state refuses once an attempt ran or recorded progress;
-    /// false then leaves the caller on its ordered reconciliation path.
     pub(crate) async fn cancel_unstarted(&self, operation_id: &str) -> bool {
         match &self.policy {
             Some(policy) => policy.cancel(operation_id.to_owned(), None).await.is_ok(),
@@ -928,8 +772,7 @@ impl Execution {
             workspace: workspace.map(str::to_owned),
         };
         let input_json = encode(&input)?;
-        // A new maintenance request may have identical input to a cancelled
-        // or failed one. Pending recovery still selects the original ID.
+
         let candidate_operation_id = format!(
             "standalone-compaction-{}",
             crate::session::SessionId::default()
@@ -1001,7 +844,6 @@ impl Execution {
         Ok(())
     }
 
-    /// Whether a durable policy owns this session's state.
     pub(crate) fn has_policy(&self) -> bool {
         self.policy.is_some()
     }
@@ -1045,7 +887,7 @@ impl Execution {
 
     #[cfg(not(target_family = "wasm"))]
     pub(crate) async fn flush(&self) -> Result<()> {
-        self.platform.flush().await
+        Ok(())
     }
 
     pub(crate) async fn shutdown(&self) -> Result<()> {

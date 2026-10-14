@@ -3,8 +3,6 @@ use serde::{Deserialize, Serialize};
 use super::UsdAmount;
 use crate::{Model, responses::Usage};
 
-// OpenAI publishes rates per one million tokens. All supported rates convert
-// exactly to nano-USD per token, avoiding floating point and division.
 const SOL_STANDARD: TokenRates = TokenRates {
     input: 2_000,
     cached_input: 100,
@@ -78,7 +76,6 @@ const ASTRA_LONG_CONTEXT_PRIORITY: TokenRates = TokenRates {
     output: 150_000,
 };
 
-// https://developers.openai.com/api/docs/pricing?latest-pricing=ultrafast
 const SOL_ULTRAFAST: TokenRates = TokenRates {
     input: 12_000,
     cached_input: 600,
@@ -104,16 +101,13 @@ const ASTRA_LONG_CONTEXT_ULTRAFAST: TokenRates = TokenRates {
     output: 450_000,
 };
 
-// https://developers.cloudflare.com/workers-ai/models/glm-5.3/
-// Workers AI publishes no separate cache-write or priority surcharge.
 const GLM53_STANDARD: TokenRates = TokenRates {
     input: 1_400,
     cached_input: 260,
     cache_write_input: 1_400,
     output: 4_400,
 };
-// Gateway catalog base hints verified 2026-09-22; not actual provider billing.
-// MiMo cached input rounds $0.0036/M up to the estimator's $0.001/M unit.
+
 const KIMI_STANDARD: TokenRates = TokenRates {
     input: 3_000,
     cached_input: 300,
@@ -137,8 +131,6 @@ struct TokenRates {
 }
 
 impl TokenRates {
-    /// Selects published rates for an already model-clamped tier; Luna has no
-    /// Ultrafast rates because `ServiceTier::effective_for_model` runs it as Fast.
     const fn for_model(model: Model, service_tier: ServiceTier, input_tokens: u64) -> Self {
         use ServiceTier::{Fast, Priority, Standard, Ultrafast};
 
@@ -167,23 +159,20 @@ impl TokenRates {
     }
 }
 
-/// OpenAI service tiers supported by Nanocodex.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ServiceTier {
-    /// Standard processing and token rates.
     #[default]
     Standard,
-    /// Compatibility alias for Fast processing.
+
     Priority,
-    /// Fast processing and token rates.
+
     Fast,
-    /// Ultrafast processing and token rates, supported by Astra and Sol.
+
     Ultrafast,
 }
 
 impl ServiceTier {
-    /// Returns the OpenAI service-tier name used in events and traces.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -194,13 +183,11 @@ impl ServiceTier {
         }
     }
 
-    /// Converts the legacy priority-processing switch into a tier preference.
     #[must_use]
     pub const fn from_fast_mode(enabled: bool) -> Self {
         if enabled { Self::Fast } else { Self::Standard }
     }
 
-    /// Clamps a preference to the fastest tier supported by the selected model.
     #[must_use]
     pub const fn effective_for_model(self, model: Model) -> Self {
         match (model, self) {
@@ -210,13 +197,11 @@ impl ServiceTier {
         }
     }
 
-    /// Resolves the tier label assumed for the selected model and legacy mode.
     #[must_use]
     pub const fn for_model(model: Model, fast_mode: bool) -> Self {
         Self::from_fast_mode(fast_mode).effective_for_model(model)
     }
 
-    /// Returns the Responses API `service_tier` value, omitting Standard.
     #[doc(hidden)]
     pub const fn request_value(self, model: Model) -> Option<&'static str> {
         match self.effective_for_model(model) {
@@ -233,11 +218,6 @@ impl From<bool> for ServiceTier {
     }
 }
 
-/// Exact estimated USD cost for provider-reported token usage.
-///
-/// Nanocodex calculates this automatically using the selected model's built-in
-/// rates for the requested processing mode. This is a local estimate, not a
-/// charge or observed service tier reported by the Responses API.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct EstimatedUsdCost {
     #[serde(rename = "usd")]
@@ -254,17 +234,10 @@ pub struct EstimatedUsdCost {
     service_tier: ServiceTier,
 }
 
-/// A charge reported by the provider for one response.
-///
-/// OpenRouter returns `usage.cost` with a prompt and completion breakdown.
-/// The prompt share becomes the input component and the remainder the output
-/// component, so the components always sum to the reported charge. Without a
-/// breakdown the whole charge is attributed to output.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ReportedCost {
-    /// Total charge for the response.
     pub usd: UsdAmount,
-    /// Prompt share of the charge, when reported.
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_usd: Option<UsdAmount>,
 }
@@ -284,44 +257,36 @@ impl ReportedCost {
 }
 
 impl EstimatedUsdCost {
-    /// Returns the exact aggregate estimate.
     #[must_use]
     pub const fn amount(&self) -> UsdAmount {
         self.amount
     }
 
-    /// Returns the ordinary-input component.
     #[must_use]
     pub const fn input(&self) -> UsdAmount {
         self.input
     }
 
-    /// Returns the cache-read component.
     #[must_use]
     pub const fn cached_input(&self) -> UsdAmount {
         self.cached_input
     }
 
-    /// Returns the cache-write component.
     #[must_use]
     pub const fn cache_write_input(&self) -> UsdAmount {
         self.cache_write_input
     }
 
-    /// Returns the output component, including reasoning output.
     #[must_use]
     pub const fn output(&self) -> UsdAmount {
         self.output
     }
 
-    /// Returns the service tier whose built-in rates were applied.
     #[must_use]
     pub const fn service_tier(&self) -> ServiceTier {
         self.service_tier
     }
 
-    /// Adds estimates from separate provider operations without reapplying
-    /// per-request pricing thresholds to their aggregate token counts.
     #[must_use]
     pub fn saturating_add(self, other: Self) -> Self {
         debug_assert_eq!(self.service_tier, other.service_tier);
@@ -338,41 +303,11 @@ impl EstimatedUsdCost {
     }
 }
 
-/// Estimates one provider operation from its authoritative usage record.
-///
-/// Cached and cache-write tokens are subsets of `input_tokens`; this function
-/// subtracts both before pricing ordinary input. The returned value is a local
-/// estimate, not a charge reported by the Responses API.
-///
-/// ```
-/// use nanocode_types::{
-///     pricing::{ServiceTier, estimate},
-///     responses::{InputTokenDetails, Usage},
-/// };
-///
-/// let usage = Usage {
-///     input_tokens: 1_000,
-///     input_tokens_details: Some(InputTokenDetails {
-///         cached_tokens: 800,
-///         cache_write_tokens: 100,
-///     }),
-///     output_tokens: 50,
-///     total_tokens: 1_050,
-///     ..Usage::default()
-/// };
-/// let cost = estimate(&usage, ServiceTier::Standard);
-///
-/// assert_eq!(cost.amount().decimal(), "0.00103");
-/// ```
 #[must_use]
 pub fn estimate(usage: &Usage, service_tier: ServiceTier) -> EstimatedUsdCost {
     estimate_for_model(usage, Model::Sol, service_tier)
 }
 
-/// Estimates one provider operation using the selected model's built-in rates.
-///
-/// This is the model-aware form of [`estimate`]. Managed sessions use it so
-/// every supported model receives an estimate from reported usage.
 #[must_use]
 pub fn estimate_for_model(
     usage: &Usage,

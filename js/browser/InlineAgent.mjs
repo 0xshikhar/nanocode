@@ -29,7 +29,7 @@ import {
   hostManaged as defaultHostManagedTransport,
 } from "./Transport.mjs";
 
-/** Creates the Rust/WASM Agent in the current Web API host isolate. */
+
 export async function create(options = {}) {
   if (options?.toolMode !== undefined && options.toolMode !== "code-only") throw new TypeError("toolMode must be code-only; direct tools are no longer supported");
   if (options.harness === 'claude') return createClaude(options);
@@ -92,15 +92,15 @@ export async function create(options = {}) {
   const { tools: hostTools, subagents: resolvedSubagents } = resolveTools(tools, {
     defaultSubagents: subagentsEnabled !== false,
   });
-  // A host prohibition also overrides an explicit Subagents.create() tool entry.
+
   const configuredSubagents = subagentsEnabled === false ? undefined : resolvedSubagents;
   const subagentMaxConcurrency = internalRuntime?.subagentMaxConcurrency;
   if (subagentMaxConcurrency !== undefined
     && (!Number.isSafeInteger(subagentMaxConcurrency) || subagentMaxConcurrency < 1)) {
     throw new TypeError("host subagentMaxConcurrency must be a positive safe integer");
   }
-  // Hosted runtimes own the resource ceiling, including when their tools are
-  // a prepared router rather than a named-tool array. A caller's lower cap wins.
+
+
   const subagentConfig = configuredSubagents === undefined || subagentMaxConcurrency === undefined
     ? configuredSubagents
     : {
@@ -111,7 +111,7 @@ export async function create(options = {}) {
     throw new TypeError("workspace must match filesystem.root when both are provided");
   }
   const events = createEventChannel();
-  // Host lifecycle observers need terminal events even without a public watcher.
+
   events.subscribe(() => {});
   const tempoMcp = mpp?.[Symbol.for("nanocodex.tempo.mcp")];
   let hostDefinitionId;
@@ -233,7 +233,7 @@ export async function create(options = {}) {
     adopt(raw) {
       host.retain();
       try {
-        // Adopted child handles are ephemeral and do not own the root store.
+
         if (raw.sessionId === stableSessionId) durabilityOwner?.retain();
         bindHostSession(host, raw.sessionId, cloudflareReservation);
         events.addSource(raw);
@@ -276,9 +276,9 @@ export async function create(options = {}) {
     throw error;
   }
   if (websocketPreconnect && websocketUrl) {
-    // Preconnect is speculative. A normal turn reconnects through the owned
-    // transport path, while adapters that require startup validation (such as
-    // Cloudflare) observe the same attempt at their createWebSocket boundary.
+
+
+
     void host.preconnect(websocketUrl, agent.sessionId).catch(() => {});
   }
   return agent;

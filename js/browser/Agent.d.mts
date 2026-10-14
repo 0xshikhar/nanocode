@@ -21,34 +21,36 @@ type WorkerMcpServer = Readonly<{
   timeoutMs?: number | undefined;
 }>;
 type WorkerMcpServers = Readonly<Record<string, string | URL | WorkerMcpServer>>;
-/** Code Mode always exposes exec/wait; host tools run inside exec. */
+
 type WorkerToolExposureOptions =
   | { mcp?: false | undefined; toolMode?: "code-only" | undefined }
   | { mcp: WorkerMcpServers; toolMode?: "code-only" | undefined };
 
-/** Creates a Rust/WASM Agent in a package-owned browser module Worker. */
+
+export function create(options: create.ClaudeOptions): Promise<DefaultAgent<"claude">>;
+export function create(options?: create.CodexOptions): Promise<DefaultAgent<"codex">>;
 export function create(options?: create.Options): Promise<create.ReturnType>;
 export declare namespace create {
-  /** Codex (OpenAI Responses) harness options. */
+
   type CodexOptions = Omit<AgentOptions, "beforeCompaction" | "harness"> & WorkerToolExposureOptions & {
-    /** Precompiled browser module; WebAssembly modules are structured-clone-safe. */
+
     module?: WebAssembly.Module | undefined;
-    /** Fixed browser workspace facts, including its AGENTS.md snapshot. */
+
     executionEnvironment?: ExecutionEnvironment | undefined;
-    /** Defaults to the same-origin Nanocodex `/api/responses` proxy. */
+
     transport?: WorkerTransport | undefined;
-    /** Stable OPFS/Git workspace identity for the default browser harness. */
+
     threadId?: string | undefined;
-    /** Exposes provider authorization links in the default browser harness. */
+
     accountConnectionRequests?: boolean | undefined;
-    /** Set false to keep this browser session out of the IndexedDB durability store. */
+
     durability?: false | undefined;
-    /** Set false to omit the default OPFS, shell, web, image, plan, and artifact tools. */
+
     harness?: false | 'codex' | undefined;
   };
-  /** Claude (Messages) harness options; see docs/CLAUDE_JAVASCRIPT.md. */
+
   type ClaudeOptions = import('../runtime/claude.mjs').Options & { harness: 'claude' };
-  /** Options of either harness family, discriminated by `harness`; both return the same Agent. */
+
   type Options = CodexOptions | ClaudeOptions;
   type ReturnType = Agent;
 }

@@ -11,7 +11,7 @@ description = "Independent Claude-native host-authorized tool adapters"
 
 [features]
 default = []
-# Compatibility switch; the portable caller-owned MCP contract is always available.
+
 mcp = []
 
 [dependencies]

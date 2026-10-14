@@ -1,15 +1,3 @@
-//! Chat Completions gateways for the closed gateway models.
-//!
-//! GLM-5.3, Kimi K3 and MiMo are reached through stateless Chat Completions
-//! gateways rather than the Responses API. The portable Workers AI and gateway
-//! adapters in `js/cloudflare` translate there for WebAssembly hosts;
-//! this module is the native equivalent behind the standard HTTPS transport.
-//! Requests keep their Responses Lite encoding until the wire: tools move to the
-//! Chat `tools` field under stable aliases, free-form custom tools become
-//! function tools with one string `input` argument, and full history becomes
-//! Chat messages. Replies are re-encoded as the Responses events the standard
-//! decoder already consumes, so custom tools still arrive as `custom_tool_call`.
-
 use std::{
     collections::{BTreeMap, HashMap, HashSet, VecDeque},
     sync::Arc,
@@ -29,18 +17,10 @@ use super::{
     http::{HttpMetadata, ResponsesHttpStream, SseDecoder},
 };
 
-/// Base URL of the OpenRouter API.
 pub const OPENROUTER_API_BASE_URL: &str = "https://openrouter.ai/api/v1";
 
-/// Default for [`ChatGateway::stall_timeout`].
-///
-/// OpenRouter sends SSE keep-alive comments while an upstream is queued or
-/// reasoning, so two silent minutes means the stream is stuck rather than
-/// thinking.
 pub const DEFAULT_STALL_TIMEOUT: Duration = Duration::from_secs(120);
 
-// Portable envelopes shared with the JS adapters. They are plaintext transport
-// framing, not provider ciphertext, and must stay byte-compatible across hosts.
 const COMPACTION_PREFIX: &str = "nanocode-chat-compaction-v1:";
 const REASONING_PREFIX: &str = "nanocode-chat-reasoning-v1:";
 const MAX_SUMMARY_LENGTH: usize = 128 * 1024;
@@ -55,14 +35,6 @@ const SUMMARY_INSTRUCTIONS: &str = "Summarize the conversation so another assist
     uncertain action outcomes to avoid repeating side effects. Incorporate any earlier summary. \
     Return only a concise continuation summary, aiming for at most 4000 tokens.";
 
-/// A stateless Chat Completions gateway serving the closed gateway models.
-///
-/// This is the native form of the managed Worker's gateway route
-/// (`docs/AGGREGATOR_ROUTING.md`). Install one with
-/// [`OpenAiBuilder::chat_gateway`](crate::client::OpenAiBuilder::chat_gateway). The
-/// gateway serves [`Model::Glm53`], [`Model::Astra`], [`Model::Kimi`] and
-/// [`Model::Mimo`]; Nanocodex keeps each model's prompts, reasoning efforts and
-/// compaction policy, and only the wire protocol changes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChatGateway {
     provider: Provider,
@@ -76,12 +48,6 @@ enum Provider {
 }
 
 impl ChatGateway {
-    /// OpenRouter's Chat Completions API at [`OPENROUTER_API_BASE_URL`].
-    ///
-    /// The selected model is sent with the managed catalog's OpenRouter ID
-    /// (`z-ai/glm-5.3`, `openai/gpt-6-astra`, `moonshotai/kimi-k3` or
-    /// `xiaomi/mimo-v2.6-pro`), and only endpoints that honor every request
-    /// parameter are routed to.
     #[must_use]
     pub const fn openrouter() -> Self {
         Self {
@@ -91,11 +57,6 @@ impl ChatGateway {
         }
     }
 
-    /// Fails an attempt when the provider sends no bytes for this long.
-    ///
-    /// Any byte resets the timer, including SSE keep-alive comments. The
-    /// failure is a retryable `https_timeout`, so the standard retry policy
-    /// replays the request. Defaults to [`DEFAULT_STALL_TIMEOUT`].
     #[must_use]
     pub const fn stall_timeout(mut self, timeout: Duration) -> Self {
         self.stall_timeout = timeout;
@@ -106,14 +67,6 @@ impl ChatGateway {
         !self.stall_timeout.is_zero()
     }
 
-    /// Passes this OpenRouter model ID through instead of the selected model's.
-    ///
-    /// Only the wire model changes. The selected (canonical) model keeps its
-    /// prompts, reasoning efforts, image policy, compaction and identity, and
-    /// its catalog ID stays the default when no override is given. Use this
-    /// for a close variant of the same family, such as `z-ai/glm-5.3-flash`
-    /// for cheap agents at scale. The ID must be an OpenRouter slug; see
-    /// [`Self::is_valid_wire_model`].
     #[must_use]
     pub fn wire_model(mut self, model: impl Into<String>) -> Self {
         self.wire_model = Some(Arc::from(model.into().trim()));
@@ -126,9 +79,6 @@ impl ChatGateway {
             .is_none_or(Self::is_valid_wire_model)
     }
 
-    /// Whether `model` has the shape of an OpenRouter model slug:
-    /// `vendor/model` with an optional `:variant`, at most 128 ASCII
-    /// characters from letters, digits, `-`, `_`, `.` and `:`.
     #[must_use]
     pub fn is_valid_wire_model(model: &str) -> bool {
         let allowed = |part: &str, colon: bool| {
@@ -146,8 +96,6 @@ impl ChatGateway {
                 .is_some_and(|(vendor, name)| allowed(vendor, false) && allowed(name, true))
     }
 
-    /// The gateway's endpoint is fixed. Only a loopback HTTP(S) base, used by
-    /// local test servers, may replace it.
     pub(crate) fn api_base_url_is_allowed(&self, url: &str) -> bool {
         if url.trim_end_matches('/') == self.default_api_base_url() {
             return true;
@@ -165,7 +113,6 @@ impl ChatGateway {
         })
     }
 
-    /// A client that refuses redirects, as the managed gateway transports do.
     pub(crate) fn http_client() -> reqwest::Client {
         reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
@@ -179,7 +126,6 @@ impl ChatGateway {
         }
     }
 
-    /// Whether Chat Completions gateways serve this model.
     #[must_use]
     pub const fn serves(model: Model) -> bool {
         matches!(
@@ -193,8 +139,6 @@ impl ChatGateway {
             return model;
         }
         match (self.provider, model) {
-            // The managed routing catalog's OpenRouter IDs
-            // (js/managed/src/thread-model-routing.ts).
             (Provider::OpenRouter, Model::Kimi) => "moonshotai/kimi-k3",
             (Provider::OpenRouter, Model::Mimo) => "xiaomi/mimo-v2.6-pro",
             (Provider::OpenRouter, Model::Astra) => "openai/gpt-6-astra",
@@ -202,7 +146,6 @@ impl ChatGateway {
         }
     }
 
-    /// Sends one encoded Responses request through the gateway.
     pub(crate) async fn send(
         &self,
         client: &reqwest::Client,
@@ -211,7 +154,7 @@ impl ChatGateway {
         request: &str,
     ) -> Result<(ResponsesHttpStream, HttpMetadata), ResponsesError> {
         let body: Value = serde_json::from_str(request).map_err(ResponsesError::EncodeRequest)?;
-        // Sessions may route a turn to another model; the encoded request is authoritative.
+
         let model = body
             .get("model")
             .and_then(Value::as_str)
@@ -233,7 +176,6 @@ impl ChatGateway {
         if translation.compact {
             prepare_compaction(&mut chat);
         } else {
-            // OpenRouter appends usage to every stream without stream_options.
             chat.insert("stream".to_owned(), Value::Bool(true));
         }
         let endpoint = format!("{}/chat/completions", api_base_url.trim_end_matches('/'));
@@ -259,7 +201,7 @@ impl ChatGateway {
                 .get(header::RETRY_AFTER)
                 .and_then(|value| value.to_str().ok())
                 .and_then(RetryAfter::from_header);
-            // Release the connection without reading the body.
+
             drop(response);
             return Err(provider_rejected(status.as_u16(), retry_after));
         }
@@ -282,21 +224,15 @@ impl ChatGateway {
         Ok((ResponsesHttpStream::chat(stream), metadata))
     }
 
-    /// The managed gateway's OpenRouter request fields
-    /// (`js/cloudflare/gateway-responses.mjs`).
     fn apply_provider_fields(&self, chat: &mut Map<String, Value>, model: Model) {
         match self.provider {
             Provider::OpenRouter => {
                 if matches!(model, Model::Kimi | Model::Mimo)
                     && let Some(tokens) = chat.remove("max_completion_tokens")
                 {
-                    // Both providers document these models with max_tokens.
                     chat.insert("max_tokens".to_owned(), tokens);
                 }
                 if model == Model::Mimo {
-                    // MiMo endpoints support automatic tool selection only. Keep
-                    // forced-choice semantics locally: restrict the advertised
-                    // tools; normalization still validates the returned call.
                     match chat.get("tool_choice").cloned() {
                         Some(Value::String(choice)) if choice == "none" => {
                             chat.remove("tools");
@@ -317,10 +253,9 @@ impl ChatGateway {
                 if let Some(effort) = chat.remove("reasoning_effort") {
                     chat.insert("reasoning".to_owned(), json!({ "effort": effort }));
                 }
-                // Route only to endpoints that honor every sent parameter.
+
                 chat.insert("provider".to_owned(), json!({ "require_parameters": true }));
-                // OpenRouter filters on parameter presence, including false. The
-                // host scheduler owns execution concurrency for returned calls.
+
                 if chat.get("parallel_tool_calls") == Some(&Value::Bool(false)) {
                     chat.remove("parallel_tool_calls");
                 }
@@ -353,10 +288,6 @@ fn map_http_error(error: reqwest::Error) -> ResponsesError {
     }
 }
 
-/// A provider rejection, classified without its body.
-///
-/// As on the managed Worker route, upstream error bodies and status text are
-/// never parsed, quoted or retained: only the status reaches the retry policy.
 fn provider_rejected(status: u16, retry_after: Option<RetryAfter>) -> ResponsesError {
     let (code, message) = if (300..400).contains(&status) {
         (
@@ -376,7 +307,6 @@ fn provider_rejected(status: u16, retry_after: Option<RetryAfter>) -> ResponsesE
     }
 }
 
-/// The provider went silent. Retryable through the standard policy.
 fn stalled(timeout: Duration) -> ResponsesError {
     ResponsesError::HttpRequest {
         detail: format!(
@@ -388,8 +318,6 @@ fn stalled(timeout: Duration) -> ResponsesError {
     }
 }
 
-/// A deterministic local refusal: the request cannot be expressed for the
-/// gateway, so it must reach the agent as a terminal error rather than a retry.
 fn reject(code: &'static str, message: impl Into<String>) -> ResponsesError {
     ResponsesError::HttpRejected {
         status: 400,
@@ -405,8 +333,6 @@ fn reject(code: &'static str, message: impl Into<String>) -> ResponsesError {
     }
 }
 
-/// The provider stream or completion violated the Chat protocol. Sampling again
-/// may succeed, so this stays retryable. Codes are local constants only.
 fn invalid(code: &'static str) -> ResponsesError {
     ResponsesError::HttpRequest {
         detail: format!("invalid Chat Completions stream: {code}"),
@@ -431,7 +357,6 @@ struct ToolEntry {
     declared: bool,
 }
 
-/// Stable wire aliases for every declared tool identity.
 #[derive(Debug, Default)]
 struct Registry {
     entries: Vec<ToolEntry>,
@@ -560,7 +485,6 @@ impl Registry {
         let definition = json!({ "type": "function", "function": function });
         let entry = &mut self.entries[index];
         if entry.declared {
-            // A repeated identity keeps one definition: the latest declaration.
             if let Some(slot) = self
                 .definitions
                 .iter_mut()
@@ -575,7 +499,6 @@ impl Registry {
         Ok(())
     }
 
-    /// The wire alias for a historical call, also for tools no longer declared.
     fn history_alias(&mut self, namespace: Option<&str>, name: &str) -> String {
         let identity = (namespace.map(str::to_owned), name.to_owned());
         if let Some(index) = self.by_identity.get(&identity) {
@@ -600,9 +523,6 @@ impl Registry {
             .find(|entry| entry.declared && entry.alias == alias)
     }
 
-    /// Resolves a returned tool name. Models sometimes answer with the original
-    /// name shown in the description instead of the advertised alias; only an
-    /// exact, unambiguous declared identity is accepted, never a guess.
     fn resolve(&self, returned: &str) -> Option<&ToolEntry> {
         if let Some(entry) = self.declared(returned) {
             return Some(entry);
@@ -619,8 +539,6 @@ impl Registry {
         matches.next().is_none().then_some(first)
     }
 
-    /// Classifies an unresolved returned name for diagnostics only. Returns
-    /// local constants, never provider names, arguments or registry contents.
     fn alias_failure(&self, returned: &str) -> &'static str {
         let declared: Vec<&ToolEntry> =
             self.entries.iter().filter(|entry| entry.declared).collect();
@@ -711,7 +629,7 @@ fn effort(model: Model, value: Option<&Value>) -> Result<Option<String>, Respons
     let value = value
         .as_str()
         .ok_or_else(|| reject("unsupported_reasoning", "reasoning effort must be a string"))?;
-    // The pinned-effort table of the managed adapters.
+
     let supported = match model {
         Model::Kimi => matches!(value, "low" | "high"),
         _ => matches!(value, "low" | "medium" | "high"),
@@ -871,7 +789,6 @@ fn translate(body: &Value, model: Model) -> Result<Translation, ResponsesError> 
                 messages.push(json!({ "role": "user", "content": envelope.to_string() }));
             }
             "reasoning" => {
-                // Encrypted provider reasoning is not portable, but is not user history.
                 let text = ["summary", "content"]
                     .into_iter()
                     .filter_map(|field| item.get(field).and_then(Value::as_array))
@@ -983,8 +900,6 @@ fn translate(body: &Value, model: Model) -> Result<Translation, ResponsesError> 
                         json!({ "role": "tool", "tool_call_id": call_id, "content": content }),
                     );
                 } else if vision && output.is_array() {
-                    // Chat providers accept screenshots as user image parts, not
-                    // tool text. Keep every call/result matched first.
                     let parts = vision_content(output)?;
                     let parts = parts.as_array().map_or(&[][..], Vec::as_slice);
                     let text = parts
@@ -1154,8 +1069,6 @@ fn text_content(
             for part in parts {
                 let kind = part.get("type").and_then(Value::as_str).unwrap_or_default();
                 if tool_output && kind == "input_image" {
-                    // Project only the provider request. The screenshot stays in
-                    // the session for clients and later vision-capable models.
                     texts.push(
                         "[Image omitted: GLM-5.3 cannot view images. The image remains in the session. \
                          For visual inspection, delegate to an available vision-capable subagent and ask it to return text. \
@@ -1232,8 +1145,6 @@ fn vision_content(content: &Value) -> Result<Value, ResponsesError> {
     Ok(Value::Array(out))
 }
 
-// Opaque transport envelope, not encryption. Provider reasoning metadata is
-// kept byte-for-byte at the JSON value level across history and tool replay.
 fn encode_reasoning(details: &[Value], model: Model) -> Result<String, ResponsesError> {
     let value = json!({ "model": model.as_str(), "details": details }).to_string();
     if value.len() > MAX_REASONING_LENGTH {
@@ -1287,8 +1198,6 @@ fn decode_summary(value: Option<&Value>) -> Result<String, ResponsesError> {
     }
 }
 
-/// OpenRouter mirrors visible reasoning in legacy string fields and in
-/// `reasoning_details`. Project one representation per chunk.
 fn reasoning_text(message: &Value) -> Result<String, ResponsesError> {
     let text = message
         .get("reasoning_content")
@@ -1345,10 +1254,6 @@ struct LiveItem {
     text: String,
 }
 
-/// Re-encodes one Chat Completions reply as Responses events.
-///
-/// Text and reasoning deltas are forwarded as they arrive. Tool calls stay
-/// private until the completed reply has validated aliases, JSON and IDs.
 pub(crate) struct ChatStream {
     pub(super) response: Option<reqwest::Response>,
     decoder: SseDecoder,
@@ -1486,7 +1391,6 @@ impl ChatStream {
 
     fn chunk(&mut self, value: &Value) -> Result<(), ResponsesError> {
         if value.get("error").is_some_and(|error| !error.is_null()) {
-            // A mid-stream provider failure; its text is not retained.
             return Err(invalid("chat_provider_error"));
         }
         let choices = value
@@ -1520,8 +1424,6 @@ impl ChatStream {
             return Err(invalid("chat_delta"));
         }
         if let Some(finish) = &self.finish_reason {
-            // OpenRouter repeats its finish choice on the usage trailer. Admit
-            // metadata only, never more output or a changed terminal reason.
             let empty = part.as_object().is_some_and(|part| {
                 part.iter().all(|(field, value)| match field.as_str() {
                     "role" => value.is_null() || value == "assistant",
@@ -1635,7 +1537,6 @@ impl ChatStream {
         Ok(())
     }
 
-    /// Validates the completed reply and queues the remaining events.
     fn complete(&mut self) -> Result<(), ResponsesError> {
         let finish = self
             .finish_reason
@@ -1716,7 +1617,6 @@ impl ChatStream {
         Ok(())
     }
 
-    /// Queues one complete compaction response from a buffered summary reply.
     fn compaction(&mut self, completion: &Value) -> Result<(), ResponsesError> {
         let mut response = normalize(
             completion,
@@ -1772,7 +1672,6 @@ impl ChatStream {
                 continue;
             }
             if self.ended {
-                // [DONE] or the end of the body after the finish chunk.
                 self.complete()?;
                 continue;
             }
@@ -1874,7 +1773,7 @@ fn normalize(
             "content": [{ "type": "output_text", "text": text, "annotations": [] }],
         }));
     }
-    // Validate the caller's tool-choice contract; never dispatch a violating call.
+
     let forced = tool_choice.filter(|choice| choice.is_object());
     if tool_choice.is_some_and(|choice| choice == "none") && !calls.is_empty() {
         return Err(invalid("normalize_tool_forbidden"));
@@ -1925,10 +1824,6 @@ fn normalize(
                     && !trimmed.is_empty()
                     && !trimmed.starts_with(['{', '[', '"'])
                 {
-                    // Custom tools natively accept free-form strings. Some
-                    // providers return that input without the advertised JSON
-                    // wrapper; keep it exactly. Malformed JSON-looking wrappers
-                    // and every non-custom tool still fail closed.
                     json!({ "input": arguments_text })
                 } else {
                     return Err(invalid("normalize_tool_json"));
@@ -2016,11 +1911,6 @@ fn normalize(
     Ok(response)
 }
 
-/// OpenRouter's own charge for one reply, as a [`crate::client::pricing::ReportedCost`].
-///
-/// `usage.cost` is what OpenRouter charged. With a bring-your-own key it is
-/// only OpenRouter's fee and the upstream provider bills
-/// `cost_details.upstream_inference_cost` separately, so both are counted.
 fn reported_cost(usage: &Value) -> Option<Value> {
     let charged = usd(usage.get("cost")?)?;
     let byok = usage.get("is_byok") == Some(&Value::Bool(true));
@@ -2038,8 +1928,6 @@ fn reported_cost(usage: &Value) -> Option<Value> {
         .pointer("/cost_details/upstream_inference_prompt_cost")
         .and_then(usd)
     {
-        // The breakdown describes the upstream inference charge. Scale it to
-        // the total so a fee-bearing reply keeps an exact sum.
         let input = if upstream == 0 {
             prompt.min(total)
         } else {
@@ -2052,7 +1940,6 @@ fn reported_cost(usage: &Value) -> Option<Value> {
     Some(cost)
 }
 
-/// A non-negative JSON USD number as billionths of a dollar.
 fn usd(value: &Value) -> Option<u64> {
     let value = value
         .as_f64()
@@ -2062,7 +1949,6 @@ fn usd(value: &Value) -> Option<u64> {
     Some(nano)
 }
 
-/// The complete Responses event sequence for one normalized response.
 fn response_events(response: &Value) -> Vec<(String, Map<String, Value>)> {
     let mut events = Vec::new();
     let mut emit = |kind: String, fields: Map<String, Value>| events.push((kind, fields));

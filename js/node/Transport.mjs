@@ -40,5 +40,5 @@ function endpoints(options = {}) {
   };
 }
 
-/** Explicit Claude Messages authentication for Nanocodex.create backends. */
+
 export { anthropic } from "../runtime/claude-transport.mjs";

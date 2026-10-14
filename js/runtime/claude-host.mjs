@@ -5,21 +5,21 @@ import { createCodeEffectIdentity } from './code-effect-identity.mjs';
 
 const TOOL_RESULT = Symbol.for('nanocodex.toolResult');
 const MEDIA = new Set(['input_text', 'input_image', 'input_audio', 'encrypted_content']);
-// Reserve harness-owned operations. Explicit execution capabilities share the
-// exec_command/write_stdin contracts across Codex and Claude.
+
+
 const TOOL_KEYS = new Set(['name', 'description', 'handler', 'inputSchema', 'parameters', 'strict', 'deferLoading', 'defer_loading', 'supportsParallelToolCalls', 'providerDefinition', 'outputSchema', 'releaseSession', 'endTurn', 'dispose']);
 const CODEX_TOOL_NAMES = new Set([
   'exec', 'wait', 'tool_search', 'apply_patch',
   'view_image', 'update_plan', 'web__run', 'image_gen__imagegen',
 ]);
-// Shared platform operations are installed by the owned task-tree runtime.
-// Caller tools must not replace their lifecycle or authorization handlers.
+
+
 const PLATFORM_SUBAGENT_NAMES = new Set([
   'spawn_agent', 'send_agent_message', 'list_agents', 'wait_agent',
   'interrupt_agent', 'close_agent', 'submit_result',
 ]);
 
-/** Explicit host-owned catalog; never discovers or installs tools implicitly. */
+
 export function resolveClaudeTools(tools = []) {
   if (!Array.isArray(tools)) throw new TypeError('Claude tools must be an explicit array');
   const handlers = new Map();
@@ -42,7 +42,7 @@ export function resolveClaudeTools(tools = []) {
       throw new TypeError('Claude tool inputSchema must be an object schema');
     }
     handlers.set(tool.name, tool.handler);
-    // Scheduling metadata only; never part of the model-visible definition.
+
     if (tool.supportsParallelToolCalls === true) parallelSafe.push(tool.name);
     return { name: tool.name, description: tool.description, input_schema: JSON.parse(JSON.stringify(schema)),
       ...(tool.strict === undefined ? {} : { strict: tool.strict }),
@@ -52,12 +52,12 @@ export function resolveClaudeTools(tools = []) {
   return { handlers, definitions: freezeJson(definitions), parallelSafe: Object.freeze(parallelSafe) };
 }
 
-/** Credentials remain in this host closure, never the WASM configuration. */
+
 const messagesFetches = new Map();
 let messagesFetchInstalled = false;
 const MESSAGES_HOST_HEADER = 'x-nanocodex-claude-host';
-// reqwest WASM resolves the isolate fetch. Multiplex only explicit Messages host
-// capabilities; never replace arbitrary networking or retain a bearer in config.
+
+
 function ownMessagesFetch(fetchImpl, endpoint) {
   if (typeof fetchImpl !== 'function' || typeof endpoint !== 'string') throw new TypeError('Claude fetch requires explicit endpoint');
   const id = globalThis.crypto.randomUUID();
@@ -86,7 +86,7 @@ export function createClaudeHost({ auth, tools = [], onEvent = () => {}, fetch, 
     throw new TypeError('Claude auth requires exactly one apiKey or headers callback');
   }
   if (toolMode !== 'code-only' && toolMode !== 'direct') throw new TypeError('Claude toolMode must be code-only or direct');
-  // Direct mode exposes host tools as native Messages tools: no evaluator.
+
   const codeOnly = toolMode === 'code-only';
   if (codeOnly && codeEvaluator === undefined && typeof globalThis.Worker === 'function') codeEvaluator = createWorkerEvaluator();
   if (codeOnly && typeof codeEvaluator !== 'function') throw new TypeError('Claude Code Mode requires a Worker or explicit codeEvaluator');
@@ -124,8 +124,8 @@ export function createClaudeHost({ auth, tools = [], onEvent = () => {}, fetch, 
         return value;
       } catch (error) {
         if (error?.code === 'host_interrupted') throw error;
-        // Code Mode rejects with an Error built from this value: keep the
-        // handler's code so guest catch blocks can branch on it.
+
+
         const code = typeof error?.code === 'string' || typeof error?.code === 'number' ? error.code : undefined;
         return toolResult(errorText(error), null, { success: false,
           value: code === undefined ? errorText(error) : { message: errorText(error), code } });
@@ -176,13 +176,13 @@ export function createClaudeHost({ auth, tools = [], onEvent = () => {}, fetch, 
       } catch { throw new Error('Claude authentication unavailable'); }
     },
     toolDefinitions() { return JSON.stringify(modelDefinitions); },
-    // Code Mode exposes only exec/wait, which keep the serial default; direct
-    // mode overlaps host tools declaring supportsParallelToolCalls.
+
+
     parallelSafeTools() { return code ? [] : [...parallelSafe]; },
     toolMode() { return toolMode; },
     emitEvent(event, ...args) {
-      // Claude's native model-call cursor is zero-based. The shared effect
-      // journal uses one-based indexes; retain the native public event unchanged.
+
+
       const parsed = typeof event === 'string' ? JSON.parse(event) : event;
       effectIdentity.observe(parsed?.type === 'tool.call' && Number.isSafeInteger(parsed.payload?.model_call_index)
         ? { ...parsed, payload: { ...parsed.payload, model_call_index: parsed.payload.model_call_index + 1 } }
@@ -232,9 +232,9 @@ export function createClaudeHost({ auth, tools = [], onEvent = () => {}, fetch, 
         if (!code) value = await host.invokeTool(name, encodedInput, sessionId, callId, model, turnId);
         else {
           beginCodeTurn(sessionId, turnId);
-          // Live consumers drain updates while the cell runs. The final receipt
-          // covers any tail still queued when execution settles; discard that
-          // tail so delivered payloads cannot stay retained for the session.
+
+
+
           try {
             if (name === 'exec') {
               const input = JSON.parse(encodedInput);
@@ -261,19 +261,19 @@ export function createClaudeHost({ auth, tools = [], onEvent = () => {}, fetch, 
             if (/^https?:\/\//.test(item.image_url)) return { type: 'image', source: { type: 'url', url: item.image_url } };
             throw new Error('unsupported Claude image output');
           }
-          // Messages has no shared input_audio/encrypted_content representation: fail closed.
+
           throw new Error('unsupported Claude tool media output');
         });
         return JSON.stringify({ content, isError: !wire.success, metadata: wire.metadata, structuredResult: wire.structured_result });
       })();
-      // The WASM await's drop guard owns cancellation of this exact invocation.
-      // Preserve the session and other turn controllers for queued/reusable work.
+
+
       Object.defineProperty(operation, 'cancel', { value: () => abort(sessionId, turnId) });
       return operation;
     },
-    // Live nested starts/results of the exec/wait observation started by
-    // executeClaudeTool for this call. Resolves null once that observation
-    // closes; the final _nanocodex_code receipt stays authoritative.
+
+
+
     async nextClaudeCodeUpdate(sessionId, callId) {
       if (!code) return null;
       const encoded = await code.nextCodeUpdate(sessionId, callId);
@@ -296,7 +296,7 @@ export function createClaudeHost({ auth, tools = [], onEvent = () => {}, fetch, 
         }));
         return value;
       } catch (error) {
-        // Host interruption cancels the invocation; it is never a tool result.
+
         if (error?.code === 'host_interrupted') throw error;
         return failed(errorText(error));
       }
@@ -319,10 +319,10 @@ export function createClaudeHost({ auth, tools = [], onEvent = () => {}, fetch, 
   return host;
 }
 
-// Nested receipts in _nanocodex_code are event-only metadata: the Claude core
-// republishes them as tool.result events that are archived and broadcast. Large
-// outputs (and their duplicated structured form) never cross into WASM memory;
-// the model-visible content and durable effect receipts are unchanged.
+
+
+
+
 const NESTED_EVENT_RESULT_BYTES = 32 * 1024;
 const NESTED_EVENT_PREVIEW_CHARS = 16 * 1024;
 const utf8 = new TextEncoder();
@@ -362,7 +362,7 @@ function wireOutput(value) {
     output: outputBody(value.output), success: value.success,
     structured_result: value.structuredResult ?? null, metadata: value.metadata ?? null, process_trace: null,
   };
-  // The wire contract supports an explicit result without requiring Code Mode imports.
+
   if (value && typeof value === 'object' && Object.hasOwn(value, 'output') && typeof value.success === 'boolean') return {
     output: outputBody(value.output), success: value.success,
     structured_result: value.structuredResult ?? value.structured_result ?? null,

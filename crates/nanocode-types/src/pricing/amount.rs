@@ -4,39 +4,27 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
 const NANO_USD_PER_USD: u64 = 1_000_000_000;
 
-/// An exact non-negative amount of United States dollars.
-///
-/// The value is stored as billionths of one dollar and serialized as a decimal
-/// string, so language bindings and durable eval artifacts never round through
-/// a JSON floating-point number.
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub struct UsdAmount {
     nano_usd: u64,
 }
 
 impl UsdAmount {
-    /// Creates an amount from billionths of one dollar.
     #[must_use]
     pub const fn from_nano_usd(nano_usd: u64) -> Self {
         Self { nano_usd }
     }
 
-    /// Returns the exact amount in billionths of one dollar.
     #[must_use]
     pub const fn nano_usd(self) -> u64 {
         self.nano_usd
     }
 
-    /// Returns a decimal USD string without a currency symbol.
     #[must_use]
     pub fn decimal(self) -> String {
         format_decimal_usd(self.nano_usd)
     }
 
-    /// Returns a floating-point projection for compatibility adapters.
-    ///
-    /// Use [`Self::nano_usd`] or [`Self::decimal`] for accounting and durable
-    /// storage.
     #[must_use]
     #[allow(clippy::cast_precision_loss)]
     pub fn as_f64(self) -> f64 {

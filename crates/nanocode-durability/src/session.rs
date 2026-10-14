@@ -18,32 +18,30 @@ use crate::{
 const COMMAND_CAPACITY: usize = 64;
 const RELEASE_BURST_LIMIT: usize = 32;
 
-/// Result of submitting one idempotent operation.
 #[derive(Clone, Debug)]
 pub enum Admission<C = EncodedPayload, O = EncodedPayload> {
-    /// This call durably accepted new work.
+
     Accepted,
-    /// The same input was already accepted and remains unfinished.
+
     Pending,
-    /// The operation already completed.
+
     Completed {
-        /// Checkpoint committed with the result.
+
         checkpoint: C,
-        /// Previously completed result.
+
         output: O,
     },
-    /// The operation already failed after committing a safe checkpoint.
+
     Failed {
-        /// Checkpoint committed with the failure.
+
         checkpoint: C,
-        /// Previously retained failure detail.
+
         error: String,
     },
-    /// The operation was explicitly cancelled.
+
     Cancelled,
 }
 
-/// One automatically identified operation and its admission result.
 #[derive(Clone, Debug)]
 pub struct AutomaticAdmission<C = EncodedPayload, O = EncodedPayload> {
     operation_id: String,
@@ -51,25 +49,23 @@ pub struct AutomaticAdmission<C = EncodedPayload, O = EncodedPayload> {
 }
 
 impl<C, O> AutomaticAdmission<C, O> {
-    /// Identity assigned to the admitted operation.
+
     #[must_use]
     pub fn operation_id(&self) -> &str {
         &self.operation_id
     }
 
-    /// Splits the assigned operation identity from its admission result.
     #[must_use]
     pub fn into_parts(self) -> (String, Admission<C, O>) {
         (self.operation_id, self.admission)
     }
 }
 
-/// Result of beginning a replayable step.
 #[derive(Clone, Debug)]
 pub enum BeginStep<O = EncodedPayload> {
-    /// The caller owns this execution attempt and may perform the step.
+
     Execute,
-    /// A prior attempt completed; use this stored output instead of executing.
+
     Replay(O),
 }
 
@@ -125,9 +121,11 @@ enum StoredBeginStep {
 }
 
 #[derive(Clone)]
-pub(crate) struct StoredSteer {
-    pub(crate) index: u32,
-    pub(crate) state: SteerState,
+pub struct StoredSteer {
+
+    pub index: u32,
+
+    pub state: SteerState,
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -301,17 +299,12 @@ struct Driver {
     claimed: HashMap<String, Caller>,
     running: HashSet<String>,
     poisoned: bool,
-    /// Immutable record keys this owner has observed committed for its state.
-    /// Content-addressed records are never rewritten and are deleted only by
-    /// destroy, which first fences every owner. The set is extended only after
-    /// an acknowledged replace and cleared on every acquisition, so an
-    /// uncertain or foreign write never suppresses a record a head needs.
+
     committed_records: HashSet<String>,
     commands: mpsc::Receiver<Command>,
     releases: mpsc::UnboundedReceiver<ReleaseSignal>,
 }
 
-/// Bounds the per-owner committed-record cache; clearing only resends records.
 const COMMITTED_RECORD_LIMIT: usize = 65_536;
 
 const OWNER_ACTIVE: u8 = 0;
@@ -368,11 +361,7 @@ impl Driver {
             let Some(command) = command else {
                 break;
             };
-            // A release may arrive after the pre-select drain but before a
-            // simultaneously ready command wins the biased selection. Drain a
-            // bounded second burst so a just-dropped claimant is reclaimed
-            // before an exact-ID admission, without letting sustained release
-            // traffic starve the command itself.
+
             for _ in 0..RELEASE_BURST_LIMIT {
                 let Ok(release) = self.releases.try_recv() else {
                     break;
@@ -1374,8 +1363,6 @@ impl Driver {
         Ok(())
     }
 
-    /// Records catalog metadata, keeping the original creation time and any
-    /// lineage already stored, then publishes it with the current head.
     async fn describe(
         &mut self,
         record: crate::catalog::SessionRecord,
@@ -1403,9 +1390,6 @@ impl Driver {
         Ok(self.state.session().cloned().unwrap_or(merged))
     }
 
-    /// Retracts a state that holds no work, only its catalog record and
-    /// initial checkpoint, so an abandoned child is neither listed nor
-    /// loadable. Retained work is never erased.
     async fn discard_unused(&mut self) -> Result<()> {
         if let Some(operation_id) = self.state.operations().keys().next() {
             return Err(Error::InvalidState(format!(
@@ -1477,16 +1461,10 @@ fn reduce(stored: StoredState) -> Result<DurableState> {
     Ok(state)
 }
 
-/// Reduces a head observed without ownership, for read-only inspection.
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub(crate) fn reduce_peeked(stored: StoredState) -> Result<DurableState> {
     reduce(stored)
 }
 
-/// Cheap command handle for an owned durable-state driver.
-///
-/// The spawned driver is the sole owner of the reduced state state and all
-/// live operation claims. Clones only enqueue commands and await typed replies.
 pub struct DurableSession {
     state_id: Arc<str>,
     store: SharedStore,
@@ -1522,7 +1500,7 @@ impl Drop for DurableSession {
 }
 
 impl DurableSession {
-    /// Loads and validates a durable session, then spawns its owning driver.
+
     pub async fn open<S>(store: S, state_id: impl Into<String>) -> Result<Self>
     where
         S: StateStore + 'static,
@@ -1530,12 +1508,6 @@ impl DurableSession {
         Self::open_inner(store, state_id.into(), None).await
     }
 
-    /// Loads a durable session whose compacted checkpoint retains at most the
-    /// newest `limit` terminal replay receipts.
-    ///
-    /// The embedding application must preserve older exact-ID results before
-    /// selecting this policy. Unresolved operations and the latest resumable
-    /// model checkpoint are always retained.
     pub async fn open_with_terminal_receipt_limit<S>(
         store: S,
         state_id: impl Into<String>,
@@ -1547,10 +1519,6 @@ impl DurableSession {
         Self::open_inner(store, state_id.into(), Some(limit)).await
     }
 
-    /// Removes old terminal replay receipts from the complete retained state.
-    ///
-    /// This lets an embedding host reduce a large recovered state before it
-    /// allocates the model and tool runtime that will consume the checkpoint.
     pub async fn prune_receipts(&self) -> Result<()> {
         let (result, receiver) = oneshot::channel();
         self.send(Command::PruneReceipts {
@@ -1614,11 +1582,6 @@ impl DurableSession {
         })
     }
 
-    /// Records family-neutral catalog metadata inside this state's head.
-    ///
-    /// The creation time and an already recorded lineage are kept; model,
-    /// workspace, and title follow `record`. Fails while an agent owns the
-    /// state; describe a session before attaching it to a builder.
     pub async fn describe(
         &self,
         record: crate::catalog::SessionRecord,
@@ -1633,12 +1596,10 @@ impl DurableSession {
         receive(receiver).await
     }
 
-    /// Catalog metadata recorded for this session, if any.
     pub async fn record(&self) -> Result<Option<crate::catalog::SessionRecord>> {
         Ok(self.state().await?.session().cloned())
     }
 
-    /// Opens another state in the same store, such as a fork's own session.
     pub async fn open_sibling(&self, state_id: impl Into<String>) -> Result<Self> {
         Self::open_shared(
             self.store.clone(),
@@ -1652,18 +1613,15 @@ impl DurableSession {
         self.store.clone()
     }
 
-    /// Durable subagent task-tree journal stored beside this state.
-    pub(crate) fn child_journal(&self) -> nanocode_agent::backend::ChildJournal {
+    pub fn child_journal(&self) -> nanocode_agent::backend::ChildJournal {
         crate::child_journal::child_journal(self.store.clone(), &self.state_id)
     }
 
-    /// Stable host-store state identity.
     #[must_use]
     pub fn state_id(&self) -> &str {
         &self.state_id
     }
 
-    /// Copies the current reduced state from the owning driver.
     pub async fn state(&self) -> Result<DurableState> {
         let (result, receiver) = oneshot::channel();
         self.send(Command::State { result }).await?;
@@ -1684,7 +1642,6 @@ impl DurableSession {
         receive(receiver).await
     }
 
-    /// Resolves one immutable payload reference without loading unrelated state.
     pub async fn resolve(&self, payload: &EncodedPayload) -> Result<EncodedPayload> {
         let (result, receiver) = oneshot::channel();
         self.send(Command::LoadPayload {
@@ -1696,7 +1653,6 @@ impl DurableSession {
         receive(receiver).await
     }
 
-    /// Restores the latest agent snapshot from its immutable context pages.
     pub async fn agent_snapshot(
         &self,
     ) -> Result<Option<nanocode_backend_codex::session::SessionSnapshot>> {
@@ -1708,7 +1664,6 @@ impl DurableSession {
         }
     }
 
-    /// Restores the current agent execution, without acquiring model ownership.
     pub async fn agent_continuation(
         &self,
         operation_id: &str,
@@ -1728,15 +1683,13 @@ impl DurableSession {
         }
     }
 
-    /// Copies the latest terminal checkpoint from the owning driver without
-    /// cloning the rest of the reduced state.
     pub async fn latest_checkpoint(&self) -> Result<Option<EncodedPayload>> {
         let (result, receiver) = oneshot::channel();
         self.send(Command::LatestCheckpoint { result }).await?;
         receive(receiver).await
     }
 
-    pub(crate) async fn acquire_agent(&self) -> Result<(DurableOwner, Option<EncodedPayload>)> {
+    pub async fn acquire_agent(&self) -> Result<(DurableOwner, Option<EncodedPayload>)> {
         let (result, receiver) = oneshot::channel();
         self.send(Command::AcquireAgent { result }).await?;
         let acquired = receive(receiver).await?;
@@ -1749,8 +1702,6 @@ impl DurableSession {
         Ok((owner, acquired.checkpoint))
     }
 
-    /// Durably accepts and claims an operation, retaining terminal payloads in
-    /// their encoded state form.
     pub async fn admit<I>(&self, operation_id: impl Into<String>, input: &I) -> Result<Admission>
     where
         I: Serialize + ?Sized,
@@ -1761,7 +1712,6 @@ impl DurableSession {
             .into_encoded())
     }
 
-    /// Durably accepts and claims an operation with typed replay values.
     pub async fn admit_typed<I, C, O>(
         &self,
         operation_id: impl Into<String>,
@@ -1777,12 +1727,6 @@ impl DurableSession {
             .decode()
     }
 
-    /// Durably admits automatically identified work, retaining terminal
-    /// payloads in their encoded state form.
-    ///
-    /// The candidate identity is used for new work. If the oldest unclaimed
-    /// pending operation has identical input, that operation is reclaimed and
-    /// its previously stored identity is returned instead.
     pub async fn admit_automatic<I>(
         &self,
         candidate_operation_id: impl Into<String>,
@@ -1803,11 +1747,6 @@ impl DurableSession {
         })
     }
 
-    /// Durably admits automatically identified work, reclaiming the oldest
-    /// unclaimed pending operation when its input is identical.
-    ///
-    /// `candidate_operation_id` is used for new work. Recovered work retains
-    /// its previously stored identity, which is returned with the admission.
     pub async fn admit_automatic_typed<I, C, O>(
         &self,
         candidate_operation_id: impl Into<String>,
@@ -1885,7 +1824,6 @@ impl DurableSession {
         Ok(admission)
     }
 
-    /// Releases a live claim without changing durable state state.
     pub async fn release(&self, operation_id: impl Into<String>) -> Result<()> {
         let (result, receiver) = oneshot::channel();
         self.send(Command::Release {
@@ -1901,7 +1839,6 @@ impl DurableSession {
         outcome
     }
 
-    /// Claims an accepted operation for one live execution attempt.
     pub async fn begin_attempt(&self, operation_id: impl Into<String>) -> Result<()> {
         let (result, receiver) = oneshot::channel();
         self.send(Command::BeginAttempt {
@@ -1913,8 +1850,6 @@ impl DurableSession {
         receive(receiver).await
     }
 
-    /// Begins or replays one stable step, retaining replay output in its
-    /// encoded state form.
     pub async fn begin_step<I>(
         &self,
         operation_id: impl Into<String>,
@@ -1939,7 +1874,6 @@ impl DurableSession {
         }
     }
 
-    /// Begins or replays one stable step with a typed replay output.
     pub async fn begin_step_typed<I, O>(
         &self,
         operation_id: impl Into<String>,
@@ -1985,7 +1919,6 @@ impl DurableSession {
         receive(receiver).await
     }
 
-    /// Commits a step output for future replay.
     pub async fn complete_step<T: Serialize + ?Sized>(
         &self,
         operation_id: impl Into<String>,
@@ -2004,7 +1937,6 @@ impl DurableSession {
         receive(receiver).await
     }
 
-    /// Atomically terminalizes an operation with its checkpoint and result.
     pub async fn complete<C: Serialize + ?Sized, O: Serialize + ?Sized>(
         &self,
         operation_id: impl Into<String>,
@@ -2027,7 +1959,6 @@ impl DurableSession {
         outcome
     }
 
-    /// Atomically terminalizes a failed operation with its safe checkpoint.
     pub async fn fail<C: Serialize + ?Sized>(
         &self,
         operation_id: impl Into<String>,
@@ -2050,11 +1981,6 @@ impl DurableSession {
         outcome
     }
 
-    /// Ends the live attempt while leaving the durable operation pending.
-    ///
-    /// The diagnostic is intentionally not persisted: attempts are live
-    /// scheduling state, while accepted input, effects, and terminals are the
-    /// durable protocol.
     pub async fn fail_attempt(
         &self,
         operation_id: impl Into<String>,
@@ -2074,10 +2000,6 @@ impl DurableSession {
         outcome
     }
 
-    /// Explicitly terminalizes an operation as cancelled.
-    ///
-    /// This is valid only before an attempt starts. Active Agent cancellation
-    /// commits its safe interrupted checkpoint through the execution policy.
     pub async fn cancel(&self, operation_id: impl Into<String>) -> Result<()> {
         let (result, receiver) = oneshot::channel();
         self.send(Command::Cancel {
@@ -2110,7 +2032,7 @@ impl DurableSession {
     }
 }
 
-pub(crate) struct DurableOwner {
+pub struct DurableOwner {
     generation: u64,
     commands: mpsc::Sender<Command>,
     releases: mpsc::UnboundedSender<ReleaseSignal>,
@@ -2118,7 +2040,8 @@ pub(crate) struct DurableOwner {
 }
 
 impl DurableOwner {
-    pub(crate) async fn load_payloads(
+
+    pub async fn load_payloads(
         &self,
         payloads: Vec<EncodedPayload>,
     ) -> Result<Vec<EncodedPayload>> {
@@ -2132,7 +2055,7 @@ impl DurableOwner {
         receive(receiver).await
     }
 
-    pub(crate) async fn load_payload(&self, payload: EncodedPayload) -> Result<EncodedPayload> {
+    pub async fn load_payload(&self, payload: EncodedPayload) -> Result<EncodedPayload> {
         let (result, receiver) = oneshot::channel();
         self.send(Command::LoadPayload {
             caller: Some(self.caller()?),
@@ -2143,10 +2066,7 @@ impl DurableOwner {
         receive(receiver).await
     }
 
-    pub(crate) async fn continuation(
-        &self,
-        operation_id: String,
-    ) -> Result<Option<EncodedPayload>> {
+    pub async fn continuation(&self, operation_id: String) -> Result<Option<EncodedPayload>> {
         let (result, receiver) = oneshot::channel();
         self.send(Command::Continuation {
             caller: self.caller()?,
@@ -2157,11 +2077,7 @@ impl DurableOwner {
         receive(receiver).await
     }
 
-    pub(crate) async fn advance(
-        &self,
-        operation_id: String,
-        continuation: EncodedPayload,
-    ) -> Result<()> {
+    pub async fn advance(&self, operation_id: String, continuation: EncodedPayload) -> Result<()> {
         let (result, receiver) = oneshot::channel();
         self.send(Command::Advance {
             caller: self.caller()?,
@@ -2173,10 +2089,7 @@ impl DurableOwner {
         receive(receiver).await
     }
 
-    pub(crate) async fn recover_failure(
-        &self,
-        operation_id: String,
-    ) -> Result<Option<OperationStatus>> {
+    pub async fn recover_failure(&self, operation_id: String) -> Result<Option<OperationStatus>> {
         let (result, receiver) = oneshot::channel();
         self.send(Command::RecoverFailure {
             caller: self.caller()?,
@@ -2202,7 +2115,7 @@ impl DurableOwner {
             .map_err(|_| Error::DriverStopped)
     }
 
-    pub(crate) async fn admit_typed<I, C, O>(
+    pub async fn admit_typed<I, C, O>(
         &self,
         operation_id: String,
         input: &I,
@@ -2228,7 +2141,7 @@ impl DurableOwner {
         admission.decode()
     }
 
-    pub(crate) async fn admit_automatic_typed<I, C, O>(
+    pub async fn admit_automatic_typed<I, C, O>(
         &self,
         candidate_operation_id: String,
         input: &I,
@@ -2257,7 +2170,7 @@ impl DurableOwner {
         })
     }
 
-    pub(crate) async fn release_claim(&self, operation_id: String) -> Result<()> {
+    pub async fn release_claim(&self, operation_id: String) -> Result<()> {
         let (result, receiver) = oneshot::channel();
         self.send(Command::Release {
             caller: self.caller()?,
@@ -2268,7 +2181,7 @@ impl DurableOwner {
         receive(receiver).await
     }
 
-    pub(crate) async fn begin_attempt(&self, operation_id: String) -> Result<()> {
+    pub async fn begin_attempt(&self, operation_id: String) -> Result<()> {
         let (result, receiver) = oneshot::channel();
         self.send(Command::BeginAttempt {
             caller: self.caller()?,
@@ -2279,7 +2192,7 @@ impl DurableOwner {
         receive(receiver).await
     }
 
-    pub(crate) async fn accept_steer<I: Serialize + ?Sized>(
+    pub async fn accept_steer<I: Serialize + ?Sized>(
         &self,
         operation_id: String,
         accepted_after_model_call_index: u32,
@@ -2301,7 +2214,7 @@ impl DurableOwner {
         receive(receiver).await
     }
 
-    pub(crate) async fn retained_steers(&self, operation_id: String) -> Result<Vec<StoredSteer>> {
+    pub async fn retained_steers(&self, operation_id: String) -> Result<Vec<StoredSteer>> {
         let (result, receiver) = oneshot::channel();
         self.send(Command::RetainedSteers {
             caller: self.caller()?,
@@ -2312,11 +2225,7 @@ impl DurableOwner {
         receive(receiver).await
     }
 
-    pub(crate) async fn withdraw_steer(
-        &self,
-        operation_id: String,
-        steer_index: u32,
-    ) -> Result<()> {
+    pub async fn withdraw_steer(&self, operation_id: String, steer_index: u32) -> Result<()> {
         let (result, receiver) = oneshot::channel();
         self.send(Command::WithdrawSteer {
             caller: self.caller()?,
@@ -2328,7 +2237,7 @@ impl DurableOwner {
         receive(receiver).await
     }
 
-    pub(crate) async fn bind_steer(
+    pub async fn bind_steer(
         &self,
         operation_id: String,
         steer_index: u32,
@@ -2346,7 +2255,7 @@ impl DurableOwner {
         receive(receiver).await
     }
 
-    pub(crate) async fn begin_step<I>(
+    pub async fn begin_step<I>(
         &self,
         operation_id: String,
         step_id: String,
@@ -2372,7 +2281,7 @@ impl DurableOwner {
         }
     }
 
-    pub(crate) async fn complete_step<T: Serialize + ?Sized>(
+    pub async fn complete_step<T: Serialize + ?Sized>(
         &self,
         operation_id: String,
         step_id: String,
@@ -2390,7 +2299,7 @@ impl DurableOwner {
         receive(receiver).await
     }
 
-    pub(crate) async fn complete<O: Serialize + ?Sized>(
+    pub async fn complete<O: Serialize + ?Sized>(
         &self,
         operation_id: String,
         checkpoint: EncodedPayload,
@@ -2408,7 +2317,7 @@ impl DurableOwner {
         receive(receiver).await
     }
 
-    pub(crate) async fn fail(
+    pub async fn fail(
         &self,
         operation_id: String,
         checkpoint: EncodedPayload,
@@ -2426,7 +2335,7 @@ impl DurableOwner {
         receive(receiver).await
     }
 
-    pub(crate) async fn fail_attempt(&self, operation_id: String, _error: String) -> Result<()> {
+    pub async fn fail_attempt(&self, operation_id: String, _error: String) -> Result<()> {
         let (result, receiver) = oneshot::channel();
         self.send(Command::FailAttempt {
             caller: self.caller()?,
@@ -2437,7 +2346,7 @@ impl DurableOwner {
         receive(receiver).await
     }
 
-    pub(crate) async fn cancel(
+    pub async fn cancel(
         &self,
         operation_id: String,
         checkpoint: Option<EncodedPayload>,
@@ -2453,8 +2362,7 @@ impl DurableOwner {
         receive(receiver).await
     }
 
-    /// Retracts this owner's state when it holds no work; see `Driver::discard_unused`.
-    pub(crate) async fn discard_unused(&self) -> Result<()> {
+    pub async fn discard_unused(&self) -> Result<()> {
         let (result, receiver) = oneshot::channel();
         self.send(Command::DiscardUnused {
             caller: self.caller()?,
@@ -2464,7 +2372,7 @@ impl DurableOwner {
         receive(receiver).await
     }
 
-    pub(crate) async fn commit_checkpoint(&self, checkpoint: EncodedPayload) -> Result<()> {
+    pub async fn commit_checkpoint(&self, checkpoint: EncodedPayload) -> Result<()> {
         let (result, receiver) = oneshot::channel();
         self.send(Command::CommitCheckpoint {
             caller: self.caller()?,
@@ -2475,7 +2383,7 @@ impl DurableOwner {
         receive(receiver).await
     }
 
-    pub(crate) async fn shutdown(&self) -> Result<()> {
+    pub async fn shutdown(&self) -> Result<()> {
         match self.release.state.compare_exchange(
             OWNER_ACTIVE,
             OWNER_RELEASING,

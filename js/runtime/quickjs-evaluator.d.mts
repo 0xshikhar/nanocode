@@ -10,7 +10,7 @@ export type AsyncQuickJsModule = {
   newContext(): unknown;
 };
 
-/** Builds a serialized, sandboxed Code Mode evaluator for CSP-restricted runtimes. */
+
 export function createQuickJsEvaluator(
   quickJs: AsyncQuickJsModule,
   options?: QuickJsEvaluatorOptions,

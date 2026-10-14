@@ -3,10 +3,10 @@ import { Buffer } from "buffer";
 const DEFAULT_MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 const DEFAULT_MAX_INPUT_BYTES = 64 * 1024;
 
-/**
- * Creates non-interactive SSH over a host-owned byte stream. IdentityRef is a
- * separate host boundary: the reference is forwarded, but its key never is.
- */
+
+
+
+
 export function createSshCommand(options) {
   if (!options || typeof options !== "object" || Array.isArray(options)) {
     throw new TypeError("SSH options must be an object");
@@ -48,7 +48,7 @@ export function createSshCommand(options) {
   } };
 }
 
-/** Adapts a WHATWG byte-stream socket, including Cloudflare TCP sockets, to SSH. */
+
 export function createWebStreamSshStream(socket, signal) {
   if (!socket?.readable || !socket?.writable || typeof socket.close !== "function") {
     throw new TypeError("SSH byte-stream socket is required");
@@ -145,7 +145,7 @@ class WebByteStreamSshStream {
 }
 
 async function executeSsh(args, options, context) {
-  // Command discovery and brokered IdentityRef calls need no local SSH engine.
+
   const [{
     CancellationTokenSource, CommandRequestMessage, SshAuthenticationType,
     SshClientSession, SshSessionConfiguration,
@@ -155,8 +155,8 @@ async function executeSsh(args, options, context) {
   ]);
   context.signal?.throwIfAborted();
   const cancellation = new CancellationTokenSource();
-  // Materialize before abort: the library's uninitialized canceled token cannot
-  // be canceled again by dispose().
+
+
   const cancellationToken = cancellation.token;
   const abort = () => cancellation.cancel();
   context.signal?.addEventListener("abort", abort, { once: true });
@@ -192,8 +192,8 @@ async function executeSsh(args, options, context) {
     const serverAuthenticated = await session.authenticateServer(cancellationToken);
     if (!serverAuthenticated) throw new Error("server host-key authentication failed");
 
-    // Some OpenSSH servers enforce the protocol ordering strictly and ignore a
-    // user-authentication request sent before accepting the ssh-userauth service.
+
+
     await session.requestService("ssh-userauth", cancellationToken);
     if (!session.activateService("ssh-userauth")) {
       throw new Error("server did not activate SSH user authentication");
@@ -242,8 +242,8 @@ async function executeSsh(args, options, context) {
     try {
       const stdin = Buffer.from(String(context.stdin ?? ""), "utf8");
       if (!channelClosed && stdin.length) await channel.send(stdin, cancellationToken);
-      // The SSH library emits CHANNEL_EOF for an empty send. Input must close
-      // independently of output so commands such as `cat` can finish.
+
+
       if (!channelClosed) await channel.send(Buffer.alloc(0), cancellationToken);
     } catch (error) {
       if (!channelClosed) throw error;
@@ -266,16 +266,16 @@ async function executeSsh(args, options, context) {
 function normalizeRsaPublicKeyBlob(key) {
   if (key?.keyAlgorithmName !== "ssh-rsa" || typeof key.getPublicKeyBytes !== "function") return;
   const getPublicKeyBytes = key.getPublicKeyBytes.bind(key);
-  // RFC 8332 changes the signature algorithm name, but the public-key blob
-  // remains the RFC 4253 `ssh-rsa` encoding. The dependency otherwise writes
-  // `rsa-sha2-*` into both fields, which strict OpenSSH servers reject.
+
+
+
   key.getPublicKeyBytes = async () => {
     try {
       return await getPublicKeyBytes("ssh-rsa");
     } catch (error) {
-      // Node 24 cannot export the public KeyObject produced by the dependency's
-      // private-key importer as PKCS#1, although its public JWK remains valid.
-      // Encode that public material directly instead of rejecting a valid key.
+
+
+
       const jwk = key.publicKey?.export?.({ format: "jwk" });
       if (jwk?.kty !== "RSA" || typeof jwk.e !== "string" || typeof jwk.n !== "string") {
         throw error;
@@ -491,7 +491,7 @@ function positiveInteger(value, fallback, name) {
   return value;
 }
 
-/** Generate an identity inside a credential-owning host; never expose its private key in tool output. */
+
 export async function createSshKeyPair() {
   const [{ SshAlgorithms }, { exportPrivateKey, exportPublicKey }] = await Promise.all([
     import("@microsoft/dev-tunnels-ssh"),
@@ -503,7 +503,7 @@ export async function createSshKeyPair() {
   } finally { key.dispose(); }
 }
 
-/** Derive the authorized_keys line from a PEM identity without exporting private material. */
+
 export async function sshPublicKey(privateKey) {
   const { importKey, exportPublicKey } = await import("@microsoft/dev-tunnels-ssh-keys");
   const key = await importKey(privateKey);

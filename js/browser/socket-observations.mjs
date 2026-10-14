@@ -1,5 +1,5 @@
-// Passive, content-free observations. Timers report silence; they never cancel
-// inference. Each socket retains only one active request and 32 response links.
+
+
 export function createSocketObservations(observe) {
   if (observe === undefined) return;
   if (typeof observe !== "function") throw new TypeError("host socket event hook must be a function");
@@ -11,7 +11,7 @@ export function createSocketObservations(observe) {
     try {
       const result = observe(value);
       if (result?.then) void Promise.resolve(result).catch(() => {});
-    } catch { /* Observation cannot change transport behavior. */ }
+    } catch {   }
   };
   const retain = (map, key, value, limit = 128) => {
     if (!map.has(key) && map.size >= limit) map.delete(map.keys().next().value);
@@ -39,8 +39,8 @@ export function createSocketObservations(observe) {
         retain(starts, key, { sessionId, count: (starts.get(key)?.count ?? 0) + 1 });
         retain(calls, sessionId, { ...correlation, key, requests: 0 });
       } else if (/^model\.(call|compaction|warmup)\.(completed|failed)$/.test(event.type)) {
-        // A response ID is evidence only when already seen on that socket.
-        // Without it, finish only a uniquely attributable indexed operation.
+
+
         const candidates = [...sockets].filter(socket => socket.sessionId === sessionId
           && socket.matches(correlation, p.response_id));
         if (candidates.length === 1) {
@@ -132,28 +132,28 @@ export function createSocketObservations(observe) {
           if (!active) return;
           active.messages++;
           active.lastMessage = now;
-          // Only parse bounded envelopes while a relevant milestone is missing.
-          // A large/unrecognized envelope remains unclassified, never copied to logs.
+
+
           const candidates = typeof text === "string" && text.length <= 16_384
             && (active.responseId === undefined || active.firstMessage === undefined || active.firstOutput === undefined
               || DELTA_STAGES.some(([field, , types]) => active[field] === undefined
                 && types.some(type => text.includes(`"${type}"`))));
           let frame;
           if (candidates) {
-            try { frame = JSON.parse(text); } catch { /* Invalid frames remain the runtime's responsibility. */ }
+            try { frame = JSON.parse(text); } catch {   }
           }
           const type = EVENT_TYPES.has(frame?.type) ? frame.type : "unclassified";
           const classification = { provider_event_type: type };
           if (type !== "unclassified" && type !== "responsesapi.websocket_timing") responseLink(active, frame?.response?.id ?? frame?.response_id);
-          // A new frame ends the current silence interval. Streaming calls
-          // produce no waiting records while frames keep arriving.
+
+
           if (active.sentAt !== undefined) watch("request.waiting", active.started);
           if (active.firstMessage === undefined) {
             active.firstMessage = now;
             record("request.first_message", { elapsed_ms: now - active.started, ...classification, ...measure() });
           }
-          // Keep the historical output-item milestone, but identify what caused
-          // it. Empty item announcements are not evidence of generated text.
+
+
           if (active.firstOutput === undefined && OUTPUT_EVENTS.has(type)) {
             active.firstOutput = now;
             record("request.first_output", { elapsed_ms: now - active.started, ...classification,
@@ -177,10 +177,10 @@ export function createSocketObservations(observe) {
           if (active.responseId !== undefined && responseId !== undefined && responseId !== null) {
             return identifier(responseId, "resp_") && active.responseId === responseId;
           }
-          // Large provider envelopes may leave the wire response ID unobserved.
-          // Do not bind the completion ID; fall back to operation evidence.
-          // Index/turn can be reused by retries. Only a single observed start
-          // with a single send can support completion without a response ID.
+
+
+
+
           return typeof operation.turnId === "string" && Number.isSafeInteger(operation.index)
             && active.operation.requests === 1 && starts.get(active.operation.key)?.count === 1;
         },
@@ -212,7 +212,7 @@ function identifier(value, prefix) { return typeof value === "string" && value.s
 const OUTPUT_EVENTS = new Set(["response.output_text.delta", "response.reasoning_summary_text.delta",
   "response.reasoning_summary.delta", "response.reasoning_content.delta", "response.output_item.added", "response.output_item.done"]);
 
-// These names are a fixed protocol allowlist, never provider-supplied log text.
+
 const DELTA_STAGES = [
   ["firstReasoning", "request.first_reasoning_delta", ["response.reasoning_text.delta", "response.reasoning_summary_text.delta",
     "response.reasoning_summary.delta", "response.reasoning_content.delta"]],

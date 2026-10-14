@@ -1,4 +1,3 @@
-//! Shared still-capture sizing and transport policy.
 use crate::Error;
 use serde::Deserialize;
 use std::sync::OnceLock;
@@ -26,7 +25,6 @@ fn error(message: &str) -> Error {
     std::io::Error::other(message.to_owned()).into()
 }
 
-/// Fit valid display dimensions into 1280 pixels without increasing the scale.
 pub(crate) fn target_dimensions(width: f64, height: f64) -> Result<(u32, u32)> {
     if !width.is_finite()
         || !height.is_finite()
@@ -45,14 +43,13 @@ pub(crate) fn target_dimensions(width: f64, height: f64) -> Result<(u32, u32)> {
     ))
 }
 
-/// Encode a bounded RGB frame using the common JPEG response contract.
 pub(crate) fn encode_jpeg(frame: &RgbImage) -> Result<Value> {
     if !(1..=policy().max_dimension).contains(&frame.width())
         || !(1..=policy().max_dimension).contains(&frame.height())
     {
         return Err(error("unexpected screen capture dimensions"));
     }
-    // Bound the base64 representation itself, stricter than a 500k JPEG bound.
+
     for &quality in &policy().jpeg_qualities {
         let mut bytes = Vec::new();
         JpegEncoder::new_with_quality(&mut bytes, quality)

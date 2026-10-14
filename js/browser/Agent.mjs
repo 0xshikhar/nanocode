@@ -1,5 +1,5 @@
 
-/** Create the browser Agent in its package-owned module Worker. */
+
 export function create(options = {}) {
   if (options?.toolMode !== undefined && options.toolMode !== "code-only") throw new TypeError("toolMode must be code-only; direct tools are no longer supported");
   if (options.harness === 'claude') return import('./Claude.mjs').then(({ create }) => create(options));

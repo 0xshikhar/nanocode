@@ -16,109 +16,99 @@ use crate::client::{
     telemetry::{ApiEvent, elapsed_ns},
 };
 
-/// Complete provider output from one `response.create` operation.
 #[derive(Deserialize, Serialize)]
 pub struct GenerationOutput {
-    /// Provider response ID retained privately by a managed session.
     pub id: String,
-    /// Provider-reported model identifier when present in the completion event.
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reported_model: Option<String>,
-    /// Provider terminal status.
+
     pub status: String,
-    /// Whether the model affirmatively ended the logical turn.
+
     pub end_turn: Option<bool>,
-    /// Concatenated final assistant message when one was produced.
+
     pub final_message: Option<String>,
-    /// Complete provider output items in order.
+
     pub output_items: Vec<ResponseItem>,
-    /// Parsed custom and function calls derived from the output items.
+
     pub code_calls: Vec<CodeCall>,
-    /// Provider token usage.
+
     pub usage: Option<Usage>,
-    /// Nanoseconds from attempt start to the first provider event.
+
     pub time_to_first_event_ns: u64,
-    /// Nanoseconds from attempt start to the first model output.
+
     pub time_to_first_output_ns: Option<u64>,
-    /// Detailed stream-pipeline counters.
+
     pub pipeline_stats: ResponsePipelineStats,
 }
 
-/// Complete provider output from one `response.compact` operation.
 pub struct CompactionOutput {
-    /// Provider response ID retained privately by a managed session.
     pub id: String,
-    /// Provider terminal status.
+
     pub status: String,
-    /// Exactly one completed compaction item.
+
     pub item: ResponseItem,
-    /// Provider token usage.
+
     pub usage: Option<Usage>,
-    /// Nanoseconds from attempt start to the first provider event.
+
     pub time_to_first_event_ns: u64,
-    /// Nanoseconds from attempt start to the first compaction output.
+
     pub time_to_first_output_ns: Option<u64>,
-    /// Detailed stream-pipeline counters.
+
     pub pipeline_stats: ResponsePipelineStats,
 }
 
-/// Work and latency counters for one complete streamed response.
 #[derive(Clone, Copy, Default, Deserialize, Serialize)]
 pub struct ResponsePipelineStats {
-    /// Provider events received.
     pub event_count: u64,
-    /// Encoded provider event bytes received.
+
     pub event_bytes: u64,
-    /// Nanoseconds waiting for the transport to yield events.
+
     pub receive_wait_duration_ns: u64,
-    /// Nanoseconds validating raw JSON.
+
     pub parse_duration_ns: u64,
-    /// Nanoseconds emitting raw and normalized events.
+
     pub emit_duration_ns: u64,
-    /// Nanoseconds decoding typed provider events.
+
     pub decode_duration_ns: u64,
-    /// Nanoseconds events waited in the socket pump queue.
+
     pub socket_queue_duration_ns: u64,
-    /// Displayable text and reasoning delta count.
+
     pub display_delta_count: u64,
-    /// Displayable delta bytes.
+
     pub display_delta_bytes: u64,
-    /// Sum of gaps between displayable deltas.
+
     pub inter_delta_gap_duration_ns: u64,
-    /// Largest gap between displayable deltas.
+
     pub inter_delta_gap_max_ns: u64,
-    /// Gaps of at least 50 milliseconds.
+
     pub inter_delta_stall_50ms_count: u64,
-    /// Gaps of at least 100 milliseconds.
+
     pub inter_delta_stall_100ms_count: u64,
-    /// Gaps of at least 250 milliseconds.
+
     pub inter_delta_stall_250ms_count: u64,
 }
 
-/// Completed callable output derived from a response item.
 #[derive(Clone, Deserialize, Serialize)]
 pub struct CodeCall {
-    /// Provider call identity.
     pub call_id: String,
-    /// Tool name.
+
     pub name: String,
-    /// Optional tool namespace.
+
     pub namespace: Option<String>,
-    /// Complete function/search arguments or custom-tool input.
+
     pub input: String,
-    /// Wire-level call representation.
+
     pub kind: CodeCallKind,
 }
 
-/// Wire-level representation used by a completed callable output.
 #[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CodeCallKind {
-    /// Custom tool call with free-form input.
     Custom,
-    /// Function call with JSON arguments.
+
     Function,
-    /// Provider-native deferred-tool search with JSON arguments.
+
     ToolSearch,
 }
 
@@ -312,8 +302,7 @@ where
                     delta.len(),
                 )?;
             }
-            // Chat-compatible providers expose visible reasoning as content
-            // deltas. Feed the same live display channel as Responses summaries.
+
             ServerEvent::ReasoningSummaryTextDelta { delta, .. }
             | ServerEvent::ReasoningSummaryDelta { delta, .. }
             | ServerEvent::ReasoningContentDelta { delta, .. } => {
@@ -494,8 +483,6 @@ where
         match received.event {
             ServerEvent::OutputItemDone { item, .. } => done_items.push(item),
             ServerEvent::Completed { response } => {
-                // Pinned Codex counts streamed output_item.done compactions only.
-                // The completion envelope must not replace or manufacture them.
                 let mut compactions = done_items
                     .into_iter()
                     .filter(|item| matches!(item, ResponseItem::Compaction { .. }));
@@ -567,8 +554,7 @@ where
         api.event = %raw_event.get(),
         "OpenAI Responses API event"
     );
-    // Classify before raw/normalized observers run. Queueing and processing
-    // must not restart numeric advice carried in an error frame.
+
     let decode_started_at = Instant::now();
     let decoded = decode_event::<ServerEvent>(raw_event);
     let initial_decode_duration_ns = elapsed_ns(decode_started_at);

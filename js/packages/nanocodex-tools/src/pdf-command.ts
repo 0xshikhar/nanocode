@@ -19,7 +19,7 @@ Text extraction only: scanned pages need OCR. Layout is approximate, not
 byte-for-byte Poppler output. Unsupported flags are rejected.
 `;
 
-/** Workspace-safe PDF command; extraction runs in the caller-provided backend. */
+
 export function createPdfTextCommandWithExtractor(filesystem: () => Workspace, extract: PdfTextExtractor) {
   return {
     name: "pdftotext",

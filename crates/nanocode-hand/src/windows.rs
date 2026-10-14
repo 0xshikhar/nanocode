@@ -1,5 +1,3 @@
-//! Primary-display capture and input for an interactive Windows user session.
-//! The publisher owns authorization and input leases. Session 0 is unsupported.
 #![allow(unsafe_code)]
 use crate::{
     Error,
@@ -31,13 +29,12 @@ struct Held {
 }
 static HELD: OnceLock<Mutex<Held>> = OnceLock::new();
 
-/// Capture never takes the input mutex: encoding cannot delay lease revocation.
 pub fn ensure_interactive_session() -> Result<()> {
     use windows_sys::Win32::System::{
         RemoteDesktop::ProcessIdToSessionId, Threading::GetCurrentProcessId,
     };
     let mut session = 0;
-    // SAFETY: writable session ID output and current process ID.
+
     if unsafe { ProcessIdToSessionId(GetCurrentProcessId(), &mut session) } == 0 || session == 0 {
         return Err(error(
             "Windows screen requires the signed-in desktop helper; services in Session 0 cannot capture or control the desktop",
@@ -68,7 +65,7 @@ pub fn request(input: Value) -> Result<Value> {
     };
     let result: Result<bool> = (|| {
         let plan = plan?;
-        // An agent action promises a screenshot; preflight the active display.
+
         let _dpi = DpiGuard::new()?;
         if plan.observe {
             dimensions()?;
@@ -128,7 +125,7 @@ struct Raw {
     text: Option<String>,
     delta_x: Option<f64>,
     delta_y: Option<f64>,
-    // The publisher validates these lease fields before entering this module.
+
     #[serde(rename = "sequence")]
     _sequence: Option<u64>,
     #[serde(rename = "generation")]
@@ -208,7 +205,6 @@ fn valid_button(button: u32) -> Result<u32> {
 }
 impl Raw {
     fn validate(self) -> Result<Input> {
-        // Reject fields belonging to another kind, including otherwise ignored coordinates.
         let fields: &[&str] = match self.kind.as_str() {
             "move" => &["x", "y"],
             "relativeMove" => &["deltaX", "deltaY"],
@@ -357,8 +353,6 @@ impl Request {
     }
 }
 
-/// Continuous primary-display H.264 capture used by the shared WebRTC publisher.
-/// FFmpeg is optional; startup failure selects the native JPEG fallback.
 pub fn video_command() -> Result<std::process::Command> {
     use std::os::windows::process::CommandExt;
     ensure_interactive_session()?;
@@ -375,7 +369,7 @@ pub fn video_command() -> Result<std::process::Command> {
     } else {
         std::path::PathBuf::from("ffmpeg.exe")
     });
-    command.creation_flags(0x08000000); // CREATE_NO_WINDOW for the desktop helper.
+    command.creation_flags(0x08000000);
     command.args([
         "-hide_banner",
         "-loglevel",
@@ -436,7 +430,6 @@ pub fn video_command() -> Result<std::process::Command> {
 struct DpiGuard(DPI_AWARENESS_CONTEXT);
 impl DpiGuard {
     fn new() -> Result<Self> {
-        // SAFETY: thread-local awareness is restored before returning the worker.
         let previous =
             unsafe { SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
         if previous.is_null() {
@@ -462,7 +455,6 @@ fn dimensions() -> Result<(i32, i32)> {
     Ok((w, h))
 }
 fn send(input: INPUT) -> Result<()> {
-    // SAFETY: input is initialized and remains live for the synchronous call.
     if unsafe { SendInput(1, &input, size_of::<INPUT>() as i32) } != 1 {
         return Err(error(
             "Windows input blocked; the Hand must run in the interactive desktop at the target application's integrity level",
@@ -558,7 +550,7 @@ impl Held {
                     return Ok(());
                 }
                 let mut input = mouse(MOUSEEVENTF_MOVE | MOUSEEVENTF_MOVE_NOCOALESCE, 0);
-                // SAFETY: mouse() initialized this union as MOUSEINPUT.
+
                 unsafe {
                     input.Anonymous.mi.dx = dx;
                     input.Anonymous.mi.dy = dy;
@@ -611,14 +603,13 @@ fn move_pointer(x: f64, y: f64) -> Result<()> {
         (coordinate(x)? * (width - 1) as f64).round() as i32,
         (coordinate(y)? * (height - 1) as f64).round() as i32,
     );
-    // SAFETY: bounded physical primary-display coordinates in the current session.
+
     if unsafe { SetCursorPos(x, y) } == 0 {
         return Err(error("could not move Windows pointer"));
     }
     Ok(())
 }
-/// USB HID usages to set-1 physical scancodes. The extended flag distinguishes
-/// navigation/right modifiers from numeric-pad/left modifier keys.
+
 fn hid_to_scan(hid: u16) -> Option<(u16, bool)> {
     const LETTERS: [u16; 26] = [
         0x1e, 0x30, 0x2e, 0x20, 0x12, 0x21, 0x22, 0x23, 0x17, 0x24, 0x25, 0x26, 0x32, 0x31, 0x18,
@@ -702,7 +693,6 @@ struct Capture {
 }
 impl Drop for Capture {
     fn drop(&mut self) {
-        // SAFETY: only non-null handles allocated on this thread are released.
         unsafe {
             if !self.previous.is_null() {
                 SelectObject(self.memory, self.previous);
@@ -730,8 +720,7 @@ fn capture() -> Result<Value> {
         bitmap: null_mut(),
         previous: null_mut(),
     };
-    // SAFETY: DIB dimensions are capped at 1280², buffer is read only while the
-    // selected bitmap lives. GdiFlush completes writes before accessing its bits.
+
     unsafe {
         resources.screen = GetDC(null_mut());
         if resources.screen.is_null() {

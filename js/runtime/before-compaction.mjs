@@ -1,5 +1,5 @@
-// Awaited host effect barrier. The Rust execution policy owns replay receipts;
-// the host callback owns idempotency if its commit precedes a lost Rust receipt.
+
+
 export function createBeforeCompaction(callback, { timeoutMs = 30_000 } = {}) {
   if (callback !== undefined && typeof callback !== "function") {
     throw new TypeError("beforeCompaction must be a function");

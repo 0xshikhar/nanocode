@@ -23,7 +23,6 @@ const EXEC_DESCRIPTION: &str = r"Run JavaScript in the embedded host.
 - JavaScript runs inside the Node or browser host supplied by the embedding application.";
 const DEFERRED_TOOLS_DESCRIPTION: &str = r"Some deferred nested tools are omitted from this description. They remain available on the global `tools` object and are listed in `ALL_TOOLS`. Use `tool_search` to discover remote tools before calling them.";
 
-/// Stateful Code Mode adapter over an application-owned host.
 pub struct EmbeddedToolRuntime {
     working_directory: Arc<str>,
     host: Option<Arc<dyn CodeModeHost>>,
@@ -38,7 +37,6 @@ struct LocalTool {
     model_visible: bool,
 }
 
-/// Cancellation handle for work owned by an embedding host.
 #[derive(Clone, Default)]
 pub struct EmbeddedToolRuntimeControl {
     host: Option<Arc<dyn CodeModeHost>>,
@@ -46,8 +44,6 @@ pub struct EmbeddedToolRuntimeControl {
 }
 
 impl EmbeddedToolRuntime {
-    /// Creates a runtime without an application host. HTTP tool configurations
-    /// are accepted for parity with the native runtime and ignored.
     pub fn new(workspace: impl Into<PathBuf>, _builtin_tools: Vec<Arc<dyn Tool>>) -> Self {
         let workspace = workspace.into();
         Self {
@@ -59,7 +55,6 @@ impl EmbeddedToolRuntime {
         }
     }
 
-    /// Builds a runtime from one complete embedded tool selection.
     #[must_use]
     pub fn new_with_tools(
         workspace: impl Into<PathBuf>,
@@ -85,19 +80,16 @@ impl EmbeddedToolRuntime {
         self
     }
 
-    /// Returns the fixed model-visible runtime name.
     #[must_use]
     pub const fn default_shell_name(&self) -> &'static str {
         "javascript"
     }
 
-    /// Returns the model-visible working directory supplied at construction.
     #[must_use]
     pub fn working_directory(&self) -> &str {
         &self.working_directory
     }
 
-    /// Returns a cancellation handle for the runtime.
     #[must_use]
     pub fn control(&self) -> EmbeddedToolRuntimeControl {
         EmbeddedToolRuntimeControl {
@@ -106,7 +98,6 @@ impl EmbeddedToolRuntime {
         }
     }
 
-    /// Builds the `exec` definition from the host's current tool definitions.
     #[must_use]
     pub fn model_specs(&self, session_id: &str) -> Vec<ToolDefinition> {
         self.model_contract(session_id).0
@@ -301,15 +292,11 @@ impl EmbeddedToolRuntime {
         (model_definitions, code_mode_tool_names)
     }
 
-    /// Returns `false`; embedded definitions execute inside one Code Mode cell.
-    ///
-    /// The embedding host owns any concurrency policy below that cell.
     #[must_use]
     pub const fn supports_parallel_tool_calls(&self, _name: &str) -> bool {
         false
     }
 
-    /// Returns whether all application and local tools require nested Code Mode calls.
     #[must_use]
     pub fn is_code_only(&self) -> bool {
         self.host
@@ -317,12 +304,6 @@ impl EmbeddedToolRuntime {
             .is_some_and(|host| host.tool_mode() == EmbeddedToolMode::CodeOnly)
     }
 
-    /// Returns whether the embedding host registered a callable definition.
-    ///
-    /// Deferred exposure controls model-visible schemas, not dispatch. This
-    /// matches the native and Codex runtimes: a tool loaded by `tool_search`
-    /// remains registered even though its schema was omitted from the initial
-    /// request.
     #[must_use]
     pub fn contains(&self, name: &str) -> bool {
         if self.local.iter().any(|tool| tool.name.as_ref() == name) {
@@ -354,7 +335,6 @@ impl EmbeddedToolRuntime {
         false
     }
 
-    /// Dispatches a direct embedded definition or returns a model-visible failure.
     #[allow(
         clippy::unused_async,
         reason = "matches the native tool-runtime contract"
@@ -394,7 +374,6 @@ impl EmbeddedToolRuntime {
         host.execute_tool(name, input, context).await
     }
 
-    /// Executes one Code Mode cell through the embedding host.
     pub async fn execute_code(
         &self,
         source: &str,
@@ -422,7 +401,6 @@ impl EmbeddedToolRuntime {
         host.execute(source, context).await
     }
 
-    /// Executes Code Mode from independently owned invocation state.
     pub async fn execute_code_owned(
         &self,
         source: &str,
@@ -431,8 +409,6 @@ impl EmbeddedToolRuntime {
         self.execute_code(source, context.as_context()).await
     }
 
-    /// Executes Code Mode and streams nested calls to an observer when the
-    /// embedding host supports live updates.
     pub async fn execute_code_owned_with_updates(
         &self,
         source: &str,
@@ -462,7 +438,6 @@ impl EmbeddedToolRuntime {
             .await
     }
 
-    /// Observes a yielded cell through a capable embedding host.
     pub async fn wait_for_code(
         &self,
         input: &str,
@@ -472,7 +447,6 @@ impl EmbeddedToolRuntime {
             .await
     }
 
-    /// Observes newly completed nested work without repeating previous output.
     pub async fn wait_for_code_with_updates(
         &self,
         input: &str,
@@ -523,7 +497,6 @@ fn normalize_identifier(name: &str) -> String {
 }
 
 impl EmbeddedToolRuntimeControl {
-    /// Ask the bound host to yield current observers, without cancelling effects.
     pub async fn preempt_turn(&self) {
         if let (Some(host), Some(session_id)) = (&self.host, &self.session_id)
             && let Err(error) = host.preempt_turn(session_id).await
@@ -532,14 +505,12 @@ impl EmbeddedToolRuntimeControl {
         }
     }
 
-    /// Begins a new logical agent turn.
     pub fn begin_turn(&self) {
         if let (Some(host), Some(session_id)) = (&self.host, &self.session_id) {
             host.begin_turn(session_id);
         }
     }
 
-    /// Cancels work owned by the current logical turn.
     pub async fn cancel_turn(&self) {
         if let (Some(host), Some(session_id)) = (&self.host, &self.session_id)
             && let Err(error) = host.cancel_turn(session_id).await
@@ -548,8 +519,6 @@ impl EmbeddedToolRuntimeControl {
         }
     }
 
-    /// Asks the embedding host to relay nested updates of cells the completed
-    /// turn left running. Hosts without a relay leave them for the next wait.
     pub async fn detach_turn_with_updates(
         &self,
         observer: &mut (dyn FnMut(&str) -> Box<dyn CodeModeObserver> + Send),
@@ -559,8 +528,6 @@ impl EmbeddedToolRuntimeControl {
         }
     }
 
-    /// Cancels the current logical turn and reports nested calls its cells
-    /// leave unfinished when the host supports it.
     pub async fn cancel_turn_with_updates(&self, observer: &mut dyn CodeModeObserver) {
         if let (Some(host), Some(session_id)) = (&self.host, &self.session_id)
             && let Err(error) = host.cancel_turn_with_updates(session_id, observer).await
@@ -569,7 +536,6 @@ impl EmbeddedToolRuntimeControl {
         }
     }
 
-    /// Cancels active work.
     pub async fn cancel(&self) {
         if let (Some(host), Some(session_id)) = (&self.host, &self.session_id)
             && let Err(error) = host.cancel(session_id).await

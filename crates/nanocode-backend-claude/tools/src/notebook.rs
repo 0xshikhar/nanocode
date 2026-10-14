@@ -1,9 +1,3 @@
-//! Explicitly rooted, bounded Jupyter notebook cell edits.
-//!
-//! The caller must authorize and isolate `root` before constructing this adapter.
-//! Lexical and symlink checks are defense in depth: a hostile process swapping
-//! directory entries concurrently still requires OS-level workspace isolation.
-
 use serde_json::{Value, json};
 use std::{
     fs::{self, OpenOptions},
@@ -15,7 +9,6 @@ use std::{
 const MAX_NOTEBOOK: usize = 1024 * 1024;
 static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
-/// NotebookEdit adapter scoped to an explicitly authorized directory.
 #[derive(Clone, Debug)]
 pub struct ClaudeNotebook {
     root: PathBuf,
@@ -23,7 +16,6 @@ pub struct ClaudeNotebook {
 }
 
 impl ClaudeNotebook {
-    /// Construct from an existing, authorized workspace directory.
     pub fn new(root: impl AsRef<Path>) -> Result<Self, String> {
         let given = root.as_ref();
         let root_alias = if given.is_absolute() {
@@ -40,7 +32,6 @@ impl ClaudeNotebook {
         Ok(Self { root, root_alias })
     }
 
-    /// Standalone NotebookEdit metadata; no Codex tool contract is used.
     #[must_use]
     pub fn definitions() -> Vec<Value> {
         vec![json!({
@@ -61,13 +52,11 @@ impl ClaudeNotebook {
         })]
     }
 
-    /// Alias for [`Self::definitions`].
     #[must_use]
     pub fn tool_schemas() -> Vec<Value> {
         Self::definitions()
     }
 
-    /// Execute NotebookEdit; returns a short outcome or a descriptive validation error.
     pub async fn execute(&self, name: &str, input: Value) -> Result<String, String> {
         if name != "NotebookEdit" {
             return Err(format!("unknown notebook tool: {name}"));
@@ -181,7 +170,6 @@ impl ClaudeNotebook {
             return Err("cell_id is required for replace and delete".into());
         }
         let index = if let Some(id) = id {
-            // An exact ID takes precedence over index notation (including numeric IDs).
             cells
                 .iter()
                 .position(|cell| cell.get("id").and_then(Value::as_str) == Some(id))
@@ -213,7 +201,7 @@ impl ClaudeNotebook {
                 obj.insert("source".into(), source_value(new_source, as_string));
                 if kind != old_type {
                     obj.insert("cell_type".into(), Value::String(kind.clone()));
-                    // nbformat code and markdown cells have different mandatory fields.
+
                     if kind == "code" {
                         obj.remove("attachments");
                         obj.entry("execution_count").or_insert(Value::Null);
@@ -232,8 +220,7 @@ impl ClaudeNotebook {
                     "metadata": {},
                     "source": source_value(new_source, false)
                 });
-                // nbformat 4.5+ requires a unique cell ID. Keep old notebook and
-                // cell metadata untouched while assigning one to the new cell.
+
                 let new_cell_id = loop {
                     let candidate = format!(
                         "cell-{:x}-{:x}",
@@ -278,8 +265,7 @@ impl ClaudeNotebook {
         if output.len() > MAX_NOTEBOOK {
             return Err("edited notebook exceeds 1 MiB limit".into());
         }
-        // Best-effort stale-read check. Filesystem isolation is still required to
-        // defend against concurrent hostile path replacement.
+
         if read_bounded(&path)? != before
             || fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink())
         {
@@ -295,8 +281,7 @@ impl ClaudeNotebook {
         if result.to_string().len() > 64 * 1024 {
             return Err("NotebookEdit output exceeds 64 KiB".into());
         }
-        // Preserve the JSON result contract while supplying the same bounded
-        // path-scoped guidance as the other native workspace operations.
+
         if let Ok(loader) = crate::ClaudeProjectContext::new(&self.root) {
             let context = loader.load_for_path(path.strip_prefix(&self.root).unwrap_or(&path));
             if !context.excerpts.is_empty() || !context.diagnostics.is_empty() {
@@ -375,7 +360,7 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
             file.write_all(bytes)
                 .map_err(|e| format!("write notebook: {e}"))?;
             file.sync_all().map_err(|e| format!("sync notebook: {e}"))?;
-            // Reject changed target symlinks again, immediately before rename.
+
             if fs::symlink_metadata(path)
                 .map_err(|e| format!("notebook path: {e}"))?
                 .file_type()

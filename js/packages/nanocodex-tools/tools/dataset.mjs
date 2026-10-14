@@ -1,7 +1,7 @@
 import { namedTool } from "./namedTool.mjs";
 import { DATASET_DESCRIPTION, datasetOutputSchema, datasetParameters } from "./datasetContract.mjs";
 
-/** A session-scoped, lazy browser dataset inspector. */
+
 export function dataset(options = {}) {
   if (!options || typeof options !== "object" || Array.isArray(options)) {
     throw new TypeError("dataset tool options must be an object");

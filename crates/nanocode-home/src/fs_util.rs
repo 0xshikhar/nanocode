@@ -4,19 +4,14 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// What occupies a path, without following a final symlink into a missing target.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum PathState {
     Absent,
-    /// A symlink whose target does not resolve.
+
     Dangling,
-    File {
-        canonical: PathBuf,
-    },
-    Dir {
-        canonical: PathBuf,
-    },
-    /// A FIFO, socket, device or other non-regular entry.
+    File { canonical: PathBuf },
+    Dir { canonical: PathBuf },
+
     Other,
 }
 
@@ -57,7 +52,6 @@ pub(crate) fn path_state(path: &Path) -> io::Result<PathState> {
 }
 
 fn is_missing(error: &io::Error) -> bool {
-    // ELOOP (symlink cycles) and ENOTDIR through a link are also unresolvable.
     matches!(
         error.kind(),
         io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
@@ -65,7 +59,6 @@ fn is_missing(error: &io::Error) -> bool {
 }
 
 const fn libc_eloop() -> i32 {
-    // ELOOP is 62 on macOS/BSD and 40 on Linux.
     if cfg!(any(
         target_os = "macos",
         target_os = "ios",
@@ -77,7 +70,6 @@ const fn libc_eloop() -> i32 {
     }
 }
 
-/// Reads at most `limit` bytes as lossy UTF-8; reports truncation.
 pub(crate) fn read_bounded(path: &Path, limit: usize) -> io::Result<(String, bool)> {
     let file = File::open(path)?;
     let mut data = Vec::with_capacity(limit.saturating_add(1).min(8 * 1024));
@@ -87,7 +79,6 @@ pub(crate) fn read_bounded(path: &Path, limit: usize) -> io::Result<(String, boo
     data.truncate(limit);
     let mut text = String::from_utf8_lossy(&data).into_owned();
     if truncated {
-        // Drop a replacement character produced by a split multi-byte sequence.
         if text.ends_with('\u{fffd}') {
             text.pop();
         }
@@ -95,7 +86,6 @@ pub(crate) fn read_bounded(path: &Path, limit: usize) -> io::Result<(String, boo
     Ok((text, truncated))
 }
 
-/// Directory entries sorted by file name; hidden (`.`-prefixed) names skipped.
 pub(crate) fn sorted_visible_entries(dir: &Path, limit: usize) -> io::Result<(Vec<PathBuf>, bool)> {
     let mut names = Vec::new();
     let mut truncated = false;

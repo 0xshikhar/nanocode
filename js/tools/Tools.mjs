@@ -12,10 +12,10 @@ import {
 import { createAttachment } from "./attachment.mjs";
 import { normalizeHostedMachines } from "nanocodex-tools/internal/hosted-machine";
 
-/**
- * Builds one language-neutral JavaScript-owned tool runtime.
- * Empty custom tools, no workspace, and no MCP are the defaults.
- */
+
+
+
+
 export async function createTools(options = {}) {
   validateOptions(options);
   const machines = normalizeHostedMachines(options.machines);

@@ -1,4 +1,3 @@
-//! Client-managed final-answer delivery shared by the browser/WASM bindings.
 use crate::BrowserVoiceEffects;
 use serde_json::Value;
 use std::{

@@ -1,4 +1,3 @@
-//! One managed voice protocol boundary for WASM and native bindings.
 use serde_json::{Value, json};
 
 use crate::{
@@ -37,8 +36,6 @@ impl ManagedVoiceProtocol {
 
     pub fn bind_session(&mut self, session_id: &str) {
         if self.session_id != session_id {
-            // Admission can deliver personalization before the first SDP binds
-            // the call. Preserve that snapshot, but never deduplicate across calls.
             if !self.session_id.is_empty() {
                 self.last_personalization = None;
             }
@@ -47,20 +44,16 @@ impl ManagedVoiceProtocol {
         }
     }
 
-    /// Match Codex's provider-requested handoffs. Completed speech and partial
-    /// transcripts do not themselves admit model work or trigger memory reads.
     pub fn requires_agent_admission(&self, payload: &str) -> bool {
         crate::realtime_message_requires_agent_admission(payload)
     }
 
-    /// Explicit speech can play independently of a coding-agent handoff.
     pub fn append_speech(&mut self, text: &str) -> Result<BrowserVoiceEffects, String> {
         let mut effects = self.protocol.append_speech(text)?;
         effects.playback_enabled = Some(true);
         Ok(effects)
     }
 
-    /// Ignore stale/replayed context without converting decimal cursors to floats.
     pub fn managed_event(&mut self, envelope: &Value) -> BrowserVoiceEffects {
         let event = &envelope["event"];
         let payload = &event["payload"];
@@ -80,16 +73,11 @@ impl ManagedVoiceProtocol {
             self.context_cursor = cursor.to_owned();
             return self.queue_personalization(text);
         }
-        // Retired versioned-memory results must never repopulate context or
-        // advance the cursor past a current Markdown snapshot.
+
         BrowserVoiceEffects::default()
     }
 
-    /// Deliver admission memories independently of media startup. The retained
-    /// queue handles a closed channel; accepted live updates supersede admission.
     pub fn personalization(&mut self, context: &Value) -> BrowserVoiceEffects {
-        // Admission can finish after a live memory update. Its older snapshot
-        // must not overwrite the current prepared context.
         if self.context_cursor != "0" {
             return BrowserVoiceEffects::default();
         }
@@ -111,8 +99,7 @@ impl ManagedVoiceProtocol {
 
     fn queue_memory_context(&mut self, text: &str) -> BrowserVoiceEffects {
         let effects = self.protocol.context(text);
-        // The context queue checks capacity before mutation. Optional memory
-        // must not terminate a live call when its retained queue is full.
+
         if effects.terminate.is_some() {
             BrowserVoiceEffects::default()
         } else {
@@ -120,7 +107,6 @@ impl ManagedVoiceProtocol {
         }
     }
 
-    /// JSON is just the binding ABI; all protocol decisions remain in this crate.
     pub fn dispatch(&mut self, command: &Value) -> Result<Value, String> {
         let effects = match command["op"].as_str().unwrap_or_default() {
             "configure" => {
@@ -281,10 +267,6 @@ pub fn managed_startup_context(context: &Value) -> Option<String> {
 }
 
 fn managed_personalization_context(context: &Value) -> Option<String> {
-    // Supplied by the managed host after live scope/policy checks. Never collect
-    // arbitrary developer messages from history: they can retain stale/private state.
-    // Budgets accommodate both personal and team snapshots (8 KB prepared facts
-    // and 12 KB Markdown excerpts per scope, plus framing).
     let mut sections = Vec::new();
     for (key, label, limit) in [
         (

@@ -14,78 +14,68 @@ use crate::{
 
 const MAX_LINK_SCAN: usize = 512;
 
-/// Whether [`AgentHome::link_natural_paths`] may touch the filesystem.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LinkMode {
-    /// Plan only: report `WouldCreate` and directories that would be created.
     DryRun,
-    /// Create missing symlinks (and only the parent directories they need).
+
     Apply,
 }
 
-/// The shared content an action concerns.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SharedItem {
-    /// `$CODEX_HOME/AGENTS.md` <-> `$CLAUDE_CONFIG_DIR/CLAUDE.md`.
     GlobalInstructions,
-    /// `$CODEX_HOME/skills/<name>` <-> `$CLAUDE_CONFIG_DIR/skills/<name>`.
+
     Skill { name: String },
 }
 
-/// Result for one natural path.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum LinkOutcome {
-    /// The symlink was created.
     Created,
-    /// Dry run: the symlink would be created.
+
     WouldCreate,
-    /// The natural path already resolves to the shared source.
+
     AlreadyLinked,
-    /// Both sides hold different content; left alone (union resolution covers it).
+
     BothExist,
-    /// A dangling symlink occupies the path; never replaced or removed.
+
     DanglingLink,
-    /// The path or its parent is occupied by something unexpected.
+
     Blocked { reason: String },
-    /// Symlinks are not created on this platform.
+
     Unsupported,
-    /// Creating the symlink failed.
+
     Failed { error: String },
 }
 
-/// One natural path considered by the linker.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct LinkAction {
     pub item: SharedItem,
-    /// The natural path (the would-be or existing symlink location).
+
     pub link: PathBuf,
-    /// The canonical shared source, when one exists.
+
     pub target: Option<PathBuf>,
     #[serde(flatten)]
     pub outcome: LinkOutcome,
 }
 
-/// Everything [`AgentHome::link_natural_paths`] did or would do.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct LinkReport {
     pub mode: LinkMode,
     pub actions: Vec<LinkAction>,
-    /// Parent directories created (or, in a dry run, that would be created).
+
     pub directories: Vec<PathBuf>,
 }
 
 impl LinkReport {
-    /// Actions that created (or would create) a symlink.
     pub fn changes(&self) -> impl Iterator<Item = &LinkAction> {
         self.actions
             .iter()
             .filter(|a| matches!(a.outcome, LinkOutcome::Created | LinkOutcome::WouldCreate))
     }
 
-    /// Actions needing user attention: dangling, blocked or failed paths.
     pub fn problems(&self) -> impl Iterator<Item = &LinkAction> {
         self.actions.iter().filter(|a| {
             matches!(
@@ -119,7 +109,6 @@ impl Planner {
         });
     }
 
-    /// Ensures `dir` exists as a directory, creating only what is missing.
     fn ensure_dir(&mut self, dir: &Path) -> Result<(), String> {
         if self.report.directories.iter().any(|d| d == dir) {
             return Ok(());
@@ -159,7 +148,7 @@ impl Planner {
         }
         match symlink(target, link) {
             Ok(()) => LinkOutcome::Created,
-            // symlink(2) never replaces an existing entry; a racing writer wins.
+
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => LinkOutcome::Blocked {
                 reason: "path appeared concurrently; left untouched".into(),
             },
@@ -188,28 +177,10 @@ fn is_symlink(path: &Path) -> bool {
 }
 
 fn state(path: &Path) -> PathState {
-    // Unreadable paths are treated as occupied by something unexpected.
     path_state(path).unwrap_or(PathState::Other)
 }
 
 impl AgentHome {
-    /// Makes shared content visible at each CLI's natural path by creating
-    /// symlinks on the missing side, pointing at the existing side's
-    /// canonical path:
-    ///
-    /// - `$CLAUDE_CONFIG_DIR/CLAUDE.md -> $CODEX_HOME/AGENTS.md` (or
-    ///   `AGENTS.override.md` when it is the only Codex file), or
-    ///   `$CODEX_HOME/AGENTS.md -> $CLAUDE_CONFIG_DIR/CLAUDE.md` when Codex has
-    ///   no global instructions file.
-    /// - Per skill: `$CODEX_HOME/skills/<n>` and `$CLAUDE_CONFIG_DIR/skills/<n>`
-    ///   each link to the highest-precedence real folder among
-    ///   `$CODEX_HOME/skills`, `$CLAUDE_CONFIG_DIR/skills`, `~/.agents/skills`.
-    ///
-    /// Never overwrites, removes or follows into existing entries; never
-    /// touches [`crate::NATIVE_OWNED_ENTRIES`]; leaves both-sides-exist and
-    /// dangling paths alone and reports them. Idempotent. Subagent profiles
-    /// are not linked because their formats differ. On non-Unix platforms
-    /// every planned link reports [`LinkOutcome::Unsupported`].
     pub fn link_natural_paths(&self, mode: LinkMode) -> LinkReport {
         let mut planner = Planner {
             mode,
@@ -288,7 +259,7 @@ impl AgentHome {
 
     fn link_skills(&self, planner: &mut Planner) {
         let roots = user_skill_roots(self);
-        // Writable natural locations; `~/.agents/skills` is a source only.
+
         let sides = [
             self.codex_home().join("skills"),
             self.claude_home().join("skills"),
@@ -329,7 +300,6 @@ impl AgentHome {
                     (_, None) => {}
                     (occupied, Some((_, canonical))) => {
                         if occupied.canonical() == Some(canonical.as_path()) {
-                            // The real source is silent; an alias to it is reported.
                             if is_symlink(&link) {
                                 planner.note(
                                     item(),

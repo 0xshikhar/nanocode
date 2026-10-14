@@ -20,7 +20,7 @@ export type ShellFetch = ((
   url: string,
   options?: ShellFetchOptions,
 ) => Promise<ShellFetchResult>) & Readonly<{
-  /** Optional streaming transport for source archives and Git packfiles. */
+
   stream?: (url: string, options?: ShellFetchOptions) => Promise<
     Omit<ShellFetchResult, "body"> & { body: AsyncIterable<Uint8Array> }
   >;
@@ -40,7 +40,7 @@ type GitClone = (
 const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const GITHUB_REPOSITORY = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?\/?$/;
 
-/** gh compatibility command backed by the connected GitHub account. */
+
 export function createGhCommand(
   fetch: ShellFetch,
   clone?: GitClone,
@@ -164,7 +164,7 @@ export function createGhCommand(
   };
 }
 
-/** Validate before any request, so ignored flags cannot change a caller's intent. */
+
 function validateGhArguments(args: string[], valueOptions: string[], maximumPositionals: number): void {
   let positionals = 0;
   for (let index = 0; index < args.length; index += 1) {
@@ -202,7 +202,7 @@ function ghRepoCloneArguments(args: string[]): string[] {
   ];
 }
 
-/** Git compatibility command backed by durable storage and host-authorized GitHub downloads. */
+
 export function createGitCommand(
   fetch: ShellFetch,
   workspace: () => Workspace,
@@ -219,7 +219,7 @@ export function createGitCommand(
         }
         const dir = await gitDirectory(mounted, context.cwd);
         const fs = workspaceFs(mounted);
-        // Keep Git and its compression runtime cold for chat, gh API calls, and archive clones.
+
         const { default: git } = await import("isomorphic-git");
         context.signal?.throwIfAborted();
         if (command === "status") {

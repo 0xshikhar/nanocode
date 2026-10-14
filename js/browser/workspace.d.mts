@@ -9,7 +9,7 @@ type OpfsStorage = {
 export function open(options?: {
   name?: string | undefined;
   root?: string | undefined;
-  /** Primarily useful for non-DOM hosts and deterministic tests. */
+
   storage?: OpfsStorage | undefined;
 }): Promise<Workspace>;
 

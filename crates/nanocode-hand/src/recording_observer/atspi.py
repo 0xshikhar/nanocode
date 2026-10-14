@@ -1,5 +1,3 @@
-# Read-only AT-SPI probe, invoked by the native observer with a numeric PID.
-# Never request names, text, descriptions, attributes, values, or clipboard data.
 import json
 import os
 import sys
@@ -13,7 +11,7 @@ try:
     if not os.environ.get("DBUS_SESSION_BUS_ADDRESS"):
         raise RuntimeError()
     session = dbus.SessionBus()
-    # Do not auto-launch a new accessibility service or enable accessibility.
+
     if not session.name_has_owner("org.a11y.Bus"):
         raise RuntimeError()
     address = session.get_object("org.a11y.Bus", "/org/a11y/bus", introspect=False).get_dbus_method("GetAddress", "org.a11y.Bus")(timeout=0.05)
@@ -37,8 +35,7 @@ try:
     seen = set()
     focused_role = None
     password = False
-    # Native AT-SPI roles: password text=40; check box=7, push button=43,
-    # radio button=44, slider=51, toggle button=62. All other focus remains unknown.
+
     while pending:
         path = pending.pop()
         if path in seen:
@@ -50,10 +47,10 @@ try:
         if len(state) != 2:
             raise RuntimeError()
         bits = int(state[0]) | (int(state[1]) << 32)
-        if bits & (1 << 6):  # defunct
+        if bits & (1 << 6):
             raise RuntimeError()
         role = int(call(owner, path, "GetRole"))
-        if role == 40 and bits & (1 << 25):  # password visible anywhere in app
+        if role == 40 and bits & (1 << 25):
             password = True
         if bits & (1 << 12):
             if focused_role is not None:
@@ -63,7 +60,7 @@ try:
         if len(children) + len(pending) > 128:
             raise RuntimeError()
         for child_owner, child_path in children:
-            # Embedded out-of-process UI cannot be attested by this PID.
+
             if str(child_owner) != owner:
                 raise RuntimeError()
             pending.append(str(child_path))

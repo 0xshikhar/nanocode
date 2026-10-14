@@ -30,8 +30,8 @@ const MPP_CLIENT_PROTOCOL_ERROR_CLOSE_CODE = 3008;
 export function createNodeHost(options = {}) {
   const preservation = createBeforeCompaction(options.beforeCompaction);
   const toolMode = options.toolMode ?? "code-only";
-  // Code Mode is the default; direct mode is an explicit opt-in that exposes
-  // host tools to the provider without dynamic code evaluation.
+
+
   if (toolMode !== "code-only" && toolMode !== "direct") {
     throw new TypeError("toolMode must be code-only or direct");
   }

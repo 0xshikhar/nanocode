@@ -1,6 +1,6 @@
 import { utf8ByteLength } from "../runtime/utf8.mjs";
 
-/** @deprecated Namespace size is governed by the selected providers. */
+
 export const MAX_NAMESPACE_MOUNTS = Infinity;
 export const MAX_NAMESPACE_GRANTS = 128;
 export const MAX_NAMESPACE_PATH_BYTES = 4_096;
@@ -111,10 +111,10 @@ const RIGHT_SET: ReadonlySet<string> = new Set(NAMESPACE_RIGHTS);
 const admittedManifests = new WeakSet<object>();
 const admittedScopes = new WeakSet<object>();
 
-/**
- * Admits and snapshots a mount table. Calling this function is an authority
- * boundary: later APIs only preserve or attenuate mounts admitted here.
- */
+
+
+
+
 export function createNamespaceManifest(input: NamespaceManifestInput): NamespaceManifest {
   if (!isRecord(input) || !Array.isArray(input.mounts)) {
     throw new NamespaceError("invalid_manifest", "namespace manifest must contain a mounts array");
@@ -155,15 +155,15 @@ export function createNamespaceManifest(input: NamespaceManifestInput): Namespac
     });
   });
 
-  // Canonical ordering makes the same admitted mapping stable regardless of
-  // discovery order. Routing never consults display or host names.
+
+
   mounts.sort((left, right) => left.root.localeCompare(right.root, "en"));
   const manifest = Object.freeze({ manifestId, mounts: Object.freeze(mounts) });
   admittedManifests.add(manifest);
   return manifest;
 }
 
-/** Derives a deterministic portable mount root from an opaque machine identity. */
+
 export function namespaceMountRoot(machineId: string): string {
   if (typeof machineId !== "string" || machineId.length === 0) {
     throw new TypeError("machine identity must be a non-empty string");
@@ -180,26 +180,26 @@ export function namespaceMountRoot(machineId: string): string {
   return `/hand-${slug}-${stableHash(machineId).slice(0, 8)}`;
 }
 
-/** Resolves an absolute logical path without consulting the host filesystem. */
+
 export function normalizeNamespacePath(path: string): string {
   return normalizePath(path, undefined);
 }
 
-/** Resolves an optional workdir against a captured, absolute default cwd. */
+
 export function resolveNamespaceCwd(defaultCwd: string, workdir?: string): string {
   const base = normalizeNamespacePath(defaultCwd);
   if (workdir === undefined || workdir === "") return base;
   return normalizePath(workdir, base);
 }
 
-/** Component-aware containment; lexical siblings such as /host2 never match /host. */
+
 export function isNamespacePathWithin(path: string, parent: string): boolean {
   const normalizedPath = normalizeNamespacePath(path);
   const normalizedParent = normalizeNamespacePath(parent);
   return pathWithinNormalized(normalizedPath, normalizedParent);
 }
 
-/** Returns the longest component-boundary mount match, if one exists. */
+
 export function resolveNamespaceMount(
   manifest: NamespaceManifest,
   path: string,
@@ -216,7 +216,7 @@ export function resolveNamespaceMount(
   return match;
 }
 
-/** Creates the root scope with every right present in the admitted manifest. */
+
 export function createNamespaceScope(
   manifest: NamespaceManifest,
   defaultCwd: string,
@@ -231,10 +231,10 @@ export function createNamespaceScope(
   return admitScope(manifest, cwd, grants);
 }
 
-/**
- * Creates a child snapshot. Omitted attenuation inherits exactly; supplied
- * entries may only remove mounts, narrow paths, or remove rights.
- */
+
+
+
+
 export function deriveChildNamespaceScope(
   parent: NamespaceScope,
   attenuation?: readonly NamespaceAttenuation[],
@@ -286,12 +286,12 @@ export function deriveChildNamespaceScope(
     grants.push(Object.freeze({ mountId, path, rights }));
   }
 
-  // Scope construction happens only after every requested grant is validated.
-  // Therefore an inaccessible inherited cwd rejects the whole derivation.
+
+
   return admitScope(parent.manifest, parent.defaultCwd, grants);
 }
 
-/** Resolves and authorizes a cwd for process routing on its owning hand. */
+
 export function routeNamespaceCwd(
   scope: NamespaceScope,
   workdir?: string,

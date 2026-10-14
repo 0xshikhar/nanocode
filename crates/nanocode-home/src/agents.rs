@@ -10,18 +10,14 @@ use crate::{
 
 const MAX_PROFILE_ENTRIES: usize = 256;
 
-/// On-disk format of a subagent profile. The formats are not interchangeable,
-/// so profiles are unioned for discovery but never aliased across homes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProfileFormat {
-    /// Claude Code `agents/**/*.md` with YAML frontmatter.
     ClaudeMarkdown,
-    /// Codex standalone `agents/*.toml` custom-agent config layers.
+
     CodexToml,
 }
 
-/// A directory of subagent profiles.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct AgentProfileRoot {
     pub path: PathBuf,
@@ -30,8 +26,6 @@ pub struct AgentProfileRoot {
     pub format: ProfileFormat,
 }
 
-/// One discovered profile file. `name` is the file stem; the authoritative
-/// name may live in frontmatter/TOML and is the consumer's to parse.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct AgentProfileFile {
     pub name: String,
@@ -40,7 +34,6 @@ pub struct AgentProfileFile {
     pub root: AgentProfileRoot,
 }
 
-/// Union of profiles: one winner per (format, name), plus shadowed entries.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct AgentProfileSet {
     pub profiles: Vec<AgentProfileFile>,
@@ -48,7 +41,6 @@ pub struct AgentProfileSet {
     pub diagnostics: Vec<Diagnostic>,
 }
 
-/// Resolves profile roots in precedence order (first wins per format+name).
 pub fn resolve_agent_profiles(roots: &[AgentProfileRoot]) -> AgentProfileSet {
     let mut set = AgentProfileSet::default();
     let mut winners: BTreeMap<(String, ProfileFormat), AgentProfileFile> = BTreeMap::new();
@@ -149,8 +141,6 @@ pub fn resolve_agent_profiles(roots: &[AgentProfileRoot]) -> AgentProfileSet {
 }
 
 impl AgentHome {
-    /// User-level profile roots: `$CLAUDE_CONFIG_DIR/agents` (Markdown) and
-    /// `$CODEX_HOME/agents` (Codex TOML).
     pub fn agent_profile_roots(&self) -> Vec<AgentProfileRoot> {
         vec![
             AgentProfileRoot {
@@ -168,20 +158,16 @@ impl AgentHome {
         ]
     }
 
-    /// Project roots first (project subagents win, as in Claude Code), then
-    /// user roots.
     pub fn agent_profile_roots_for(&self, project: &ProjectHome) -> Vec<AgentProfileRoot> {
         let mut roots = project.agent_profile_roots();
         roots.extend(self.agent_profile_roots());
         roots
     }
 
-    /// User-level profiles.
     pub fn agent_profiles(&self) -> AgentProfileSet {
         resolve_agent_profiles(&self.agent_profile_roots())
     }
 
-    /// Project and user profiles resolved over [`Self::agent_profile_roots_for`].
     pub fn agent_profiles_for(&self, project: &ProjectHome) -> AgentProfileSet {
         resolve_agent_profiles(&self.agent_profile_roots_for(project))
     }

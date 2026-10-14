@@ -1,6 +1,6 @@
-// Resolve a checksum-pinned native wasm-opt matching the npm Binaryen version.
-// The build validates its version and falls back to npm if native resolution
-// fails. Keep the archive pins in sync when updating js/package.json.
+
+
+
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
@@ -11,7 +11,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 
-// Published by WebAssembly/binaryen as <archive>.sha256 next to each release.
+
 export const binaryenReleases = {
   132: {
     "linux-x64": ["x86_64-linux", "195ddc94f9bc89f45abdabb0b9eea86023d727ba90eac8b35b80f2544fc30572"],
@@ -21,7 +21,7 @@ export const binaryenReleases = {
   },
 };
 
-// npm binaryen "132.0.0" is Binaryen version_132.
+
 export function pinnedBinaryenVersion(repository = root) {
   const pkg = JSON.parse(readFileSync(resolve(repository, "js/package.json"), "utf8"));
   const match = /^(\d+)\.0\.0$/.exec(pkg.devDependencies?.binaryen ?? "");
@@ -38,7 +38,7 @@ export function nativeBinaryenRelease(version, platform = process.platform, arch
     url: "https://github.com/WebAssembly/binaryen/releases/download/version_" + version + "/" + directory + "-" + suffix + ".tar.gz",
     sha256,
     directory,
-    // macOS archives link wasm-opt against the bundled lib/libbinaryen.dylib.
+
     members: platform === "darwin" ? [directory + "/bin", directory + "/lib"] : [directory + "/bin/wasm-opt"],
   };
 }
@@ -48,7 +48,7 @@ export function defaultCacheDirectory(environment = process.env) {
     || join(environment.XDG_CACHE_HOME || join(homedir(), ".cache"), "nanocodex", "binaryen");
 }
 
-// Returns the wasm-opt path, or throws with the reason native Binaryen is unavailable.
+
 export async function resolveNativeWasmOpt({ repository = root, cache = defaultCacheDirectory(), fetchArchive = curl } = {}) {
   const version = pinnedBinaryenVersion(repository);
   const release = nativeBinaryenRelease(version);
@@ -56,8 +56,8 @@ export async function resolveNativeWasmOpt({ repository = root, cache = defaultC
   const installed = join(cache, release.sha256, release.directory);
   const wasmOpt = join(installed, "bin", "wasm-opt");
   if (!existsSync(wasmOpt)) {
-    // Extract into a private directory, then publish it with one rename so
-    // concurrent builds never observe a partial installation.
+
+
     const staging = join(cache, release.sha256 + "." + randomUUID() + ".tmp");
     await mkdir(staging, { recursive: true });
     try {

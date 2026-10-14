@@ -4,23 +4,19 @@ use rusqlite::{Connection, OptionalExtension as _, TransactionBehavior, params};
 
 use crate::{OwnedState, OwnerId, OwnerToken, StateStore, StoreError, StoreFuture, StoredState};
 
-// SQLite INTEGER revisions deliberately stop at the signed 64-bit SQL ceiling.
-// Owner fences use a textual encoding so the public u64 token remains lossless.
 const MAX_SQL_REVISION: u64 = i64::MAX as u64;
 
-/// SQLite-backed state store.
 pub struct SqliteStore {
     connection: Connection,
 }
 
 impl SqliteStore {
-    /// Opens a SQLite database and initializes the current state schema.
+
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
         let connection = Connection::open(path).map_err(backend)?;
         Self::from_connection(connection)
     }
 
-    /// Initializes a caller-owned SQLite connection.
     pub fn from_connection(connection: Connection) -> Result<Self, StoreError> {
         connection
             .execute_batch(

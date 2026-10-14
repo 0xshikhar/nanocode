@@ -1,9 +1,6 @@
-//! Reusable configured runtime: shared provider clients and per-harness
-//! recipes, constructing many isolated agents with one lifecycle owner.
-
 use crate::claude::{ClaudeBuilder, ClaudeClient};
 use crate::{
-    Agent, AgentEvents, HarnessFamily, HarnessModel, NanocodexError, SessionCheckpoint, Thinking,
+    Agent, AgentEvents, HarnessFamily, ModelSelection, NanocodexError, SessionCheckpoint, Thinking,
     harness::{AgentResult, Harness, HarnessRequest},
 };
 #[cfg(feature = "openai")]
@@ -15,16 +12,18 @@ use nanocode_agent::{
 };
 use std::{
     future::Future,
+    marker::PhantomData,
     path::{Path, PathBuf},
     pin::pin,
     sync::{Arc, Mutex, MutexGuard, PoisonError},
 };
 
-mod claude_bash;
-mod claude_files;
-mod claude_tools;
-
 type Result<T> = nanocode_agent::Result<T>;
+#[cfg(not(feature = "durability"))]
+use crate::Backend as RegisteredBackend;
+#[cfg(feature = "durability")]
+use crate::durability::DurableBackendRegistration as RegisteredBackend;
+
 type Recipe = Arc<dyn Fn(AgentSpec) -> BackendFuture<AgentResult> + Send + Sync>;
 #[cfg(feature = "openai")]
 type CodexHook = Arc<dyn Fn(CodexBuilder) -> Result<CodexBuilder> + Send + Sync>;
@@ -35,7 +34,6 @@ type ToolsFactory = Arc<
         + Sync,
 >;
 
-/// Tool selection materialized independently for every agent.
 #[derive(Clone)]
 enum AgentTools {
     Shared(crate::Tools),
@@ -53,8 +51,6 @@ impl AgentTools {
     }
 }
 
-/// Per-agent settings layered spawn > harness > runtime. The workspace is
-/// not among them: it is one runtime-wide directory.
 #[derive(Clone, Default)]
 struct Settings {
     instructions: Option<Arc<str>>,
@@ -72,7 +68,6 @@ impl Settings {
 
 macro_rules! settings_methods {
     () => {
-        /// Replaces the stable system instructions of agents in this scope.
         #[must_use]
         pub fn instructions(mut self, instructions: impl Into<Arc<str>>) -> Self {
             self.settings.instructions = Some(instructions.into());
@@ -83,21 +78,12 @@ macro_rules! settings_methods {
 
 macro_rules! tool_methods {
     () => {
-        /// Replaces this harness's default tools with this selection,
-        /// materialized separately for every agent. Codex installs it
-        /// natively; Claude bridges the same tools into its native client
-        /// catalog. An empty selection installs no tools. Without a selection,
-        /// Codex uses the standard Codex tools and Claude the canonical Claude
-        /// tools (`Read`, `Edit`, `Write`, `Glob`, `Grep`, `Bash`), both
-        /// rooted at the runtime workspace.
         #[must_use]
         pub fn tools(mut self, tools: crate::Tools) -> Self {
             self.settings.tools = Some(AgentTools::Shared(tools));
             self
         }
 
-        /// Builds a fresh tool selection for every agent from its weak
-        /// capability, for agent-relative tools such as subagent tools.
         #[must_use]
         pub fn tools_factory<T>(mut self, factory: T) -> Self
         where
@@ -115,12 +101,6 @@ macro_rules! tool_methods {
     };
 }
 
-/// Codex recipe: a shared [`OpenAi`] client plus the tools and Code Mode
-/// policy of every Codex agent the runtime constructs.
-///
-/// The runtime uses the standard Responses service of the client. Hosts with
-/// a custom Tower service factory build agents with `Agent::builder` and
-/// route children through a host-composed [`crate::Harness`].
 #[cfg(feature = "openai")]
 #[cfg_attr(docsrs, doc(cfg(feature = "openai")))]
 #[derive(Clone)]
@@ -132,7 +112,6 @@ pub struct CodexHarness {
 
 #[cfg(feature = "openai")]
 impl CodexHarness {
-    /// Uses this client, with its authentication, for every Codex agent.
     #[must_use]
     pub fn new(client: OpenAi) -> Self {
         Self {
@@ -145,8 +124,6 @@ impl CodexHarness {
     settings_methods!();
     tool_methods!();
 
-    /// Applies native Codex builder settings to every Codex agent after the
-    /// runtime's settings and before any checkpoint is resumed.
     #[must_use]
     pub fn configure<F>(mut self, configure: F) -> Self
     where
@@ -164,8 +141,6 @@ impl From<OpenAi> for CodexHarness {
     }
 }
 
-/// Claude recipe: a shared [`ClaudeClient`] plus the tools and Code Mode
-/// policy of every Claude agent the runtime constructs.
 #[derive(Clone)]
 pub struct ClaudeHarness {
     client: ClaudeClient,
@@ -173,8 +148,6 @@ pub struct ClaudeHarness {
     configure: Option<ClaudeHook>,
 }
 impl ClaudeHarness {
-    /// Uses this client, with its API key or subscription authentication,
-    /// for every Claude agent.
     #[must_use]
     pub fn new(client: ClaudeClient) -> Self {
         Self {
@@ -187,8 +160,6 @@ impl ClaudeHarness {
     settings_methods!();
     tool_methods!();
 
-    /// Applies native Claude builder settings to every Claude agent after
-    /// the runtime's settings and before any checkpoint is resumed.
     #[must_use]
     pub fn configure<F>(mut self, configure: F) -> Self
     where
@@ -204,15 +175,20 @@ impl From<ClaudeClient> for ClaudeHarness {
     }
 }
 
-/// Configures a reusable [`Nanocodex`] runtime.
 #[derive(Clone, Default)]
-pub struct NanocodexBuilder {
-    backends: Vec<Arc<dyn crate::Backend>>,
+pub struct Unselected;
+
+#[derive(Clone, Default)]
+pub struct NanocodexBuilder<B = Unselected> {
+    selection: PhantomData<fn() -> B>,
+    backends: Vec<Arc<dyn RegisteredBackend>>,
+    #[cfg(feature = "durability")]
+    durability: Option<crate::durability::SessionStore>,
     #[cfg(feature = "openai")]
     codex: Option<CodexHarness>,
     claude: Option<ClaudeHarness>,
     harness: Option<HarnessFamily>,
-    model: Option<HarnessModel>,
+    model: Option<ModelSelection>,
     thinking: Option<Thinking>,
     settings: Settings,
     workspace: Option<PathBuf>,
@@ -220,14 +196,20 @@ pub struct NanocodexBuilder {
     cua_disabled: bool,
 }
 
-impl NanocodexBuilder {
-    /// Registers a backend with its own configured defaults and tool policy.
+impl<B> NanocodexBuilder<B> {
     #[must_use]
-    pub fn backend(mut self, backend: impl crate::Backend + 'static) -> Self {
+    pub fn backend(mut self, backend: impl RegisteredBackend + 'static) -> Self {
         self.backends.push(Arc::new(backend));
         self
     }
-    /// Configures the Codex harness from a client or a [`CodexHarness`].
+
+    #[cfg(feature = "durability")]
+    #[must_use]
+    pub fn durability(mut self, store: crate::durability::SessionStore) -> Self {
+        self.durability = Some(store);
+        self
+    }
+
     #[cfg(feature = "openai")]
     #[cfg_attr(docsrs, doc(cfg(feature = "openai")))]
     #[must_use]
@@ -236,16 +218,12 @@ impl NanocodexBuilder {
         self
     }
 
-    /// Configures the Claude harness from a client or a [`ClaudeHarness`].
     #[must_use]
     pub fn claude(mut self, harness: impl Into<ClaudeHarness>) -> Self {
         self.claude = Some(harness.into());
         self
     }
 
-    /// Adds upstream Sky CUA/Node REPL tools to every backend and spawned agent.
-    /// This shared capability is additive: backend tool selections do not replace it.
-    /// The provider routes persistent REPL state independently by agent session.
     #[must_use]
     pub fn cua(mut self, tools: crate::ComputerTools) -> Self {
         self.cua = Some(tools);
@@ -253,7 +231,6 @@ impl NanocodexBuilder {
         self
     }
 
-    /// Explicitly omit local CUA for headless runtimes without a Sky installation.
     #[must_use]
     pub fn without_cua(mut self) -> Self {
         self.cua = None;
@@ -261,52 +238,20 @@ impl NanocodexBuilder {
         self
     }
 
-    /// Selects the default family of spawned agents.
     #[must_use]
-    pub fn harness(mut self, family: HarnessFamily) -> Self {
-        self.harness = Some(family);
-        self
-    }
-
-    /// Selects the default model of spawned agents; its family is inferred.
-    #[must_use]
-    pub fn model(mut self, model: impl Into<HarnessModel>) -> Self {
-        self.model = Some(model.into());
-        self
-    }
-
-    /// Selects the default thinking level of spawned agents.
-    #[must_use]
-    pub const fn thinking(mut self, thinking: Thinking) -> Self {
+    pub fn thinking(mut self, thinking: Thinking) -> Self {
         self.thinking = Some(thinking);
         self
     }
 
     settings_methods!();
 
-    /// Fixes the one working directory every agent of this runtime runs in,
-    /// whatever its family: its model context root, tool working directory,
-    /// file-tool root and rollout workspace. Defaults to the process's
-    /// current directory when the runtime is built; a relative path is
-    /// resolved against it.
     #[must_use]
     pub fn workspace(mut self, workspace: impl Into<PathBuf>) -> Self {
         self.workspace = Some(workspace.into());
         self
     }
 
-    /// Validates the configuration and freezes it into a reusable runtime.
-    ///
-    /// Without a family or model, agents use Codex when it is configured and
-    /// otherwise the sole configured family, with its default model and that
-    /// model's default thinking.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`NanocodexError::InvalidRequest`] when no harness is
-    /// configured, the selected family is not configured, the model belongs
-    /// to another family, the thinking level is unsupported by the model, or
-    /// the workspace needs the current directory and it is unavailable.
     pub fn build(self) -> Result<Nanocodex> {
         let mut configured = Vec::new();
         #[cfg(feature = "openai")]
@@ -320,6 +265,12 @@ impl NanocodexBuilder {
             let family: HarnessFamily = backend.id().as_str().parse().map_err(|error| {
                 NanocodexError::InvalidRequest(format!("invalid backend identity: {error}"))
             })?;
+            if family.as_str().trim().is_empty() {
+                return Err(NanocodexError::InvalidRequest(
+                    "backend identity must not be empty".into(),
+                ));
+            }
+            backend.validate_model(&backend.default_model())?;
             if configured.contains(&family) {
                 return Err(NanocodexError::InvalidRequest(format!(
                     "backend {family} is configured more than once"
@@ -327,7 +278,12 @@ impl NanocodexBuilder {
             }
             configured.push(family);
         }
-        let Some(fallback) = configured.first().cloned() else {
+        let Some(fallback) = configured
+            .iter()
+            .find(|family| **family == HarnessFamily::Codex)
+            .or_else(|| configured.first())
+            .cloned()
+        else {
             return Err(NanocodexError::InvalidRequest(
                 "a Nanocodex runtime requires at least one harness backend".into(),
             ));
@@ -341,15 +297,35 @@ impl NanocodexBuilder {
         }
         let family = self
             .harness
-            .or_else(|| self.model.as_ref().map(HarnessModel::family))
+            .or_else(|| self.model.as_ref().map(ModelSelection::family))
             .unwrap_or(fallback);
         let model = self.model.unwrap_or_else(|| {
-            self.backends.iter().find(|backend| backend.id().as_str() == family.as_str())
-                .map_or_else(|| family.default_model(), |backend| {
-                    HarnessModel::new(family.clone(), backend.default_model())
-                })
+            self.backends
+                .iter()
+                .find(|backend| backend.id().as_str() == family.as_str())
+                .map_or_else(
+                    || family.default_model(),
+                    |backend| ModelSelection::new(family.clone(), backend.default_model()),
+                )
         });
-        let thinking = self.thinking.unwrap_or_else(|| model.default_thinking());
+        model.validate()?;
+        if let Some(backend) = self
+            .backends
+            .iter()
+            .find(|backend| backend.id().as_str() == family.as_str())
+        {
+            backend.validate_model(model.as_str())?;
+        }
+        let thinking = self.thinking.unwrap_or_else(|| {
+            self.backends
+                .iter()
+                .find(|backend| {
+                    backend.id().as_str() == family.as_str()
+                        && backend.default_model() == model.as_str()
+                })
+                .and_then(|backend| backend.default_thinking())
+                .unwrap_or_else(|| model.default_thinking())
+        });
         model
             .capabilities(ModelTransport::Native)
             .check_thinking(thinking)?;
@@ -360,9 +336,17 @@ impl NanocodexBuilder {
 
         let cua = (!self.cua_disabled).then(|| Arc::new(tokio::sync::OnceCell::new_with(self.cua)));
         let ownership = Arc::new(Ownership::default());
-        let backend_defaults: Vec<_> = self.backends.iter().map(|backend| {
-            HarnessModel::new(backend.id(), backend.default_model())
-        }).collect();
+        let backend_defaults: Vec<_> = self
+            .backends
+            .iter()
+            .map(|backend| {
+                let model = ModelSelection::new(backend.id(), backend.default_model());
+                let thinking = backend
+                    .default_thinking()
+                    .unwrap_or_else(|| model.default_thinking());
+                (model, thinking)
+            })
+            .collect();
         let mut recipes: Vec<(HarnessFamily, Recipe)> = Vec::new();
         #[cfg(feature = "openai")]
         if let Some(codex) = self.codex {
@@ -381,17 +365,30 @@ impl NanocodexBuilder {
             let family = backend.id().as_str().parse().map_err(|error| {
                 NanocodexError::InvalidRequest(format!("invalid backend identity: {error}"))
             })?;
-            recipes.push((family, registered_recipe(backend, &self.settings, &workspace)));
+            recipes.push((
+                family,
+                registered_recipe(backend, &self.settings, &workspace, cua.clone()),
+            ));
+        }
+        #[cfg(feature = "durability")]
+        if let Some(store) = &self.durability {
+            for (_, recipe) in &mut recipes {
+                *recipe = persistent_recipe(recipe.clone(), store.clone(), workspace.clone());
+            }
         }
         let mut router = Harness::builder();
+        #[cfg(feature = "durability")]
+        if let Some(store) = &self.durability {
+            router = router.recovery_store(store.clone());
+        }
         for (family, recipe) in &recipes {
             let recipe = Arc::clone(recipe);
             router = router.register(family.clone(), move |request: HarnessRequest| {
                 recipe(AgentSpec::routed(request))
             });
         }
-        for model in backend_defaults {
-            router = router.default_model(model);
+        for (model, thinking) in backend_defaults {
+            router = router.default_settings(model, thinking);
         }
         Ok(Nanocodex {
             inner: Arc::new(Runtime {
@@ -400,69 +397,173 @@ impl NanocodexBuilder {
                 model,
                 thinking,
                 ownership,
+                #[cfg(feature = "durability")]
+                durability: self.durability,
             }),
         })
     }
 }
 
+impl NanocodexBuilder<Unselected> {
+    #[must_use]
+    pub fn for_backend<B: crate::BackendKind>(self) -> NanocodexBuilder<B> {
+        NanocodexBuilder {
+            selection: PhantomData,
+            backends: self.backends,
+            #[cfg(feature = "durability")]
+            durability: self.durability,
+            #[cfg(feature = "openai")]
+            codex: self.codex,
+            claude: self.claude,
+            harness: Some(B::backend_id().into()),
+            model: None,
+            thinking: self.thinking,
+            settings: self.settings,
+            workspace: self.workspace,
+            cua: self.cua,
+            cua_disabled: self.cua_disabled,
+        }
+    }
+}
+
+impl<B: crate::BackendKind> NanocodexBuilder<B> {
+    #[must_use]
+    pub fn model(mut self, model: B::Model) -> Self {
+        self.model = Some(ModelSelection::new(B::backend_id(), B::model_id(&model)));
+        self
+    }
+}
+
 fn registered_recipe(
-    backend: Arc<dyn crate::Backend>,
+    backend: Arc<dyn RegisteredBackend>,
     runtime: &Settings,
     workspace: &Arc<Path>,
+    cua: Option<Arc<tokio::sync::OnceCell<crate::ComputerTools>>>,
 ) -> Recipe {
     let workspace = Arc::clone(workspace);
     let defaults = runtime.clone();
     Arc::new(move |spec| {
         let backend = Arc::clone(&backend);
+        let cua = cua.clone();
         let workspace = Arc::clone(&workspace);
         let settings = spec.settings.or(&defaults);
         Box::pin(async move {
             backend.validate_model(spec.model.as_str())?;
-            #[cfg(feature = "durability")]
-            if spec.durable_state.is_some() {
-                return Err(NanocodexError::UnsupportedCapability {
-                    capability: "registered backend durable store attachment",
-                });
-            }
-            backend.build(crate::BackendRequest {
+            let additive_tools = if let Some(cua) = cua {
+                let cua = cua
+                    .get_or_try_init(|| async {
+                        crate::ComputerTools::connect(crate::ComputerConfig::installed()?).await
+                    })
+                    .await
+                    .map_err(|error: nanocode_tools::ToolError| {
+                        NanocodexError::InvalidRequest(error.to_string())
+                    })?;
+                cua.tools()
+                    .map(|tool| Arc::new(tool) as Arc<dyn nanocode_tools::Tool>)
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let request = crate::BackendRequest {
+                additive_tools,
                 model: crate::ModelSelection::new(backend.id(), spec.model.as_str()),
                 thinking: Some(spec.thinking),
-                options: SpawnOptions::new().harness_model(spec.model).thinking(spec.thinking),
+                options: spec.options,
                 workspace: workspace.to_path_buf(),
-                instructions: settings.instructions.map(|instructions| instructions.to_string()),
+                instructions: settings
+                    .instructions
+                    .map(|instructions| instructions.to_string()),
                 spawn_factory: spec.spawn_factory,
                 host_context: spec.host_context,
                 checkpoint: spec.checkpoint,
-            }).await
+            };
+            #[cfg(feature = "durability")]
+            if let Some(state) = spec.durable_state {
+                return backend.build_durable(request, state).await;
+            }
+            backend.build(request).await
         })
     })
 }
 
-/// A reusable configured runtime that constructs isolated agents from shared
-/// provider clients and per-harness recipes.
-///
-/// Every agent gets its own conversation, tool runtime and event stream; the
-/// clients and their authentication are shared. Agents constructed by the
-/// runtime—roots, resumed sessions, siblings and forks created from them—stay
-/// owned by it until they are shut down, even if their handles are dropped.
-/// [`Self::shutdown`] stops admitting agents and shuts down every agent it
-/// still owns, plus live subagents routed through its recipes. Dropping the
-/// last runtime clone releases that ownership without stopping agents whose
-/// handles are still held.
-///
-/// ```no_run
-/// # use nanocode::{ClaudeModel, Nanocodex, OpenAi, claude::ClaudeClient};
-/// # async fn example(openai: OpenAi, claude: ClaudeClient) -> nanocode::agent::Result<()> {
-/// let nano = Nanocodex::builder().openai(openai).claude(claude).build()?;
-/// let (codex, _events) = nano.spawn().instructions("Review the diff.").build().await?;
-/// let (sonnet, _events) = nano.spawn().model(ClaudeModel::Sonnet55).build().await?;
-/// codex.prompt("Summarize the open issues.").await?.result().await?;
-/// let saved = sonnet.checkpoint().await?;
-/// let (_resumed, _events) = nano.resume(saved).await?;
-/// nano.shutdown().await?;
-/// # Ok(())
-/// # }
-/// ```
+#[cfg(feature = "durability")]
+fn persistent_recipe(
+    recipe: Recipe,
+    store: crate::durability::SessionStore,
+    workspace: Arc<Path>,
+) -> Recipe {
+    Arc::new(move |mut spec| {
+        let recipe = recipe.clone();
+        let store = store.clone();
+        let workspace = workspace.clone();
+        Box::pin(async move {
+            if spec.durable_state.is_none()
+                && let Some(checkpoint) = &spec.checkpoint
+            {
+                match store.load(checkpoint.session_id()).await {
+                    Ok(stored) => {
+                        let record = &stored.summary.record;
+                        let automatic_restore = spec.parent.is_some();
+                        if record.family() != checkpoint.family()
+                            || (!automatic_restore && record.model != spec.model)
+                            || record.lineage != *checkpoint.lineage()
+                        {
+                            return Err(NanocodexError::InvalidCheckpoint(
+                                "checkpoint identity differs from the stored session".into(),
+                            ));
+                        }
+                        spec.durable_state = Some(
+                            store
+                                .resume(checkpoint.session_id())
+                                .await
+                                .map_err(catalog_error)?,
+                        );
+                        if automatic_restore && stored.checkpoint.is_some() {
+                            spec.checkpoint = None;
+                        }
+                    }
+                    Err(crate::durability::Error::SessionNotFound { .. }) => {}
+                    Err(error) => return Err(catalog_error(error)),
+                }
+            }
+            if spec.durable_state.is_none() {
+                let (id, lineage) = if let Some(checkpoint) = &spec.checkpoint {
+                    (
+                        checkpoint.session_id().to_owned(),
+                        checkpoint.lineage().clone(),
+                    )
+                } else {
+                    let id = uuid::Uuid::now_v7().to_string();
+                    let lineage = if let Some(parent) = &spec.parent {
+                        let parent_record = store
+                            .load(parent.session_id())
+                            .await
+                            .map_err(catalog_error)?
+                            .summary
+                            .record;
+                        crate::Lineage::child_of(
+                            &parent_record.lineage,
+                            parent.session_id(),
+                            crate::Origin::Subagent,
+                        )
+                    } else {
+                        crate::Lineage::root(id.clone())
+                    };
+                    (id, lineage)
+                };
+                let record = crate::durability::SessionRecord::root(
+                    id,
+                    spec.model.clone(),
+                    Some(workspace.to_path_buf()),
+                )
+                .with_lineage(lineage);
+                spec.durable_state = Some(store.session(record).await.map_err(catalog_error)?);
+            }
+            recipe(spec).await
+        })
+    })
+}
+
 #[derive(Clone)]
 pub struct Nanocodex {
     inner: Arc<Runtime>,
@@ -471,75 +572,63 @@ pub struct Nanocodex {
 struct Runtime {
     harness: Harness,
     recipes: Vec<(HarnessFamily, Recipe)>,
-    model: HarnessModel,
+    model: ModelSelection,
     thinking: Thinking,
     ownership: Arc<Ownership>,
+    #[cfg(feature = "durability")]
+    durability: Option<crate::durability::SessionStore>,
 }
 
 impl Nanocodex {
-    /// Starts configuring a runtime.
     #[must_use]
     pub fn builder() -> NanocodexBuilder {
         NanocodexBuilder::default()
     }
 
-    /// Starts configuring one agent from the runtime defaults.
     pub fn spawn(&self) -> SpawnBuilder<'_> {
         SpawnBuilder {
+            selection: PhantomData,
             runtime: self,
             options: SpawnOptions::new(),
             settings: Settings::default(),
         }
     }
 
-    /// Default family of spawned agents.
     #[must_use]
     pub fn harness(&self) -> HarnessFamily {
         self.inner.model.family()
     }
 
-    /// Default model of spawned agents.
     #[must_use]
-    pub fn model(&self) -> HarnessModel {
+    pub fn model(&self) -> ModelSelection {
         self.inner.model.clone()
     }
 
-    /// Default thinking level of spawned agents.
     #[must_use]
     pub fn thinking(&self) -> Thinking {
         self.inner.thinking
     }
 
-    /// Whether a family's backend is configured.
     #[must_use]
     pub fn is_configured(&self, family: HarnessFamily) -> bool {
         self.inner.recipe(family).is_ok()
     }
 
-    /// The cross-family child router installed on every agent, for hosts
-    /// composing their own native builders with this runtime's recipes.
     #[must_use]
     pub fn spawn_factory(&self) -> Arc<dyn AgentFactory> {
         self.inner.harness.spawn_factory()
     }
 
-    /// Reopens a checkpointed session through its family's recipe, with the
-    /// runtime's current credentials, tools, instructions and workspace.
-    ///
-    /// The session keeps its identity, lineage, model, thinking level and
-    /// committed history. Per-spawn overrides are not part of a checkpoint.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`NanocodexError::InvalidCheckpoint`] for an invalid
-    /// checkpoint, [`NanocodexError::InvalidRequest`] when its family is not
-    /// configured, [`NanocodexError::AgentStopped`] after shutdown, or the
-    /// recipe's construction error.
     pub async fn resume(&self, checkpoint: SessionCheckpoint) -> AgentResult {
         checkpoint.validate()?;
         let model = checkpoint.model();
         let thinking = checkpoint.thinking();
         self.construct(AgentSpec {
+            #[cfg(feature = "durability")]
+            parent: None,
+            options: SpawnOptions::new()
+                .harness_model(model.clone())
+                .thinking(thinking),
             model,
             thinking,
             settings: Settings::default(),
@@ -552,14 +641,14 @@ impl Nanocodex {
         .await
     }
 
-    /// Reopens a durable catalog session by ID through its family's recipe;
-    /// the session owns its durable state and records later turns.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`NanocodexError::InvalidRequest`] for an unknown session or
-    /// unconfigured family, [`NanocodexError::Backend`] for a catalog
-    /// failure, or the recipe's construction error.
+    #[cfg(feature = "durability")]
+    pub async fn open_session(&self, session_id: &str) -> AgentResult {
+        let store = self.inner.durability.as_ref().ok_or_else(|| {
+            NanocodexError::InvalidRequest("runtime durability is not configured".into())
+        })?;
+        self.open(store, session_id).await
+    }
+
     #[cfg(feature = "durability")]
     #[cfg_attr(docsrs, doc(cfg(feature = "durability")))]
     pub async fn open(
@@ -567,8 +656,16 @@ impl Nanocodex {
         store: &crate::durability::SessionStore,
         session_id: &str,
     ) -> AgentResult {
+        let configured = self.inner.durability.as_ref().ok_or_else(|| {
+            NanocodexError::InvalidRequest("runtime durability is not configured".into())
+        })?;
+        if !configured.same_store(store) {
+            return Err(NanocodexError::InvalidRequest(
+                "session store differs from the runtime's configured durability store".into(),
+            ));
+        }
         let stored = store.load(session_id).await.map_err(catalog_error)?;
-        let model = stored.summary.record.model;
+        let model = stored.summary.record.model.clone();
         let thinking = stored
             .session_checkpoint()
             .map_err(catalog_error)?
@@ -579,6 +676,11 @@ impl Nanocodex {
         self.inner.recipe(model.family())?;
         let durable_state = store.resume(session_id).await.map_err(catalog_error)?;
         self.construct(AgentSpec {
+            #[cfg(feature = "durability")]
+            parent: None,
+            options: SpawnOptions::new()
+                .harness_model(model.clone())
+                .thinking(thinking),
             model,
             thinking,
             settings: Settings::default(),
@@ -590,14 +692,6 @@ impl Nanocodex {
         .await
     }
 
-    /// Stops admitting agents, waits for constructions already admitted, and
-    /// shuts down every agent the runtime owns and every live subagent routed
-    /// through its recipes. Concurrent and later calls share the result.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`NanocodexError::Backend`] describing every agent whose
-    /// shutdown failed; all other agents are still shut down.
     pub async fn shutdown(&self) -> Result<()> {
         self.inner.ownership.shutdown().await
     }
@@ -619,56 +713,41 @@ impl Runtime {
     }
 }
 
-/// Configures one agent; omitted settings use the runtime defaults.
 #[must_use = "call build().await to construct the agent"]
-pub struct SpawnBuilder<'a> {
+pub struct SpawnBuilder<'a, B = Unselected> {
+    selection: PhantomData<fn() -> B>,
     runtime: &'a Nanocodex,
     options: SpawnOptions,
     settings: Settings,
 }
 
-impl SpawnBuilder<'_> {
-    /// Selects this agent's family. Selecting another family than the
-    /// runtime default uses that family's default model.
-    pub fn harness(mut self, family: HarnessFamily) -> Self {
-        self.options = self.options.harness(family);
-        self
-    }
-
-    /// Selects this agent's model; its family is inferred. A model other
-    /// than the runtime default uses its own default thinking.
-    pub fn model(mut self, model: impl Into<HarnessModel>) -> Self {
-        self.options = self.options.harness_model(model.into());
-        self
-    }
-
-    /// Selects this agent's thinking level.
-    pub const fn thinking(mut self, thinking: Thinking) -> Self {
+impl<B> SpawnBuilder<'_, B> {
+    pub fn thinking(mut self, thinking: Thinking) -> Self {
         self.options = self.options.thinking(thinking);
         self
     }
 
-    /// Replaces this agent's stable system instructions.
     pub fn instructions(mut self, instructions: impl Into<Arc<str>>) -> Self {
         self.settings.instructions = Some(instructions.into());
         self
     }
 
-    /// Constructs the agent through its family's recipe.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`NanocodexError::InvalidRequest`] for a model of another
-    /// family, an unsupported thinking level or an unconfigured family, all
-    /// before any provider request; [`NanocodexError::AgentStopped`] after
-    /// shutdown; or the recipe's construction error.
     pub async fn build(self) -> AgentResult {
         let runtime = &self.runtime.inner;
-        let resolved = runtime.harness.resolve_options(self.options, runtime.model.clone(), runtime.thinking)?;
-        let model = resolved.selected_harness_model().unwrap_or_else(|| runtime.model.clone());
+        let resolved = runtime.harness.resolve_options(
+            self.options,
+            runtime.model.clone(),
+            runtime.thinking,
+        )?;
+        let model = resolved
+            .selected_harness_model()
+            .unwrap_or_else(|| runtime.model.clone());
         let thinking = resolved.selected_thinking().unwrap_or(runtime.thinking);
         self.runtime
             .construct(AgentSpec {
+                #[cfg(feature = "durability")]
+                parent: None,
+                options: resolved,
                 model,
                 thinking,
                 settings: self.settings,
@@ -682,10 +761,32 @@ impl SpawnBuilder<'_> {
     }
 }
 
-/// Complete construction input for one recipe invocation.
+impl<'a> SpawnBuilder<'a, Unselected> {
+    pub fn backend<B: crate::BackendKind>(self) -> SpawnBuilder<'a, B> {
+        SpawnBuilder {
+            selection: PhantomData,
+            runtime: self.runtime,
+            options: self.options.harness(B::backend_id().into()),
+            settings: self.settings,
+        }
+    }
+}
+
+impl<B: crate::BackendKind> SpawnBuilder<'_, B> {
+    pub fn model(mut self, model: B::Model) -> Self {
+        self.options = self
+            .options
+            .harness_model(ModelSelection::new(B::backend_id(), B::model_id(&model)));
+        self
+    }
+}
+
 struct AgentSpec {
-    model: HarnessModel,
+    model: ModelSelection,
     thinking: Thinking,
+    options: SpawnOptions,
+    #[cfg(feature = "durability")]
+    parent: Option<AgentHandle>,
     settings: Settings,
     spawn_factory: Arc<dyn AgentFactory>,
     host_context: Option<Arc<str>>,
@@ -695,12 +796,13 @@ struct AgentSpec {
 }
 
 impl AgentSpec {
-    /// A child or restoration routed through the shared registry takes the
-    /// runtime's harness settings, never a sibling's per-spawn overrides.
     fn routed(request: HarnessRequest) -> Self {
         Self {
             model: request.model,
             thinking: request.thinking,
+            options: request.options,
+            #[cfg(feature = "durability")]
+            parent: request.parent,
             settings: Settings::default(),
             spawn_factory: request.spawn_factory,
             host_context: request.host_context,
@@ -710,6 +812,7 @@ impl AgentSpec {
         }
     }
 }
+#[cfg(feature = "openai")]
 fn exposed(
     tools: crate::Tools,
     cua: Option<&crate::ComputerTools>,
@@ -775,7 +878,6 @@ fn codex_recipe(
                 builder = builder.instructions(instructions);
             }
             if let Some(configure) = configure {
-                // The workspace is runtime-wide: a hook cannot move one agent.
                 builder = configure(builder)?.workspace(workspace.to_path_buf());
             }
             {
@@ -785,13 +887,21 @@ fn codex_recipe(
                 builder = builder
                     .tools_factory(move |handle| exposed(tools.materialize(handle)?, cua.as_ref()));
             }
+            if spec.options.stateless_http {
+                builder = builder.stateless_http();
+            }
             if let Some(checkpoint) = spec.checkpoint {
                 builder = builder.resume(checkpoint)?;
             }
             #[cfg(feature = "durability")]
             if let Some(state) = spec.durable_state {
                 use crate::DurableAgentExt as _;
-                builder = builder.durability(state).await?;
+                let session_id = state.state_id().parse().map_err(|error| {
+                    NanocodexError::InvalidRequest(format!(
+                        "invalid durable Codex session identity: {error}"
+                    ))
+                })?;
+                builder = builder.session_id(session_id).durability(state).await?;
             }
             builder.build()
         })
@@ -845,39 +955,32 @@ fn claude_recipe(
                 builder = builder.system(instructions.to_string());
             }
             if let Some(configure) = configure {
-                // The workspace is runtime-wide: a hook cannot move one agent.
                 builder = configure(builder)?
                     .workspace(workspace.to_string_lossy().into_owned())
                     .code_only(true);
             }
-            // Materialize defaults and background ownership independently per agent.
             let tools = settings.tools;
-            let files = if tools.is_none() {
-                Some(Arc::new(default_claude_files(&workspace)?))
-            } else {
-                None
-            };
             let root = workspace.to_path_buf();
             builder = builder.tools_factory(move |handle| {
-                let jobs = Arc::new(claude_bash::Jobs::default());
-                let selected = match &tools {
-                    Some(tools) => tools.materialize(handle.clone()),
-                    None => claude_files::selection(
-                        files.as_ref().expect("default files"),
-                        root.clone(),
-                        handle.session_environment(),
-                        jobs.clone(),
-                    ),
-                }
-                .and_then(|tools| exposed(tools, cua.as_ref()))
-                .map_err(|error| NanocodexError::InvalidRequest(error.to_string()))?;
-                let native = claude_tools::install(&selected, root.clone(), &handle)?;
-                Ok(native.adapter_shutdown(move || {
-                    let jobs = jobs.clone();
-                    async move {
-                        jobs.shutdown().await;
-                    }
-                }))
+                let selected = tools
+                    .as_ref()
+                    .map(|tools| tools.materialize(handle.clone()))
+                    .transpose()
+                    .map_err(|error| NanocodexError::InvalidRequest(error.to_string()))?;
+                let additive = cua
+                    .as_ref()
+                    .map(|cua| {
+                        cua.tools()
+                            .map(|tool| Arc::new(tool) as Arc<dyn nanocode_tools::Tool>)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                nanocode_backend_claude::install_default_tools(
+                    root.clone(),
+                    &handle,
+                    selected,
+                    additive,
+                )
             });
             builder = builder.code_only(true);
             if let Some(checkpoint) = spec.checkpoint {
@@ -893,18 +996,6 @@ fn claude_recipe(
     })
 }
 
-/// The canonical Claude Code file tools rooted at the runtime workspace.
-fn default_claude_files(workspace: &Path) -> Result<nanocode_claude_tools::ClaudeWorkspaceFiles> {
-    nanocode_claude_tools::ClaudeWorkspaceFiles::new(workspace).map_err(|error| {
-        NanocodexError::InvalidRequest(format!(
-            "Claude file tools require the runtime workspace {}: {error}",
-            workspace.display()
-        ))
-    })
-}
-
-/// The runtime's one workspace: the configured path, resolved against the
-/// current directory when relative, or the current directory itself.
 fn resolve_workspace(workspace: Option<PathBuf>) -> Result<PathBuf> {
     match workspace {
         Some(workspace) if workspace.is_absolute() => Ok(workspace),
@@ -938,7 +1029,6 @@ fn catalog_error(error: crate::durability::Error) -> NanocodexError {
     }
 }
 
-/// Admission gate and owner of every agent a runtime constructs.
 #[derive(Default)]
 pub(crate) struct Ownership {
     state: Mutex<OwnershipState>,
@@ -956,7 +1046,6 @@ struct OwnershipState {
     failures: Vec<String>,
 }
 
-/// Ends one admitted construction even when its future is dropped.
 struct Admission<'a>(&'a Ownership);
 
 impl Drop for Admission<'_> {
@@ -975,7 +1064,6 @@ impl Ownership {
         Ok(Admission(self))
     }
 
-    /// Admits and constructs one root, then owns it.
     async fn own<F, Fut>(self: Arc<Self>, construct: F) -> AgentResult
     where
         F: FnOnce() -> Fut,
@@ -989,8 +1077,6 @@ impl Ownership {
         Ok((agent, events))
     }
 
-    /// Admits one routed child construction and tracks its results weakly:
-    /// the subagent registry that receives them owns and evicts them.
     pub(crate) async fn track_children<F>(&self, construct: F) -> Result<Vec<(Agent, AgentEvents)>>
     where
         F: Future<Output = Result<Vec<(Agent, AgentEvents)>>>,
@@ -1021,10 +1107,7 @@ impl Ownership {
                     idle.await;
                 }
                 self.lock().drained = true;
-                // Agents leave the registry only once their shutdown returns,
-                // so a dropped shutdown future leaves the rest for the next
-                // call to join. Newest first: forks and siblings before their
-                // sources, then live routed children the registry still holds.
+
                 loop {
                     let next = self.lock().owned.last().cloned();
                     let Some((key, agent)) = next else { break };
@@ -1091,7 +1174,6 @@ impl AgentOwner for Ownership {
     }
 }
 
-/// Every agent shutdown failure observed by [`Nanocodex::shutdown`].
 #[derive(Debug)]
 struct ShutdownError(Vec<String>);
 

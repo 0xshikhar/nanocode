@@ -1,5 +1,3 @@
-//! Bounded project subagent definitions. These are requests to the host, never
-//! independent authority. Hosts must enforce tool limits and inherited policy.
 use crate::context::{
     FILE_BYTES, authorized_root, frontmatter, local_directory, read_local, read_user_file,
 };
@@ -40,10 +38,7 @@ impl ClaudeAgentProfiles {
             user: Vec::new(),
         })
     }
-    /// Adds host-resolved user profile roots (for example
-    /// `nanocode_home::AgentHome::agent_profile_roots`). Only Claude Markdown
-    /// roots such as `~/.claude/agents` apply; Codex TOML roots are ignored.
-    /// Project profiles win over same-named user profiles, as in Claude Code.
+
     #[must_use]
     pub fn with_user_roots(mut self, roots: Vec<nanocode_home::AgentProfileRoot>) -> Self {
         self.user = roots
@@ -130,7 +125,6 @@ impl ClaudeAgentProfiles {
             }
             for file in resolved.profiles {
                 match self.read(&file.path) {
-                    // Project definitions (and earlier user roots) take precedence.
                     Ok(profile) if names.contains_key(&profile.name) => {}
                     Ok(profile) if catalog.profiles.len() < 64 => {
                         names.insert(profile.name.clone(), ());
@@ -161,8 +155,7 @@ impl ClaudeAgentProfiles {
                 )
             })
     }
-    /// Project profiles are workspace-relative and never follow symlinks; user
-    /// profiles are absolute paths under a configured user root.
+
     fn read(&self, path: &Path) -> Result<AgentProfile, String> {
         let (text, truncated) = if path.is_absolute() {
             if !self.user.iter().any(|root| path.starts_with(&root.path)) {

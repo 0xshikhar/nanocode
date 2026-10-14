@@ -1,11 +1,7 @@
+use std::sync::Arc;
 #[cfg(feature = "openai")]
 use std::{collections::VecDeque, path::PathBuf};
-use std::{sync::Arc, task::Poll};
 
-#[cfg(feature = "openai")]
-use nanocode_code_mode::Tools;
-#[cfg(feature = "openai")]
-use nanocode_code_mode::ToolsBuildError;
 #[cfg(feature = "openai")]
 use crate::client::{
     __private::{EventSink, ModelConfig, ResponsesServiceFactory, into_openai_parts},
@@ -15,11 +11,11 @@ use crate::client::{
     tower::{ResponsesAttempt, ResponsesClient, ResponsesServiceResponse, StandardServiceFactory},
     transport::{ResponsesHistory, ResponsesTransport, TransportStats},
 };
-use crate::client::{
-    Model, Prompt, Thinking,
-    events::AgentEvents,
-    pricing::ServiceTier,
-};
+use crate::client::{Model, Prompt, Thinking, events::AgentEvents, pricing::ServiceTier};
+#[cfg(feature = "openai")]
+use nanocode_code_mode::Tools;
+#[cfg(feature = "openai")]
+use nanocode_code_mode::ToolsBuildError;
 #[cfg(feature = "openai")]
 use tokio::sync::oneshot;
 #[cfg(feature = "openai")]
@@ -71,7 +67,6 @@ enum InitialResume {
 
 #[cfg(feature = "openai")]
 impl InitialResume {
-    /// Prefers the exact retained model boundary and falls back to typed history.
     fn from_resume(resume: SessionResume) -> Self {
         let SessionResume {
             lineage_id,
@@ -158,10 +153,10 @@ pub use builder::NanocodexBuilder;
 #[cfg(feature = "openai")]
 pub use context_source::ExecutionEnvironment;
 pub use nanocode_agent::AgentHandle;
-pub use nanocode_agent::{Nanocodex, WeakAgent};
+pub use nanocode_agent::AgentSessionContext;
 #[doc(hidden)]
 pub use nanocode_agent::backend::{AgentOwner, adopt};
-pub use nanocode_agent::AgentSessionContext;
+pub use nanocode_agent::{Nanocodex, WeakAgent};
 pub use nanocode_agent::{PromptRequest, PromptRoute, SpawnOptions, Turn, TurnControl, TurnResult};
 
 #[cfg(feature = "openai")]

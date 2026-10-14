@@ -1,7 +1,3 @@
-//! Subscription wire compatibility ported from oh-my-pi v18.4.4.
-//! Sources: packages/ai/src/providers/{anthropic,anthropic-identity,claude-code-fingerprint}.ts.
-//! Copyright (c) 2025 Mario Zechner; 2025-2026 Can Bölük; 2026 Stencil Labs, Inc.
-//! MIT license: ../THIRD-PARTY-LICENSES (included in the crate package).
 use crate::{ClaudeError, ContentBlock, MessagesRequest, Role};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -14,8 +10,6 @@ const BILLING: &str = "x-anthropic-billing-header:";
 const PLACEHOLDER: &[u8] = b"cch=00000";
 const MARKER: &[u8] = b"\"system\":[{\"type\":\"text\",\"text\":\"x-anthropic-billing-header:";
 
-/// Public host identity, never an OAuth credential. Supply the same installation
-/// identity on reopen; session affinity is bound by the native backend.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SubscriptionIdentity {
@@ -188,7 +182,7 @@ pub fn prepare(request: &mut MessagesRequest, identity: &SubscriptionIdentity) {
         request.system = Some(Value::Array(existing));
         return;
     }
-    // Migrate the former explicit Nanocodex protocol prefix without duplication.
+
     if existing
         .first()
         .and_then(|v| v.get("text"))
@@ -203,8 +197,7 @@ pub fn prepare(request: &mut MessagesRequest, identity: &SubscriptionIdentity) {
         identity.version(),
         fingerprint(request, identity.version())
     );
-    // The embedding owns cache placement. Do not introduce a shorter head
-    // breakpoint in front of an existing caller-selected 1h prefix.
+
     let control = request.cache_control.as_ref().map_or_else(
         || {
             if existing.iter().any(|v| {
@@ -227,8 +220,7 @@ pub fn prepare(request: &mut MessagesRequest, identity: &SubscriptionIdentity) {
     blocks.extend(existing);
     request.system = Some(Value::Array(blocks));
 }
-// JSON.stringify-compatible block order supplies OMP's exact system[0] anchor.
-// The checksum is computed over these final bytes before durable effect freezing.
+
 fn stringify(value: &Value, out: &mut String) -> Result<(), ClaudeError> {
     match value {
         Value::Array(a) => {
@@ -277,7 +269,7 @@ fn tool_names(value: &mut Value) {
                     {
                         *name = prefix(name);
                     }
-                    // Only native content blocks, never recursive JSON/input data.
+
                     if block.get("type").and_then(Value::as_str) == Some("tool_result")
                         && let Some(references) =
                             block.get_mut("content").and_then(Value::as_array_mut)
@@ -307,8 +299,7 @@ pub fn body(
     let mut prepared = request.clone();
     prepare(&mut prepared, identity);
     prepared.validate_cache_control()?;
-    // Claude Code never sends top-level automatic caching. After the identity
-    // marker has inherited its TTL, move the policy to the final cacheable block.
+
     if explicit_cache_tail {
         prepared.explicit_cache_tail()?;
     }

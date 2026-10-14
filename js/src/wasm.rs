@@ -18,7 +18,6 @@ use nanocode::{
             OwnedState, OwnerId, OwnerToken, StateStore, StoreError, StoreFuture, StoredState,
         },
         input::{Prompt, UserInput},
-        session::SessionId,
     },
     oai::auth::{
         ChatGptCredentialSeed, ChatGptLoginStatus, ChatGptSubscription, ChatGptSubscriptionHost,
@@ -37,10 +36,14 @@ use nanocode::{
         standard::StandardTool,
     },
 };
+use nanocode::{
+    Capabilities, ForkRequest, HarnessFamily, Lineage, ModelSelection, Origin, Persistence,
+    ServiceTier, SessionCheckpoint, SessionInfo,
+};
 use nanocode_backend_codex::{
-    Capabilities, ForkRequest, HarnessFamily, HarnessModel, Origin, Persistence, ServiceTier,
-    SessionCheckpoint, SessionInfo,
+    ErrorExt,
     backend::{AgentFactory, BackendFuture},
+    client::session::SessionId,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
@@ -68,21 +71,15 @@ pub use claude_subscription::WasmClaudeSubscription;
 
 use transport::JavaScriptResponsesHost;
 
-/// Prunes old replay receipts before the full Agent runtime is constructed.
-/// Capability marker checked against the actual bundled module before deployment.
-/// Older kernels reject the native child route emitted by the current host.
 #[wasm_bindgen(js_name = nativeSpawnContractVersion)]
-#[allow(clippy::missing_const_for_fn)] // wasm-bindgen requires a non-const function.
+#[allow(clippy::missing_const_for_fn)]
 pub fn native_spawn_contract_version() -> u32 {
     1
 }
 
-/// Canonical per-model settings from the shared Rust capability source
-/// (HarnessModel::capabilities) for every known model on both transports.
-/// JS pickers and validation tables consume or are checked against this.
 #[wasm_bindgen(js_name = modelCapabilities)]
 pub fn model_capabilities() -> Result<JsValue, JsValue> {
-    use nanocode_backend_codex::{ClaudeModel, HarnessModel, ModelTransport};
+    use nanocode::{ClaudeModel, ModelSelection, ModelTransport};
     let codex = [
         Model::Astra,
         Model::Sol,
@@ -92,8 +89,8 @@ pub fn model_capabilities() -> Result<JsValue, JsValue> {
         Model::Mimo,
     ]
     .into_iter()
-    .map(HarnessModel::Codex);
-    let claude = ClaudeModel::ALL.into_iter().map(HarnessModel::Claude);
+    .map(ModelSelection::Codex);
+    let claude = ClaudeModel::ALL.into_iter().map(ModelSelection::Claude);
     let entries = codex
         .chain(claude)
         .flat_map(|model| {
@@ -235,6 +232,9 @@ extern "C" {
         key: &str,
     ) -> Result<Promise, JsValue>;
 
+    #[wasm_bindgen(catch, js_namespace = ["globalThis", "nanocodexHost"], js_name = durabilityLoad)]
+    fn host_durability_load(route_id: &str, state_id: &str) -> Result<Promise, JsValue>;
+
     #[wasm_bindgen(catch, js_namespace = ["globalThis", "nanocodexHost"], js_name = durabilityAcquire)]
     fn host_durability_acquire(
         route_id: &str,
@@ -361,7 +361,8 @@ impl nanocode_subagents::SpawnRouter for JavaScriptSpawnRouter {
             request["harness"] = serde_json::to_value(harness)?;
         }
         if let Some(model) = options.selected_harness_model() {
-            request["model"] = serde_json::to_value(model)?;
+            request["model"] = model.as_str().into();
+            request["harness"] = serde_json::to_value(model.family())?;
         }
         if let Some(thinking) = options.selected_thinking() {
             request["thinking"] = serde_json::to_value(thinking)?;
@@ -399,11 +400,23 @@ impl nanocode_subagents::SpawnRouter for JavaScriptSpawnRouter {
         let thinking = route
             .thinking
             .ok_or_else(|| std::io::Error::other("missing routed thinking"))?;
-        let model = route
+        let model_name = route
             .model
-            .ok_or_else(|| std::io::Error::other("missing routed model"))?
-            .parse::<HarnessModel>()
-            .map_err(std::io::Error::other)?;
+            .ok_or_else(|| std::io::Error::other("missing routed model"))?;
+        let model = match model_name.parse::<ModelSelection>() {
+            Ok(model) => model,
+            Err(_) => ModelSelection::new(
+                route
+                    .harness
+                    .clone()
+                    .or_else(|| options.selected_family())
+                    .ok_or_else(|| {
+                        std::io::Error::other("routed provider model requires a harness")
+                    })?,
+                model_name,
+            ),
+        };
+        model.validate().map_err(std::io::Error::other)?;
         if options
             .selected_harness_model()
             .is_some_and(|requested| requested != model)
@@ -608,6 +621,45 @@ enum JavaScriptReplaceResult {
 }
 
 impl StateStore for JavaScriptDurabilityStore {
+    fn peek<'a>(
+        &'a mut self,
+        state_id: &'a str,
+    ) -> StoreFuture<'a, Result<StoredState, StoreError>> {
+        Box::pin(async move {
+            let promise = host_durability_load(&self.route_id, state_id)
+                .map_err(|error| StoreError::Backend(host_error_message(&error)))?;
+            let value = JsFuture::from(promise)
+                .await
+                .map_err(|error| StoreError::Backend(host_error_message(&error)))?;
+            let field = |name: &str| {
+                js_sys::Reflect::get(&value, &JsValue::from_str(name))
+                    .map_err(|error| StoreError::Backend(host_error_message(&error)))
+            };
+            let revision = field("revision")?
+                .as_string()
+                .ok_or_else(|| StoreError::Backend("invalid durability load revision".into()))?;
+            let payload = field("payload")?;
+            let payload = if payload.is_null() {
+                None
+            } else {
+                let bytes = payload
+                    .dyn_ref::<js_sys::Uint8Array>()
+                    .ok_or_else(|| StoreError::Backend("invalid durability load payload".into()))?;
+                Some(
+                    String::from_utf8(bytes.to_vec())
+                        .map_err(|error| StoreError::Backend(error.to_string()))?,
+                )
+            };
+            let revision = parse_revision(&revision)?;
+            if (revision == 0) != payload.is_none() {
+                return Err(StoreError::Backend(
+                    "JavaScript durability load returned inconsistent state".into(),
+                ));
+            }
+            Ok(StoredState { revision, payload })
+        })
+    }
+
     fn read_records<'a>(
         &'a mut self,
         state_id: &'a str,
@@ -802,9 +854,7 @@ impl JavaScriptCodeModeHost {
     fn new(definition_host_id: u32) -> Self {
         Self {
             definition_host_id,
-            // Code Mode is the default; direct is an explicit host opt-in.
-            // The legacy mixed `Code` exposure is never selectable.
-            // JS hosts validate the mode; an unavailable host keeps Code Mode.
+
             mode: match host_tool_mode(definition_host_id, "").as_deref() {
                 Ok("direct") => EmbeddedToolMode::Direct,
                 _ => EmbeddedToolMode::CodeOnly,
@@ -942,7 +992,6 @@ impl CodeModeHost for JavaScriptCodeModeHost {
         session_id: &str,
         observer: &mut (dyn FnMut(&str) -> Box<dyn CodeModeObserver> + Send),
     ) {
-        // Hosts predating the relay contract leave cells for the next wait.
         let Ok(value) = host_detach_code_turn(session_id) else {
             return;
         };
@@ -979,12 +1028,11 @@ impl CodeModeHost for JavaScriptCodeModeHost {
         observer: &'a mut dyn CodeModeObserver,
     ) -> HostFuture<'a, Result<(), CodeModeHostError>> {
         Box::pin(async move {
-            // Hosts predating the contract cancel without reporting receipts.
             let Ok(value) = host_cancel_code_turn_with_updates(session_id) else {
                 host_cancel_code_turn(session_id);
                 return Ok(());
             };
-            // Cancelled cells settle, so each relay ends after its final receipts.
+
             for relay in decode_relays(&value) {
                 drain_javascript_relay(session_id, &relay.relay_id, observer).await;
             }
@@ -1013,7 +1061,7 @@ async fn execute_javascript_code(
             .collect::<Vec<_>>(),
     )
     .map_err(|error| CodeModeHostError::new(error.to_string()))?;
-    // The callback retains its original revision and host context across yields.
+
     let owned = Rc::new(OwnedToolContext::from_context(context));
     let callback = Closure::wrap(
         Box::new(move |name: String, input: String, call_id: String| {
@@ -1189,7 +1237,6 @@ fn decode_relays(value: &JsValue) -> Vec<JavaScriptCodeRelay> {
     }
 }
 
-/// Forwards one detached cell's nested lifecycle until the host ends the relay.
 async fn relay_javascript_code(
     session_id: String,
     relay_id: String,
@@ -1198,8 +1245,6 @@ async fn relay_javascript_code(
     drain_javascript_relay(&session_id, &relay_id, observer.as_mut()).await;
 }
 
-/// Delivers a relay's nested starts and completions until the host returns
-/// null. Notifications stay with the cell for its next wait result.
 async fn drain_javascript_relay(
     session_id: &str,
     relay_id: &str,
@@ -1316,10 +1361,6 @@ async fn apply_browser_patch_plan(
     Ok(plan.summary().to_owned())
 }
 
-/// Applies a browser-workspace patch through the canonical Rust planner.
-///
-/// The browser host uses this internal binding for nested Code Mode calls so
-/// they share the direct `apply_patch` tool's verification and mutation path.
 #[wasm_bindgen(js_name = applyBrowserPatch)]
 pub async fn apply_browser_patch(patch: &str, session_id: &str) -> Result<String, JsValue> {
     apply_browser_patch_plan(patch, session_id)
@@ -1440,12 +1481,32 @@ struct WasmSubagentsConfig {
 }
 
 #[derive(Deserialize)]
+#[serde(untagged)]
+enum WasmModelSelection {
+    Name(String),
+    Qualified(nanocode::ModelSelection),
+}
+
+impl WasmModelSelection {
+    fn resolve(self, family: HarnessFamily) -> Result<ModelSelection, NanocodexError> {
+        let model = match self {
+            Self::Name(name) => name
+                .parse::<ModelSelection>()
+                .unwrap_or_else(|_| ModelSelection::new(family, name)),
+            Self::Qualified(model) => model,
+        };
+        model.validate()?;
+        Ok(model)
+    }
+}
+
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct WasmSubagentTask {
     role: String,
     task: String,
     #[serde(default)]
-    model: Option<HarnessModel>,
+    model: Option<WasmModelSelection>,
     #[serde(default)]
     harness: Option<HarnessFamily>,
     #[serde(default)]
@@ -1535,7 +1596,6 @@ struct WasmSubscriptionSeed {
     fedramp: bool,
 }
 
-/// JavaScript binding over the Rust-owned hosted ChatGPT credential lifecycle.
 #[wasm_bindgen(js_name = ChatGptSubscription)]
 pub struct WasmChatGptSubscription {
     inner: ChatGptSubscription,
@@ -1543,7 +1603,6 @@ pub struct WasmChatGptSubscription {
 
 #[wasm_bindgen(js_class = ChatGptSubscription)]
 impl WasmChatGptSubscription {
-    /// Opens a subscription over the currently registered generic host capabilities.
     #[wasm_bindgen(js_name = open)]
     pub async fn open(config_json: &str) -> Result<Self, JsValue> {
         let config = serde_json::from_str::<WasmSubscriptionConfig>(config_json)
@@ -1568,23 +1627,19 @@ impl WasmChatGptSubscription {
         Ok(Self { inner })
     }
 
-    /// Starts a ChatGPT device login and returns public pending state as JSON.
     #[wasm_bindgen(js_name = startLogin)]
     pub async fn start_login(&self) -> Result<String, JsValue> {
         encode_login_status(self.inner.start_login().await)
     }
 
-    /// Polls device login and returns public state as JSON.
     pub async fn status(&self) -> Result<String, JsValue> {
         encode_login_status(self.inner.status().await)
     }
 
-    /// Resolves one credential generation for a host-owned outbound request.
     pub async fn credential(&self) -> Result<String, JsValue> {
         encode_subscription_credential(self.inner.credential().await)
     }
 
-    /// Refreshes a rejected generation and returns the credential now current.
     pub async fn recover(&self, rejected_revision: &str) -> Result<String, JsValue> {
         let revision = rejected_revision
             .parse::<u64>()
@@ -1592,7 +1647,6 @@ impl WasmChatGptSubscription {
         encode_subscription_credential(self.inner.recover(revision).await)
     }
 
-    /// Clears the persisted credential and pending login.
     pub async fn logout(&self) -> Result<(), JsValue> {
         self.inner.logout().await.map_err(js_error)
     }
@@ -1618,13 +1672,12 @@ fn encode_subscription_credential(
     .to_string())
 }
 
-/// JavaScript binding over the shared Rust agent lifecycle of either harness family.
 #[wasm_bindgen(js_name = Nanocodex)]
 pub struct WasmNanocodex {
     inner: RustNanocodex,
     subagents: Option<WasmSubagents>,
     event_forwarding: Rc<Cell<bool>>,
-    /// Turns issued through this handle, so `cancel` can stop them together.
+
     turns: RefCell<Vec<std::rc::Weak<RefCell<TurnState>>>>,
 }
 
@@ -1635,6 +1688,7 @@ struct WasmHarnessFactory {
     hosts: Arc<Mutex<HashMap<String, u32>>>,
     codex: Option<(serde_json::Value, nanocode::oai::auth::OpenAiAuth)>,
     claude: Option<serde_json::Value>,
+    durability_host_id: Option<String>,
 }
 
 impl WasmHarnessFactory {
@@ -1643,6 +1697,7 @@ impl WasmHarnessFactory {
         options: SpawnOptions,
         host_context: Option<Arc<str>>,
         checkpoint: Option<SessionCheckpoint>,
+        parent: Option<AgentHandle>,
     ) -> Result<(RustNanocodex, AgentEvents), NanocodexError> {
         let factory = self;
         let family = options.selected_harness().expect("resolved family");
@@ -1661,6 +1716,24 @@ impl WasmHarnessFactory {
         } else {
             return Err(unavailable());
         };
+        let lineage = if let (Some(route_id), Some(parent)) = (&factory.durability_host_id, parent)
+        {
+            let store = nanocode::durability::SessionStore::new(JavaScriptDurabilityStore {
+                route_id: route_id.clone(),
+            })
+            .map_err(|error| NanocodexError::InvalidRequest(error.to_string()))?;
+            let stored = store
+                .load(parent.session_id())
+                .await
+                .map_err(|error| NanocodexError::InvalidRequest(error.to_string()))?;
+            Some(Lineage::child_of(
+                &stored.summary.record.lineage,
+                parent.session_id(),
+                Origin::Subagent,
+            ))
+        } else {
+            None
+        };
         let object = recipe.as_object_mut().ok_or_else(unavailable)?;
         for key in [
             "session_id",
@@ -1675,6 +1748,20 @@ impl WasmHarnessFactory {
             "before_compaction",
         ] {
             object.remove(key);
+        }
+        if let Some(route_id) = &factory.durability_host_id {
+            let session_id = checkpoint.as_ref().map_or_else(
+                || SessionId::new().to_string(),
+                |checkpoint| checkpoint.session_id().to_owned(),
+            );
+            let keys = if family == HarnessFamily::Codex {
+                ["session_id", "durability_id", "durability_host_id"]
+            } else {
+                ["sessionId", "durabilityId", "durabilityHostId"]
+            };
+            object.insert(keys[0].into(), session_id.clone().into());
+            object.insert(keys[1].into(), session_id.into());
+            object.insert(keys[2].into(), route_id.clone().into());
         }
         object.insert("model".into(), model.to_string().into());
         object.insert(
@@ -1696,6 +1783,7 @@ impl WasmHarnessFactory {
                 Some(factory.clone()),
                 checkpoint,
                 host_context,
+                lineage,
             )
             .await
         } else if family == HarnessFamily::Claude {
@@ -1704,6 +1792,7 @@ impl WasmHarnessFactory {
                 Some(factory.clone()),
                 checkpoint,
                 host_context,
+                lineage,
             )
             .await
         } else {
@@ -1739,7 +1828,9 @@ impl AgentFactory for WasmHarnessFactory {
             let model = parent.harness_model();
             let thinking = model.default_thinking();
             let options = options.resolve(model, thinking)?;
-            factory.build_native(options, host_context, None).await
+            factory
+                .build_native(options, host_context, None, Some(parent))
+                .await
         })
     }
     fn restore(
@@ -1751,6 +1842,17 @@ impl AgentFactory for WasmHarnessFactory {
         let factory = Arc::new(self.clone());
         Box::pin(async move {
             parent.ensure_available().await?;
+            let checkpoint = if let Some(route_id) = &factory.durability_host_id {
+                nanocode::durability::SessionStore::new(JavaScriptDurabilityStore {
+                    route_id: route_id.clone(),
+                })
+                .map_err(|error| NanocodexError::InvalidRequest(error.to_string()))?
+                .recovery_checkpoint(checkpoint)
+                .await
+                .map_err(|error| NanocodexError::InvalidRequest(error.to_string()))?
+            } else {
+                checkpoint
+            };
             if parent.harness_family() == checkpoint.family() {
                 return parent
                     .restore_native_runtime(checkpoint, host_context)
@@ -1764,6 +1866,7 @@ impl AgentFactory for WasmHarnessFactory {
                         .harness_model(model),
                     host_context,
                     Some(checkpoint),
+                    None,
                 )
                 .await
         })
@@ -1881,13 +1984,9 @@ impl WasmSubagents {
         });
     }
 
-    /// Tears down a root's live subtree. This is a runtime shutdown, not a
-    /// close: children detach from the host and stay restorable from the
-    /// root's durable task-tree journal with their bindings intact.
     async fn close_all(&self, root_session_id: &str) -> std::io::Result<()> {
         self.control.close_all(root_session_id).await?;
-        // All close updates are now queued. Preserve their individual release
-        // reasons before fallback teardown removes any remaining host bindings.
+
         let (complete, completed) = oneshot::channel();
         self.flush_updates.send(complete).map_err(|_| {
             std::io::Error::other("subagent update forwarding stopped before shutdown")
@@ -1909,11 +2008,6 @@ impl WasmSubagents {
 
 #[wasm_bindgen(js_class = Nanocodex)]
 impl WasmNanocodex {
-    /// Builds an agent from its JavaScript JSON configuration.
-    ///
-    /// # Errors
-    ///
-    /// Throws when the JSON or agent policy is invalid.
     pub async fn create(config_json: &str) -> Result<Self, JsValue> {
         let config = serde_json::from_str::<WasmConfig>(config_json)
             .map_err(|error| js_error(format!("invalid Nanocodex configuration: {error}")))?;
@@ -1921,7 +2015,6 @@ impl WasmNanocodex {
         Self::create_with_auth(config, auth).await
     }
 
-    /// Builds an agent whose ChatGPT credential lifecycle is owned by Rust.
     #[wasm_bindgen(js_name = createWithChatGpt)]
     pub async fn create_with_chat_gpt(
         config_json: &str,
@@ -1955,6 +2048,9 @@ impl WasmNanocodex {
                     auth.clone(),
                 )),
                 claude: config.claude_harness.clone(),
+                durability_host_id: (config.session_id == config.durability_id)
+                    .then(|| config.durability_host_id.clone())
+                    .flatten(),
             });
             let subagents = WasmSubagents::new(
                 config.host_definition_id,
@@ -1968,48 +2064,30 @@ impl WasmNanocodex {
         } else {
             (None, None)
         };
-        let (inner, events) = build_codex(config, auth, factory, None, None).await?;
+        let (inner, events) = build_codex(config, auth, factory, None, None, None).await?;
         Ok(Self::from_parts(inner, events, subagents))
     }
 
-    /// Returns the stable Agent identity.
     #[wasm_bindgen(getter, js_name = agentId)]
     #[must_use]
     pub fn agent_id(&self) -> String {
         self.inner.agent_id().to_owned()
     }
 
-    /// Returns the stable session identity.
     #[wasm_bindgen(getter, js_name = sessionId)]
     #[must_use]
     pub fn session_id(&self) -> String {
         self.inner.session_id().to_string()
     }
 
-    /// Returns this session's identity, harness family, and lineage as JSON.
-    ///
-    /// # Errors
-    ///
-    /// Throws only if serialization fails.
     pub fn session(&self) -> Result<String, JsValue> {
         encode_session_info(self.inner.session())
     }
 
-    /// Returns the lifecycle operations this session's backend supports as JSON.
-    ///
-    /// # Errors
-    ///
-    /// Throws only if serialization fails.
     pub fn capabilities(&self) -> Result<String, JsValue> {
         encode_capabilities(self.inner.capabilities())
     }
 
-    /// Returns where this session is persisted as JSON, or `undefined` when it
-    /// lives only in memory.
-    ///
-    /// # Errors
-    ///
-    /// Throws only if serialization fails.
     pub fn persistence(&self) -> Result<Option<String>, JsValue> {
         self.inner
             .persistence()
@@ -2018,7 +2096,6 @@ impl WasmNanocodex {
             .transpose()
     }
 
-    /// Enables or disables the optional JavaScript event crossing for this handle.
     #[wasm_bindgen(js_name = setEventForwarding)]
     pub fn set_event_forwarding(&self, enabled: bool) {
         if self.event_forwarding.replace(enabled) != enabled
@@ -2028,7 +2105,6 @@ impl WasmNanocodex {
         }
     }
 
-    /// Starts one canonical Rust task-tree child and returns its descriptor.
     #[wasm_bindgen(js_name = spawnSubagent)]
     pub async fn spawn_subagent(&self, task: &str) -> Result<String, JsValue> {
         self.subagents
@@ -2038,7 +2114,6 @@ impl WasmNanocodex {
             .await
     }
 
-    /// Waits for any selected canonical task-tree child to become terminal.
     #[wasm_bindgen(js_name = waitSubagents)]
     pub async fn wait_subagents(&self, task: &str) -> Result<String, JsValue> {
         self.subagents
@@ -2048,7 +2123,6 @@ impl WasmNanocodex {
             .await
     }
 
-    /// Lists the canonical task-tree directory visible to the owning root.
     #[wasm_bindgen(js_name = listSubagents)]
     pub async fn list_subagents(&self, task: &str) -> Result<String, JsValue> {
         self.subagents
@@ -2058,7 +2132,6 @@ impl WasmNanocodex {
             .await
     }
 
-    /// Sends one canonical directed task-tree message from the owning root.
     #[wasm_bindgen(js_name = sendSubagentMessage)]
     pub async fn send_subagent_message(&self, task: &str) -> Result<String, JsValue> {
         self.subagents
@@ -2068,7 +2141,6 @@ impl WasmNanocodex {
             .await
     }
 
-    /// Interrupts one canonical task-tree child while keeping it reusable.
     #[wasm_bindgen(js_name = interruptSubagent)]
     pub async fn interrupt_subagent(&self, task: &str) -> Result<String, JsValue> {
         self.subagents
@@ -2078,7 +2150,6 @@ impl WasmNanocodex {
             .await
     }
 
-    /// Closes one canonical task-tree child and its descendants.
     #[wasm_bindgen(js_name = closeSubagent)]
     pub async fn close_subagent(&self, task: &str) -> Result<String, JsValue> {
         self.subagents
@@ -2088,11 +2159,6 @@ impl WasmNanocodex {
             .await
     }
 
-    /// Accepts a text prompt and returns its independently awaitable turn.
-    ///
-    /// # Errors
-    ///
-    /// Throws when the prompt is empty.
     pub fn prompt(
         &self,
         instruction: &str,
@@ -2111,11 +2177,6 @@ impl WasmNanocodex {
         )))
     }
 
-    /// Accepts browser-safe multimodal input encoded as JSON.
-    ///
-    /// # Errors
-    ///
-    /// Throws for malformed, empty, or local-filesystem input.
     #[wasm_bindgen(js_name = promptContent)]
     pub fn prompt_content(
         &self,
@@ -2132,13 +2193,6 @@ impl WasmNanocodex {
         )))
     }
 
-    /// Atomically steers the active turn or starts a new independently awaitable turn.
-    ///
-    /// Returns `undefined` when the input was steered into an active turn.
-    ///
-    /// # Errors
-    ///
-    /// Rejects empty input, a full steering queue, or a stopped driver.
     #[wasm_bindgen(js_name = routePrompt)]
     pub async fn route_prompt(&self, instruction: &str) -> Result<Option<WasmTurn>, JsValue> {
         if instruction.trim().is_empty() {
@@ -2155,13 +2209,6 @@ impl WasmNanocodex {
         }
     }
 
-    /// Cancels every nonterminal turn issued through this handle.
-    ///
-    /// An in-flight compaction is not a turn and is not cancelled.
-    ///
-    /// # Errors
-    ///
-    /// Rejects when an active turn cannot be cancelled.
     pub async fn cancel(&self) -> Result<(), JsValue> {
         let pending: Vec<_> = self
             .turns
@@ -2177,29 +2224,17 @@ impl WasmNanocodex {
                 Err(error) if turn.state.borrow().completed.is_none() => {
                     return Err(js_error(error));
                 }
-                Err(_) => {} // Completion can race cancellation.
+                Err(_) => {}
             }
         }
         Ok(())
     }
 
-    /// Forks the latest committed safe boundary. `origin` is `"fork"`
-    /// (default) or `"side_conversation"`.
-    ///
-    /// # Errors
-    ///
-    /// Rejects before the first safe boundary, after the driver stops, or with
-    /// `code: "unsupported_capability"` when the backend cannot fork.
     pub async fn fork(&self, origin: Option<String>) -> Result<Self, JsValue> {
         self.fork_with(fork_request(ForkRequest::latest(), origin.as_deref())?)
             .await
     }
 
-    /// Forks from the boundary retained by one completed turn of this conversation.
-    ///
-    /// # Errors
-    ///
-    /// Rejects if the result belongs to another conversation or the driver stopped.
     #[wasm_bindgen(js_name = forkAtTurn)]
     pub async fn fork_at_turn(
         &self,
@@ -2213,12 +2248,6 @@ impl WasmNanocodex {
         .await
     }
 
-    /// Forks from a portable checkpoint of this conversation tree.
-    ///
-    /// # Errors
-    ///
-    /// Rejects malformed checkpoints, checkpoints of another family
-    /// (`code: "checkpoint_family_mismatch"`) or another conversation tree.
     #[wasm_bindgen(js_name = forkAtCheckpoint)]
     pub async fn fork_at_checkpoint(
         &self,
@@ -2233,12 +2262,6 @@ impl WasmNanocodex {
         .await
     }
 
-    /// Exports the portable latest committed boundary without mutating this agent.
-    ///
-    /// # Errors
-    ///
-    /// Rejects before the first safe boundary, after the driver stops, or with
-    /// `code: "unsupported_capability"` when the backend cannot checkpoint.
     pub async fn checkpoint(&self) -> Result<String, JsValue> {
         self.inner
             .checkpoint()
@@ -2248,22 +2271,11 @@ impl WasmNanocodex {
             .map_err(js_agent_error)
     }
 
-    /// Starts a clean sibling with the same private agent policy.
-    ///
-    /// # Errors
-    ///
-    /// Rejects after the driver stops.
     pub async fn spawn(&self) -> Result<Self, JsValue> {
         let (inner, events) = self.inner.spawn().await.map_err(js_agent_error)?;
         Ok(Self::from_parts(inner, events, self.subagents.clone()))
     }
 
-    /// Starts an ordered batch of canonical subagents in the same task tree.
-    ///
-    /// # Errors
-    ///
-    /// Rejects malformed tasks, agents without subagent tools, a stopped
-    /// parent, or a batch that cannot be reserved in full.
     #[wasm_bindgen(js_name = spawnSubagents)]
     pub async fn spawn_subagents(&self, tasks_json: &str) -> Result<String, JsValue> {
         self.subagents
@@ -2272,11 +2284,7 @@ impl WasmNanocodex {
             .spawn_subagents(self.inner.session_id(), tasks_json)
             .await
     }
-    /// Changes the reasoning effort for subsequently accepted turns.
-    ///
-    /// # Errors
-    ///
-    /// Rejects an invalid effort or a stopped driver.
+
     #[wasm_bindgen(js_name = setThinking)]
     pub async fn set_thinking(&self, thinking: &str) -> Result<(), JsValue> {
         self.inner
@@ -2285,27 +2293,18 @@ impl WasmNanocodex {
             .map_err(js_agent_error)
     }
 
-    /// Changes the model to another model id of this session's harness family.
-    ///
-    /// `capabilities().model` states when the model may change.
-    ///
-    /// # Errors
-    ///
-    /// Rejects an unknown model, a model of another family, an incompatible
-    /// thinking level, a change the backend no longer accepts, or a stopped driver.
     #[wasm_bindgen(js_name = setModel)]
     pub async fn set_model(&self, model: &str) -> Result<(), JsValue> {
         self.inner
-            .set_harness_model(model.parse::<HarnessModel>().map_err(js_error)?)
+            .set_harness_model(
+                WasmModelSelection::Name(model.to_owned())
+                    .resolve(self.inner.harness_family())
+                    .map_err(js_error)?,
+            )
             .await
             .map_err(js_agent_error)
     }
 
-    /// Enables or disables priority processing for subsequently accepted turns.
-    ///
-    /// # Errors
-    ///
-    /// Rejects after the driver stops.
     #[wasm_bindgen(js_name = setFastMode)]
     pub async fn set_fast_mode(&self, enabled: bool) -> Result<(), JsValue> {
         self.inner
@@ -2314,13 +2313,6 @@ impl WasmNanocodex {
             .map_err(js_agent_error)
     }
 
-    /// Selects the processing tier for subsequently accepted turns:
-    /// `"standard"`, `"priority"`, `"fast"`, or `"ultrafast"`.
-    ///
-    /// # Errors
-    ///
-    /// Rejects an unknown tier, a stopped driver, or with
-    /// `code: "unsupported_capability"` when the backend cannot select it.
     #[wasm_bindgen(js_name = setServiceTier)]
     pub async fn set_service_tier(&self, service_tier: &str) -> Result<(), JsValue> {
         let service_tier = serde_json::from_value::<ServiceTier>(serde_json::Value::String(
@@ -2335,61 +2327,29 @@ impl WasmNanocodex {
             .map_err(js_agent_error)
     }
 
-    /// Compacts retained history immediately without fabricating a user prompt.
-    ///
-    /// # Errors
-    ///
-    /// Throws when compaction or the agent driver fails.
     pub async fn compact(&self) -> Result<(), JsValue> {
         self.inner.compact().await.map_err(js_agent_error)
     }
 
-    /// Appends adapter-owned developer context at the next safe model boundary.
-    ///
-    /// Returns the complete read-only session context captured at that boundary.
-    ///
-    /// # Errors
-    ///
-    /// Rejects empty text or a stopped driver.
     #[wasm_bindgen(js_name = appendDeveloperMessage)]
     pub async fn append_developer_message(&self, text: &str) -> Result<String, JsValue> {
         append_developer_context(&self.inner, text).await
     }
 
-    /// Returns complete read-only session context at the latest safe boundary.
-    ///
-    /// # Errors
-    ///
-    /// Rejects after the driver stops or when context serialization fails.
     pub async fn context(&self) -> Result<String, JsValue> {
         serialize_session_context(self.inner.context().await.map_err(js_agent_error)?)
     }
 
-    /// Starts the canonical Codex Realtime adapter lifecycle.
-    ///
-    /// # Errors
-    ///
-    /// Rejects when the agent driver has stopped or context serialization fails.
     #[wasm_bindgen(js_name = startRealtimeConversation)]
     pub async fn start_realtime_conversation(&self) -> Result<String, JsValue> {
         append_developer_context(&self.inner, REALTIME_START_INSTRUCTIONS).await
     }
 
-    /// Ends the canonical Codex Realtime adapter lifecycle.
-    ///
-    /// # Errors
-    ///
-    /// Rejects when the agent driver has stopped or context serialization fails.
     #[wasm_bindgen(js_name = endRealtimeConversation)]
     pub async fn end_realtime_conversation(&self) -> Result<String, JsValue> {
         append_developer_context(&self.inner, REALTIME_END_INSTRUCTIONS).await
     }
 
-    /// Formats one structured Realtime delegation using canonical Codex markers.
-    ///
-    /// # Errors
-    ///
-    /// Rejects malformed transcript JSON.
     #[wasm_bindgen(js_name = realtimeDelegation)]
     pub fn realtime_delegation(&self, input: &str, transcript: &str) -> Result<String, JsValue> {
         let transcript = serde_json::from_str::<Vec<WasmRealtimeTranscriptEntry>>(transcript)
@@ -2401,11 +2361,6 @@ impl WasmNanocodex {
         Ok(realtime_delegation(input, &transcript))
     }
 
-    /// Formats an unconsumed Realtime transcript tail using canonical Codex markers.
-    ///
-    /// # Errors
-    ///
-    /// Rejects malformed transcript JSON.
     #[wasm_bindgen(js_name = realtimeTailDelegation)]
     pub fn realtime_tail_delegation(&self, transcript: &str) -> Result<Option<String>, JsValue> {
         let transcript = serde_json::from_str::<Vec<WasmRealtimeTranscriptEntry>>(transcript)
@@ -2417,21 +2372,11 @@ impl WasmNanocodex {
         Ok(realtime_tail_delegation(&transcript))
     }
 
-    /// Creates the Rust-owned Codex browser voice controller for this agent.
-    ///
-    /// # Errors
-    ///
-    /// Rejects voices outside Codex's ChatGPT V3 catalog.
     #[wasm_bindgen(js_name = browserVoice)]
     pub fn browser_voice(&self, voice: &str) -> Result<WasmBrowserVoice, JsValue> {
         WasmBrowserVoice::new(self.inner.clone(), voice).map_err(js_error)
     }
 
-    /// Gracefully stops the driver and joins every resource owned by this agent.
-    ///
-    /// # Errors
-    ///
-    /// Rejects when the driver had already stopped or cleanup fails.
     pub async fn shutdown(&self) -> Result<(), JsValue> {
         if let Some(subagents) = &self.subagents {
             subagents
@@ -2517,10 +2462,6 @@ fn encode_session_info(session: &SessionInfo) -> Result<String, JsValue> {
     .map_err(js_error)
 }
 
-/// Encodes [`Capabilities`] as a camelCase JSON object.
-///
-/// Every field of the Rust contract crosses to JavaScript with its name
-/// converted to camelCase, so new capability flags need no change here.
 fn encode_capabilities(capabilities: Capabilities) -> Result<String, JsValue> {
     let serde_json::Value::Object(fields) = serde_json::to_value(capabilities).map_err(js_error)?
     else {
@@ -2577,7 +2518,6 @@ impl Drop for WasmNanocodex {
     }
 }
 
-/// Rust-owned Codex browser voice protocol and Agent bridge.
 #[wasm_bindgen(js_name = BrowserVoice)]
 pub struct WasmBrowserVoice {
     agent: RustNanocodex,
@@ -2590,19 +2530,11 @@ pub struct WasmBrowserVoice {
 
 #[wasm_bindgen(js_class = BrowserVoice)]
 impl WasmBrowserVoice {
-    /// Fences speech before the embedding submits typed input.
-    ///
-    /// # Errors
-    /// Rejects only when effects cannot be serialized.
     #[wasm_bindgen(js_name = noteTypedInput)]
     pub fn note_typed_input(&self) -> Result<String, JsValue> {
         encode_voice_effects(&self.protocol.borrow_mut().note_typed_input())
     }
 
-    /// Sets subscription voice preferences before starting a call.
-    ///
-    /// # Errors
-    /// Rejects invalid settings or changes to an active call.
     pub fn configure(&self, settings_json: &str) -> Result<(), JsValue> {
         if self.started.get() {
             return Err(js_error("voice settings require a new call"));
@@ -2614,10 +2546,6 @@ impl WasmBrowserVoice {
             .map_err(js_error)
     }
 
-    /// Queues explicitly speakable text in the current conversation.
-    ///
-    /// # Errors
-    /// Rejects inactive sessions, invalid text, or a full output queue.
     #[wasm_bindgen(js_name = appendSpeech)]
     pub fn append_speech(&self, text: &str) -> Result<String, JsValue> {
         if !self.started.get() {
@@ -2632,10 +2560,6 @@ impl WasmBrowserVoice {
         )
     }
 
-    /// Appends text through Codex's subscription context adapter.
-    ///
-    /// # Errors
-    /// Rejects inactive sessions, invalid roles/text, or a full output queue.
     #[wasm_bindgen(js_name = appendText)]
     pub fn append_text(&self, role: &str, text: &str) -> Result<String, JsValue> {
         if !self.started.get() {
@@ -2651,10 +2575,6 @@ impl WasmBrowserVoice {
         )
     }
 
-    /// Adds background context without requesting speech or consuming a delegation.
-    ///
-    /// # Errors
-    /// Rejects an inactive session or invalid text.
     #[wasm_bindgen(js_name = appendContext)]
     pub fn append_context(&self, text: &str) -> Result<String, JsValue> {
         if !self.started.get() {
@@ -2669,11 +2589,6 @@ impl WasmBrowserVoice {
         )
     }
 
-    /// Begins Codex's Realtime lifecycle without injecting startup context.
-    ///
-    /// # Errors
-    ///
-    /// Rejects when the Agent driver has stopped.
     pub async fn start(&self) -> Result<(), JsValue> {
         if self.started.get() {
             return Ok(());
@@ -2686,11 +2601,6 @@ impl WasmBrowserVoice {
         Ok(())
     }
 
-    /// Encodes the complete same-origin call request after the browser creates its SDP offer.
-    ///
-    /// # Errors
-    ///
-    /// Rejects calls made before [`Self::start`] or an empty SDP offer.
     #[wasm_bindgen(js_name = callBody)]
     pub fn call_body(&self, sdp: &str) -> Result<String, JsValue> {
         if !self.started.get() {
@@ -2717,11 +2627,6 @@ impl WasmBrowserVoice {
         .map_err(js_error)
     }
 
-    /// Decodes Codex's provider response body and Location header in Rust.
-    ///
-    /// # Errors
-    ///
-    /// Rejects an empty SDP answer or a Location without a Codex call identity.
     #[wasm_bindgen(js_name = completeCall)]
     pub fn complete_call(&self, response_body: &str, location: &str) -> Result<String, JsValue> {
         let result = decode_chatgpt_realtime_call(response_body, location).map_err(js_error)?;
@@ -2732,11 +2637,6 @@ impl WasmBrowserVoice {
         .map_err(js_error)
     }
 
-    /// Builds the same-origin sideband URL with Codex's Rust-owned request identity.
-    ///
-    /// # Errors
-    ///
-    /// Rejects a malformed provider call identity.
     #[wasm_bindgen(js_name = sidebandUrl)]
     pub fn sideband_url(&self, call_id: &str) -> Result<String, JsValue> {
         if !valid_realtime_call_id(call_id) {
@@ -2748,21 +2648,11 @@ impl WasmBrowserVoice {
         ))
     }
 
-    /// Replays Rust-retained outbound frames after a sideband connects.
-    ///
-    /// # Errors
-    ///
-    /// Rejects only when effects cannot be serialized.
     #[wasm_bindgen(js_name = sidebandOpened)]
     pub fn sideband_opened(&self) -> Result<String, JsValue> {
         encode_voice_effects(&self.protocol.borrow().sideband_opened())
     }
 
-    /// Applies Codex's Rust-owned Frameless reconnect policy after transport loss.
-    ///
-    /// # Errors
-    ///
-    /// Rejects only when effects cannot be serialized.
     #[wasm_bindgen(js_name = sidebandClosed)]
     pub fn sideband_closed(&self, connected_ms: u32) -> Result<String, JsValue> {
         encode_voice_effects(
@@ -2773,23 +2663,16 @@ impl WasmBrowserVoice {
         )
     }
 
-    /// Acknowledges frames written by the browser WebSocket effect executor.
     #[wasm_bindgen(js_name = framesSent)]
     pub fn frames_sent(&self, count: u32) {
         self.protocol.borrow_mut().frames_sent(count as usize);
     }
 
-    /// Reports whether one Rust-decoded sideband event can admit Agent work.
     #[wasm_bindgen(js_name = requiresAgentAdmission)]
     pub fn requires_agent_admission(&self, payload: &str) -> bool {
         realtime_message_requires_agent_admission(payload)
     }
 
-    /// Applies one Frameless sideband event and routes any delegation through the Rust Agent.
-    ///
-    /// # Errors
-    ///
-    /// Rejects when delegated Agent work cannot be accepted or steered.
     #[wasm_bindgen(js_name = realtimeMessage)]
     pub async fn realtime_message(&self, payload: &str) -> Result<String, JsValue> {
         let update = self.protocol.borrow_mut().realtime_message(payload);
@@ -2800,11 +2683,6 @@ impl WasmBrowserVoice {
         encode_voice_effects(&update.effects)
     }
 
-    /// Applies one typed Agent event to the Rust-owned handoff stream.
-    ///
-    /// # Errors
-    ///
-    /// Rejects only when effects cannot be serialized.
     #[wasm_bindgen(js_name = agentEvent)]
     pub fn agent_event(&self, envelope: &str) -> Result<String, JsValue> {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(envelope) else {
@@ -2827,20 +2705,10 @@ impl WasmBrowserVoice {
         encode_voice_effects(&self.protocol.borrow_mut().agent_event(&encoded))
     }
 
-    /// Drains one Codex-paced streamed or final Agent handoff chunk.
-    ///
-    /// # Errors
-    ///
-    /// Rejects only when effects cannot be serialized.
     pub fn flush(&self, final_chunk: bool) -> Result<String, JsValue> {
         encode_voice_effects(&self.protocol.borrow_mut().flush(final_chunk))
     }
 
-    /// Retains final transcript history without a task and ends the Realtime lifecycle.
-    ///
-    /// # Errors
-    ///
-    /// Rejects when the Agent driver stops.
     pub async fn stop(&self) -> Result<String, JsValue> {
         if !self.started.get() {
             return encode_voice_effects(&self.protocol.borrow_mut().close_effects());
@@ -2870,11 +2738,6 @@ impl WasmBrowserVoice {
         encode_voice_effects(&self.protocol.borrow_mut().close_effects())
     }
 
-    /// Cancels only the active coding turn, never merely the voice transport.
-    ///
-    /// # Errors
-    ///
-    /// Rejects when the active turn cannot be cancelled.
     pub async fn cancel(&self) -> Result<bool, JsValue> {
         let control = self
             .active_turn
@@ -2888,11 +2751,6 @@ impl WasmBrowserVoice {
         Ok(true)
     }
 
-    /// Selects Codex's preferred physical input from browser device labels.
-    ///
-    /// # Errors
-    ///
-    /// Rejects malformed label JSON.
     #[wasm_bindgen(js_name = preferredPhysicalInput)]
     pub fn preferred_physical_input(
         &self,
@@ -2958,10 +2816,6 @@ struct WasmManagedBrowserVoiceUpdate {
     prefetch: Option<nanocode_voice_protocol::VoicePrefetch>,
 }
 
-/// Standalone Rust-owned browser voice protocol for a remote managed Agent.
-///
-/// This core owns only Realtime protocol state. The caller owns media,
-/// transports, the managed Agent lifecycle, and routing returned delegations.
 #[wasm_bindgen(js_name = ManagedBrowserVoice)]
 pub struct WasmManagedBrowserVoice {
     protocol: RefCell<nanocode_voice_protocol::ManagedVoiceProtocol>,
@@ -2972,19 +2826,11 @@ pub struct WasmManagedBrowserVoice {
 
 #[wasm_bindgen(js_class = ManagedBrowserVoice)]
 impl WasmManagedBrowserVoice {
-    /// Fences speech before the embedding submits typed input.
-    ///
-    /// # Errors
-    /// Rejects only when effects cannot be serialized.
     #[wasm_bindgen(js_name = noteTypedInput)]
     pub fn note_typed_input(&self) -> Result<String, JsValue> {
         encode_voice_effects(&self.protocol.borrow_mut().note_typed_input())
     }
 
-    /// Sets subscription voice preferences before starting a call.
-    ///
-    /// # Errors
-    /// Rejects invalid settings or changes to an active call.
     pub fn configure(&self, settings_json: &str) -> Result<(), JsValue> {
         if self.started.get() || self.call_prepared.get() {
             return Err(js_error("voice settings require a new call"));
@@ -2996,10 +2842,6 @@ impl WasmManagedBrowserVoice {
             .map_err(js_error)
     }
 
-    /// Queues explicitly speakable text in the current conversation.
-    ///
-    /// # Errors
-    /// Rejects inactive sessions, invalid text, or a full output queue.
     #[wasm_bindgen(js_name = appendSpeech)]
     pub fn append_speech(&self, text: &str) -> Result<String, JsValue> {
         if !self.started.get() {
@@ -3014,10 +2856,6 @@ impl WasmManagedBrowserVoice {
         )
     }
 
-    /// Appends text through Codex's subscription context adapter.
-    ///
-    /// # Errors
-    /// Rejects inactive sessions, invalid roles/text, or a full output queue.
     #[wasm_bindgen(js_name = appendText)]
     pub fn append_text(&self, role: &str, text: &str) -> Result<String, JsValue> {
         if !self.started.get() {
@@ -3033,10 +2871,6 @@ impl WasmManagedBrowserVoice {
         )
     }
 
-    /// Adds background context without requesting speech or consuming a delegation.
-    ///
-    /// # Errors
-    /// Rejects an inactive session or invalid text.
     #[wasm_bindgen(js_name = appendContext)]
     pub fn append_context(&self, text: &str) -> Result<String, JsValue> {
         if !self.started.get() {
@@ -3051,11 +2885,6 @@ impl WasmManagedBrowserVoice {
         )
     }
 
-    /// Creates an idle managed browser voice protocol core.
-    ///
-    /// # Errors
-    ///
-    /// Rejects voices outside Codex's ChatGPT V3 catalog.
     #[wasm_bindgen(constructor)]
     pub fn new(voice: &str) -> Result<Self, JsValue> {
         let mut protocol =
@@ -3069,10 +2898,6 @@ impl WasmManagedBrowserVoice {
         })
     }
 
-    /// Binds the known managed call before admission or microphone setup begins.
-    ///
-    /// # Errors
-    /// Rejects invalid session IDs or rebinding an active call.
     #[wasm_bindgen(js_name = bindSession)]
     pub fn bind_session(&self, managed_session_id: &str) -> Result<(), JsValue> {
         if self.started.get() || self.call_prepared.get() {
@@ -3083,11 +2908,6 @@ impl WasmManagedBrowserVoice {
         Ok(())
     }
 
-    /// Starts the protocol from the managed Agent's authoritative serialized context.
-    ///
-    /// # Errors
-    ///
-    /// Rejects malformed `AgentSessionContext` JSON.
     pub fn start(&self, context_json: &str) -> Result<String, JsValue> {
         if self.started.get() {
             return encode_voice_effects(&BrowserVoiceEffects::default());
@@ -3101,12 +2921,6 @@ impl WasmManagedBrowserVoice {
         encode_voice_effects(&effects)
     }
 
-    /// Encodes the managed same-origin call request after the browser creates its SDP offer.
-    ///
-    /// # Errors
-    ///
-    /// Rejects invalid session IDs or empty SDP offers. Admission can complete
-    /// after this request; its context is then sent over the control channel.
     #[wasm_bindgen(js_name = callBody)]
     pub fn call_body(&self, sdp: &str, managed_session_id: &str) -> Result<String, JsValue> {
         let session_id = managed_voice_session_id(managed_session_id)?;
@@ -3129,11 +2943,6 @@ impl WasmManagedBrowserVoice {
         .map_err(js_error)
     }
 
-    /// Decodes Codex's provider response body and Location header in Rust.
-    ///
-    /// # Errors
-    ///
-    /// Rejects an empty SDP answer or a Location without a Codex call identity.
     #[wasm_bindgen(js_name = completeCall)]
     pub fn complete_call(&self, response_body: &str, location: &str) -> Result<String, JsValue> {
         let result = decode_chatgpt_realtime_call(response_body, location).map_err(js_error)?;
@@ -3144,11 +2953,6 @@ impl WasmManagedBrowserVoice {
         .map_err(js_error)
     }
 
-    /// Builds the managed same-origin sideband URL for a provider call identity.
-    ///
-    /// # Errors
-    ///
-    /// Rejects malformed provider call or managed session identities.
     #[wasm_bindgen(js_name = sidebandUrl)]
     pub fn sideband_url(&self, call_id: &str, managed_session_id: &str) -> Result<String, JsValue> {
         if !valid_realtime_call_id(call_id) {
@@ -3160,21 +2964,11 @@ impl WasmManagedBrowserVoice {
         ))
     }
 
-    /// Replays Rust-retained outbound frames after a sideband connects.
-    ///
-    /// # Errors
-    ///
-    /// Rejects only when effects cannot be serialized.
     #[wasm_bindgen(js_name = sidebandOpened)]
     pub fn sideband_opened(&self) -> Result<String, JsValue> {
         encode_voice_effects(&self.protocol.borrow().sideband_opened())
     }
 
-    /// Applies Codex's bounded reconnect policy after sideband transport loss.
-    ///
-    /// # Errors
-    ///
-    /// Rejects only when effects cannot be serialized.
     #[wasm_bindgen(js_name = sidebandClosed)]
     pub fn sideband_closed(&self, connected_ms: u32) -> Result<String, JsValue> {
         encode_voice_effects(
@@ -3185,25 +2979,16 @@ impl WasmManagedBrowserVoice {
         )
     }
 
-    /// Acknowledges frames written by the caller's WebSocket effect executor.
     #[wasm_bindgen(js_name = framesSent)]
     pub fn frames_sent(&self, count: u32) {
         self.protocol.borrow_mut().frames_sent(count as usize);
     }
 
-    /// Reports whether one sideband event may produce a managed Agent delegation.
     #[wasm_bindgen(js_name = requiresAgentAdmission)]
     pub fn requires_agent_admission(&self, payload: &str) -> bool {
         self.protocol.borrow().requires_agent_admission(payload)
     }
 
-    /// Applies one sideband event and returns effects plus canonical delegation text.
-    ///
-    /// The caller must route returned delegation text through its remote managed Agent.
-    ///
-    /// # Errors
-    ///
-    /// Rejects only when the update cannot be serialized.
     #[wasm_bindgen(js_name = realtimeMessage)]
     pub fn realtime_message(&self, payload: &str) -> Result<String, JsValue> {
         let update = self.protocol.borrow_mut().realtime_message(payload);
@@ -3213,40 +2998,21 @@ impl WasmManagedBrowserVoice {
         encode_managed_voice_update(update.effects, delegation, update.prefetch)
     }
 
-    /// Applies one canonical raw `AgentEvent` JSON value to the handoff stream.
-    ///
-    /// # Errors
-    ///
-    /// Rejects only when effects cannot be serialized.
     #[wasm_bindgen(js_name = agentEvent)]
     pub fn agent_event(&self, event_json: &str) -> Result<String, JsValue> {
         encode_voice_effects(&self.protocol.borrow_mut().agent_event(event_json))
     }
 
-    /// Applies a scoped managed context envelope using the shared Rust queue.
-    ///
-    /// # Errors
-    /// Rejects malformed JSON or effects that cannot be serialized.
     #[wasm_bindgen(js_name = managedEvent)]
     pub fn managed_event(&self, envelope_json: &str) -> Result<String, JsValue> {
         let envelope = serde_json::from_str(envelope_json).map_err(js_error)?;
         encode_voice_effects(&self.protocol.borrow_mut().managed_event(&envelope))
     }
 
-    /// Drains one Codex-paced streamed or final managed Agent handoff chunk.
-    ///
-    /// # Errors
-    ///
-    /// Rejects only when effects cannot be serialized.
     pub fn flush(&self, final_chunk: bool) -> Result<String, JsValue> {
         encode_voice_effects(&self.protocol.borrow_mut().flush(final_chunk))
     }
 
-    /// Stops the protocol and returns transcript history plus close effects, without a delegation.
-    ///
-    /// # Errors
-    ///
-    /// Rejects only when the update cannot be serialized.
     pub fn stop(&self) -> Result<String, JsValue> {
         let tail = self.protocol.borrow_mut().take_transcript_tail();
         self.started.set(false);
@@ -3260,11 +3026,6 @@ impl WasmManagedBrowserVoice {
         .map_err(js_error)
     }
 
-    /// Selects Codex's preferred physical input from browser device labels.
-    ///
-    /// # Errors
-    ///
-    /// Rejects malformed label JSON.
     #[wasm_bindgen(js_name = preferredPhysicalInput)]
     pub fn preferred_physical_input(
         &self,
@@ -3326,7 +3087,6 @@ impl TurnState {
     }
 }
 
-/// JavaScript binding over one shared Rust turn.
 #[wasm_bindgen(js_name = Turn)]
 pub struct WasmTurn {
     state: Rc<RefCell<TurnState>>,
@@ -3334,19 +3094,10 @@ pub struct WasmTurn {
 
 #[wasm_bindgen(js_class = Turn)]
 impl WasmTurn {
-    /// Waits until the Rust driver has durably admitted this turn.
-    ///
-    /// Returns the durable request identity selected during admission, or
-    /// `undefined` when the agent has no execution policy.
-    ///
-    /// # Errors
-    ///
-    /// Rejects with a stable `code` describing an admission failure.
     pub async fn accepted(&self) -> Result<Option<String>, JsValue> {
         self.acceptance().await.map_err(js_turn_error)
     }
 
-    /// Host-only lifecycle identity, including turns without a durable request ID.
     #[wasm_bindgen(js_name = hostTurnId)]
     pub async fn host_turn_id(&self) -> Result<String, JsValue> {
         self.acceptance().await.map_err(js_turn_error)?;
@@ -3357,11 +3108,6 @@ impl WasmTurn {
             .ok_or_else(|| js_error("turn lifecycle identity unavailable"))
     }
 
-    /// Injects text input at the active turn's next safe model boundary.
-    ///
-    /// # Errors
-    ///
-    /// Rejects if the turn is not active or its driver stopped.
     pub async fn steer(
         &self,
         instruction: &str,
@@ -3378,11 +3124,6 @@ impl WasmTurn {
         .map_err(|error| js_turn_error(turn_failure(&error)))
     }
 
-    /// Injects browser-safe multimodal input at the active turn's next boundary.
-    ///
-    /// # Errors
-    ///
-    /// Rejects malformed input or a turn that is no longer active.
     #[wasm_bindgen(js_name = steerContent)]
     pub async fn steer_content(
         &self,
@@ -3398,12 +3139,6 @@ impl WasmTurn {
         .map_err(|error| js_turn_error(turn_failure(&error)))
     }
 
-    /// Removes the latest identified steer while it is still pending.
-    /// Returns false after successful turn completion.
-    ///
-    /// # Errors
-    ///
-    /// Rejects if the driver has stopped or withdrawal is unsupported.
     #[wasm_bindgen(js_name = withdrawSteer)]
     pub async fn withdraw_steer(&self, message_id: String) -> Result<bool, JsValue> {
         match self.control().await {
@@ -3419,18 +3154,12 @@ impl WasmTurn {
                     .as_ref()
                     .is_some_and(Result::is_ok) =>
             {
-                // A completed turn has already consumed or discarded its pending input.
                 Ok(false)
             }
             Err(error) => Err(js_error(error)),
         }
     }
 
-    /// Cancels this exact active or queued turn.
-    ///
-    /// # Errors
-    ///
-    /// Rejects if the turn is already terminal or its driver stopped.
     pub async fn cancel(&self) -> Result<(), JsValue> {
         self.control()
             .await
@@ -3440,11 +3169,6 @@ impl WasmTurn {
             .map_err(js_error)
     }
 
-    /// Waits for the final assistant message.
-    ///
-    /// # Errors
-    ///
-    /// Rejects with a stable `code` when the model run or driver fails.
     pub async fn result(&self) -> Result<WasmTurnResult, JsValue> {
         self.completion()
             .await
@@ -3588,8 +3312,6 @@ impl WasmTurn {
     }
 }
 
-// The session stream is forwarded independently. Discard the per-turn mirror
-// while waiting so it cannot retain every event for the lifetime of a long turn.
 async fn complete_turn_without_events(mut turn: Turn) -> Result<TurnResult, NanocodexError> {
     use futures_util::Stream;
     use std::{future::Future, pin::Pin, task::Poll};
@@ -3659,8 +3381,7 @@ fn blocked_operation(error: &NanocodexError) -> Option<String> {
         {
             return Some(pending_id.clone());
         }
-        // thiserror exposes the Arc as the source. Arc::source forwards to
-        // the inner error's source, skipping the concrete error we must inspect.
+
         source = match error.downcast_ref::<NanocodexError>() {
             Some(NanocodexError::ExecutionPolicy { source, .. }) => Some(source.as_ref()),
             Some(NanocodexError::Shutdown(source)) => Some(source.as_ref()),
@@ -3694,14 +3415,11 @@ fn js_turn_error(failure: TurnFailure) -> JsValue {
     error.into()
 }
 
-/// Maps a session lifecycle failure to an Error carrying a stable `code`,
-/// including `unsupported_capability` with its `capability` name.
 #[allow(clippy::needless_pass_by_value)]
 fn js_agent_error(error: NanocodexError) -> JsValue {
     js_turn_error(turn_failure(&error))
 }
 
-/// JavaScript binding over one completed Rust turn result.
 #[wasm_bindgen(js_name = TurnResult)]
 pub struct WasmTurnResult {
     inner: TurnResult,
@@ -3709,19 +3427,12 @@ pub struct WasmTurnResult {
 
 #[wasm_bindgen(js_class = TurnResult)]
 impl WasmTurnResult {
-    /// Returns the final assistant message.
     #[wasm_bindgen(getter, js_name = finalMessage)]
     #[must_use]
     pub fn final_message(&self) -> String {
         self.inner.final_message().to_owned()
     }
 
-    /// Serializes the portable checkpoint this completed turn committed.
-    ///
-    /// # Errors
-    ///
-    /// Throws with `code: "unsupported_capability"` when the backend did not
-    /// retain a boundary for this result, or when serialization fails.
     pub fn checkpoint(&self) -> Result<String, JsValue> {
         self.inner
             .checkpoint()
@@ -3734,11 +3445,6 @@ impl WasmTurnResult {
             .map_err(js_agent_error)
     }
 
-    /// Serializes exact aggregate usage for this completed logical turn.
-    ///
-    /// # Errors
-    ///
-    /// Throws when serialization fails.
     pub fn usage(&self) -> Result<String, JsValue> {
         let usage = self
             .inner
@@ -3796,18 +3502,13 @@ fn forward_subagent_updates(
     mut flush_requests: tokio::sync::mpsc::UnboundedReceiver<oneshot::Sender<()>>,
 ) {
     spawn_local(async move {
-        while let Some(scoped) = std::future::poll_fn(|cx| {
-            // Prioritize queued updates. Acknowledging only an empty queue also
-            // waits for any earlier asynchronous binding operation to finish.
-            match updates.poll_recv(cx) {
-                std::task::Poll::Ready(update) => std::task::Poll::Ready(update),
-                std::task::Poll::Pending => {
-                    while let std::task::Poll::Ready(Some(complete)) = flush_requests.poll_recv(cx)
-                    {
-                        let _ = complete.send(());
-                    }
-                    std::task::Poll::Pending
+        while let Some(scoped) = std::future::poll_fn(|cx| match updates.poll_recv(cx) {
+            std::task::Poll::Ready(update) => std::task::Poll::Ready(update),
+            std::task::Poll::Pending => {
+                while let std::task::Poll::Ready(Some(complete)) = flush_requests.poll_recv(cx) {
+                    let _ = complete.send(());
                 }
+                std::task::Poll::Pending
             }
         })
         .await
@@ -3840,8 +3541,6 @@ fn forward_subagent_updates(
                     }
                 }
                 SubagentUpdate::Event { id, event } => {
-                    // Only a child the host accepted has an event observer. A
-                    // failed or released binding would reject every event.
                     let bound = sessions
                         .borrow()
                         .get(&(root_session_id.clone(), id))
@@ -3851,8 +3550,7 @@ fn forward_subagent_updates(
                         && let Ok(encoded) = serde_json::to_string(&event)
                     {
                         let id = id.to_string();
-                        // A released or failing observer must not unwind this
-                        // task and strand all subsequent registry updates.
+
                         if let Err(error) = host_emit_event(
                             event.request_id.as_ref(),
                             &encoded,
@@ -3874,7 +3572,7 @@ fn forward_subagent_updates(
                     let session_id = sessions.borrow_mut().remove(&(root_session_id.clone(), id));
                     if let Some(session_id) = session_id {
                         remove_subagent_parent(&parents, &session_id);
-                        // Only an explicit close permanently releases a child.
+
                         if let Err(error) = host_release_subagent_session(
                             hosts
                                 .lock()
@@ -3918,10 +3616,7 @@ fn forward_subagent_updates(
                         .borrow()
                         .get(&(root_session_id.clone(), id))
                         .cloned();
-                    // The host deduplicates by (agent, completion_revision).
-                    // Only a delivered completion is acknowledged; otherwise
-                    // it stays pending: retried with backoff in this runtime
-                    // and announced again after the next restore.
+
                     let Some(session_id) = session_id else {
                         if let Some(registry) = registry.upgrade() {
                             registry.retry_completion(&root_session_id, id, revision);
@@ -3942,8 +3637,6 @@ fn forward_subagent_updates(
                                 }
                             }
                             Err(error) => {
-                                // A completion is a status to the host: a
-                                // persistent rejection logs once per child.
                                 report_subagent_host_error(
                                     "forwarding a subagent status",
                                     &session_id,
@@ -3964,7 +3657,7 @@ fn forward_subagent_updates(
             .drain()
             .map(|((root_session_id, _), session_id)| (root_session_id, session_id))
             .collect::<Vec<_>>();
-        // The registry is gone; its durable children only detach.
+
         for (root_session_id, session_id) in session_ids {
             remove_subagent_parent(&parents, &session_id);
             if let Err(error) = host_release_subagent_session(
@@ -4047,17 +3740,13 @@ fn release_subagent_scope(
 }
 
 thread_local! {
-    /// Child, operation and reason triples that have already been logged.
+
     static REPORTED_SUBAGENT_HOST_ERRORS: RefCell<HashSet<(&'static str, String, String)>> =
         RefCell::new(HashSet::new());
 }
 
-/// Bounds the suppression memory for long-lived runtimes with many children.
 const REPORTED_SUBAGENT_HOST_ERROR_LIMIT: usize = 512;
 
-/// Logs one structured, content-free line per child, operation and reason.
-/// A persistent host fault would otherwise repeat on every later update for
-/// that child, and console.error(message, error) drops the error message.
 fn report_subagent_host_error(operation: &'static str, session_id: &str, error: &JsValue) {
     let (error_kind, reason, error_message) = subagent_host_error_diagnostics(error);
     let first = REPORTED_SUBAGENT_HOST_ERRORS.with(|reported| {
@@ -4085,7 +3774,6 @@ fn report_subagent_host_error(operation: &'static str, session_id: &str, error: 
     }
 }
 
-/// Error kind, stable reason (an error code when present) and a bounded message.
 fn subagent_host_error_diagnostics(error: &JsValue) -> (String, String, String) {
     let field = |name: &str| {
         js_sys::Reflect::get(error, &JsValue::from_str(name))
@@ -4117,8 +3805,6 @@ fn subagent_host_error_diagnostics(error: &JsValue) -> (String, String, String) 
     (kind, reason, redact_host_error_message(&message))
 }
 
-/// Removes quoted values, URLs and long identifiers so host errors that echo
-/// payload fragments never place user content in logs.
 fn redact_host_error_message(message: &str) -> String {
     let mut unquoted = String::with_capacity(message.len());
     let mut open: Option<char> = None;
@@ -4138,7 +3824,7 @@ fn redact_host_error_message(message: &str) -> String {
             }
         }
     }
-    // An unterminated quote still hides its tail.
+
     if open.is_some() {
         unquoted.push('\u{2026}');
     }
@@ -4297,7 +3983,15 @@ impl WasmSubagents {
         let parent = subagents.parent(session_id)?;
         let mut options = SpawnOptions::new();
         if let Some(model) = task.model {
-            options = options.harness_model(model);
+            options = options.harness_model(
+                model
+                    .resolve(
+                        task.harness
+                            .clone()
+                            .unwrap_or_else(|| parent.harness_family()),
+                    )
+                    .map_err(js_error)?,
+            );
         }
         if let Some(harness) = task.harness {
             options = options.harness(harness);
@@ -4458,19 +4152,48 @@ impl WasmSubagents {
     }
 }
 
+fn durability_record(
+    state_id: Option<&str>,
+    session_id: Option<&str>,
+    model: ModelSelection,
+    workspace: Option<&str>,
+    checkpoint: Option<&SessionCheckpoint>,
+    lineage: Option<Lineage>,
+) -> Option<nanocode::durability::SessionRecord> {
+    let state_id = state_id.filter(|state_id| Some(*state_id) == session_id)?;
+    let mut record = nanocode::durability::SessionRecord::root(
+        state_id,
+        checkpoint.map_or(model, SessionCheckpoint::model),
+        workspace.map(PathBuf::from),
+    );
+    if let Some(lineage) = checkpoint.map(|value| value.lineage().clone()).or(lineage) {
+        record = record.with_lineage(lineage);
+    }
+    Some(record)
+}
+
 async fn build_codex(
     config: WasmConfig,
     auth: nanocode::oai::auth::OpenAiAuth,
     factory: Option<Arc<WasmHarnessFactory>>,
-    checkpoint: Option<SessionCheckpoint>,
+    mut checkpoint: Option<SessionCheckpoint>,
     host_context: Option<Arc<str>>,
+    lineage: Option<Lineage>,
 ) -> Result<(RustNanocodex, AgentEvents), JsValue> {
     validate(&config)?;
 
     let model = config.model.parse::<Model>().map_err(js_error)?;
-    // Explicit fastMode must be offered by the model, from the shared catalog.
-    nanocode_backend_codex::HarnessModel::Codex(model)
-        .capabilities(nanocode_backend_codex::ModelTransport::Native)
+    let record = durability_record(
+        config.durability_id.as_deref(),
+        config.session_id.as_deref(),
+        ModelSelection::Codex(model),
+        config.workspace.as_deref(),
+        checkpoint.as_ref().or(config.resume.as_ref()),
+        lineage,
+    );
+
+    ModelSelection::Codex(model)
+        .capabilities(nanocode::ModelTransport::Native)
         .check_fast_mode(config.fast_mode)
         .map_err(js_error)?;
     let host_definition_id = config.host_definition_id;
@@ -4532,9 +4255,6 @@ async fn build_codex(
     };
     builder = builder.instant_tool_steering(config.instant_tool_steering);
     builder = builder.host_context(host_context);
-    if let Some(checkpoint) = checkpoint {
-        builder = builder.resume(checkpoint).map_err(js_agent_error)?;
-    }
     if config.before_compaction {
         builder = builder.before_compaction(JavaScriptBeforeCompaction { host_definition_id });
     }
@@ -4544,8 +4264,7 @@ async fn build_codex(
     if let Some(instructions) = config.additional_instructions {
         builder = builder.additional_instructions(instructions);
     }
-    // Resuming reopens the checkpointed session; an explicit, different
-    // session ID below makes it a new root continuing that conversation.
+
     if let Some(resume) = config.resume {
         builder = builder.resume(resume).map_err(js_agent_error)?;
     }
@@ -4579,9 +4298,26 @@ async fn build_codex(
             nanocode::agent::durability::DurableSession::open(store, state_id).await
         }
         .map_err(js_error)?;
+        if durable_state
+            .latest_checkpoint()
+            .await
+            .map_err(js_error)?
+            .is_some()
+        {
+            checkpoint = None;
+        }
+        if let Some(checkpoint) = checkpoint.take() {
+            builder = builder.resume(checkpoint).map_err(js_agent_error)?;
+        }
+        if let Some(record) = record {
+            durable_state.describe(record).await.map_err(js_error)?;
+        }
         builder = builder.durability(durable_state).await.map_err(js_error)?;
     }
-    // Restored and forked lineages keep their original key and prefix IDs.
+
+    if let Some(checkpoint) = checkpoint {
+        builder = builder.resume(checkpoint).map_err(js_agent_error)?;
+    }
     if let Some(key) = config.prompt_cache_key
         && builder.resume_snapshot().is_none()
     {

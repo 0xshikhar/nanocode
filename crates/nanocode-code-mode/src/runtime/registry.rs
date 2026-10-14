@@ -359,7 +359,6 @@ impl ToolRegistry {
             .map(nested_definition);
         first_normalized_definitions(definitions)
     }
-
 }
 
 fn first_normalized_definitions(
@@ -402,8 +401,6 @@ fn definition_metadata(name: &str, definition: &ToolDefinition) -> Value {
     })
 }
 
-// Native provider discovery is an ordinary function inside JavaScript. Preserve
-// its exact input contract while removing the provider-only ToolSearch variant.
 fn nested_definition(definition: ToolDefinition) -> ToolDefinition {
     match definition {
         ToolDefinition::ToolSearch {

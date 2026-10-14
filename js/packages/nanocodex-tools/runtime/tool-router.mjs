@@ -1,6 +1,6 @@
 const TOOL_RESULT = Symbol.for("nanocodex.toolResult");
-// Only factory-owned maps have immutable resolver entries. A provider may change
-// definitions OR handlers without changing object identity, so it is never cached.
+
+
 const toolMapSources = new WeakSet();
 export const toolRouterBrand = Symbol.for("nanocodex.toolRouter");
 export const toolRouterRuntime = Symbol("nanocodex.toolRouterRuntime");
@@ -22,7 +22,7 @@ const TOOL_SEARCH_DEFINITION = deepFreeze({
   },
 });
 
-/** Deterministic routing and per-call snapshots shared by direct and Code Mode calls. */
+
 export class ToolRouter {
   #sources = new Map();
   #reset;
@@ -40,7 +40,7 @@ export class ToolRouter {
       throw new Error(`tool source is already configured: ${normalized.id}`);
     }
     this.#sources.set(normalized.id, normalized);
-    // Build now so collisions fail at configuration, independent of source order.
+
     try { this.#buildSnapshot(); } catch (error) {
       this.#sources.delete(normalized.id);
       throw error;
@@ -48,7 +48,7 @@ export class ToolRouter {
     return this;
   }
 
-  /** Validates a candidate source against the complete route table without publishing it. */
+
   validateSource(source) {
     const normalized = normalizeSource(source);
     const previous = this.#sources.get(normalized.id);
@@ -96,10 +96,10 @@ export class ToolRouter {
   }
 
   modelDefinitions() {
-    // Provider catalogs (notably MCP discovery) are live until an admission
-    // snapshots them. Rebuild here so newly discovered deferred definitions
-    // become available to Code Mode; `defer_loading` keeps them out of the
-    // direct model prefix at the Rust boundary.
+
+
+
+
     return this.#buildSnapshot().modelDefinitions;
   }
 
@@ -173,8 +173,8 @@ export class ToolRouter {
     const searches = [];
     const sources = [...this.#sources.values()].sort((a, b) => a.id.localeCompare(b.id));
     for (const source of sources) {
-      // Keep reading and serializing the public array: callers can mutate it.
-      // Reuse only factory-owned contract work when its exact JSON is unchanged.
+
+
       let encoded;
       try { encoded = JSON.stringify(source.definitions()); }
       catch (error) { throw new TypeError(`tool source ${source.id} definitions must be JSON-serializable`, { cause: error }); }
@@ -264,8 +264,8 @@ export class ToolRouter {
     if (!tool) throw new Error(`unknown application tool: ${name}`);
     const signal = context.signal ?? new AbortController().signal;
     signal.throwIfAborted?.();
-    // Trusted attachment diagnostics are separate from the tool context. A
-    // callback receives only fixed local boundaries and cannot change execution.
+
+
     try { observe?.("execution_started"); } catch {}
     try { return await tool.handler(input, context); }
     finally { try { observe?.("execution_finished"); } catch {} }
@@ -274,7 +274,7 @@ export class ToolRouter {
 
 export function createToolRouter(sources) { return new ToolRouter(sources); }
 
-/** Runs every cleanup action before reporting failures in their original order. */
+
 export async function settleCleanup(actions, message, reentrantPromise) {
   const pending = actions.map((action) => {
     try {
@@ -353,7 +353,7 @@ export function providerSource(id, provider, options = {}) {
 
 export function logicalContractFingerprint(definition) {
   const logical = { ...normalizeDefinition(definition, "fingerprint") };
-  // Defer loading changes request presentation, not the callable contract.
+
   delete logical.defer_loading;
   return stableJson(logical);
 }
@@ -421,7 +421,7 @@ async function searchSnapshot(input, context, entries, searches) {
     tools: deduplicated,
     pending_sources: pending,
     failed_sources: failures,
-    // Preserve the established MCP result fields during the transition.
+
     pending_servers: pending,
     failed_servers: failures,
   };
@@ -603,8 +603,8 @@ function normalizeResolvedTool(name, tool, candidate) {
   });
 }
 
-// Most tools never overlap. Only compute parity for an attached/cloud collision;
-// each entry owns an immutable definition, including across admitted snapshots.
+
+
 function entryFingerprint(entry) {
   return entry.fingerprint ??= callableContractFingerprint(entry.definition);
 }

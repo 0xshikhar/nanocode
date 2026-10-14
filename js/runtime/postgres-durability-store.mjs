@@ -43,7 +43,7 @@ class InvalidPostgresDurabilityRequestError extends Error {
   }
 }
 
-/** Creates a concrete PostgreSQL-backed Nanocodex durability store. */
+
 export function createPostgresDurabilityStore(pool) {
   if (!pool || typeof pool.connect !== "function" || typeof pool.query !== "function") {
     throw new TypeError("PostgreSQL durability requires a connection pool");
@@ -83,7 +83,7 @@ export function createPostgresDurabilityStore(pool) {
           try { await client.query("ROLLBACK"); }
           catch { discard = true; }
         }
-        // Staging the same immutable page again is safe after a lost commit.
+
         throw error;
       } finally { client.release(discard); }
     },

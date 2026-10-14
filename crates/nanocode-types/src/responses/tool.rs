@@ -1,67 +1,55 @@
-//! Model-visible tool declarations and open JSON boundary values.
-
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 
-/// Model-visible tool definition carried by Responses Lite input.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolDefinition {
-    /// JSON-schema function tool.
     Function {
-        /// Model-visible tool name.
         name: Box<str>,
-        /// Concrete guidance for when and how to use the tool.
+
         description: Box<str>,
-        /// Whether the provider should enforce the parameter schema strictly.
+
         strict: bool,
-        /// Whether this definition is returned for deferred provider loading.
+
         #[serde(default, skip_serializing_if = "Option::is_none")]
         defer_loading: Option<bool>,
-        /// Whether the model may continue while the application executes this tool.
+
         #[serde(default, rename = "async", skip_serializing_if = "is_false")]
         asynchronous: bool,
-        /// JSON Schema accepted as function arguments.
+
         parameters: JsonSchema,
         #[serde(default, skip_serializing)]
-        /// Optional JSON Schema produced by the function.
-        ///
-        /// This is client-owned Code Mode metadata and is not part of the
-        /// Responses tool declaration sent to the model.
         output_schema: Option<JsonSchema>,
     },
-    /// Responses namespace containing related function tools.
+
     Namespace {
-        /// Model-visible namespace name.
         name: Box<str>,
-        /// Guidance describing the namespace as a whole.
+
         description: Box<str>,
-        /// Function or custom declarations exposed under this namespace.
+
         #[serde(serialize_with = "serialize_namespace_tools")]
         tools: Vec<Self>,
     },
-    /// Free-form custom tool constrained by a grammar.
+
     Custom {
-        /// Model-visible tool name.
         name: Box<str>,
-        /// Concrete guidance for when and how to use the tool.
+
         description: Box<str>,
-        /// Whether this definition is returned for deferred provider loading.
+
         #[serde(default, skip_serializing_if = "Option::is_none")]
         defer_loading: Option<bool>,
-        /// Whether the model may continue while the application executes this tool.
+
         #[serde(default, rename = "async", skip_serializing_if = "is_false")]
         asynchronous: bool,
-        /// Free-form input grammar.
+
         format: CustomToolFormat,
     },
-    /// Provider-native deferred-tool search executed by the client.
+
     ToolSearch {
-        /// Execution owner. Client-side handlers use `client`.
         execution: Box<str>,
-        /// Concrete guidance for when and how to search deferred tools.
+
         description: Box<str>,
-        /// JSON Schema accepted as search arguments.
+
         parameters: JsonSchema,
     },
 }
@@ -88,28 +76,6 @@ where
 }
 
 impl ToolDefinition {
-    /// Creates a function tool with non-strict parameters.
-    ///
-    /// ```
-    /// use nanocode_types::{
-    ///     responses::JsonSchema,
-    ///     tools::ToolDefinition,
-    /// };
-    /// use serde_json::json;
-    ///
-    /// let definition = ToolDefinition::function(
-    ///     "lookup_region",
-    ///     "Return deployment metadata for one exact region identifier.",
-    ///     JsonSchema::from(json!({
-    ///         "type": "object",
-    ///         "properties": { "region": { "type": "string" } },
-    ///         "required": ["region"],
-    ///         "additionalProperties": false
-    ///     })),
-    /// );
-    ///
-    /// assert_eq!(definition.name(), "lookup_region");
-    /// ```
     #[must_use]
     pub fn function(
         name: impl Into<Box<str>>,
@@ -127,7 +93,6 @@ impl ToolDefinition {
         }
     }
 
-    /// Creates a custom tool with grammar-constrained free-form input.
     #[must_use]
     pub fn custom(
         name: impl Into<Box<str>>,
@@ -143,7 +108,6 @@ impl ToolDefinition {
         }
     }
 
-    /// Creates a Responses namespace from function tool declarations.
     #[must_use]
     pub fn namespace(
         name: impl Into<Box<str>>,
@@ -157,31 +121,6 @@ impl ToolDefinition {
         }
     }
 
-    /// Creates a provider-native deferred-tool search definition.
-    ///
-    /// ```
-    /// use nanocode_types::{
-    ///     responses::JsonSchema,
-    ///     tools::ToolDefinition,
-    /// };
-    /// use serde_json::json;
-    ///
-    /// let definition = ToolDefinition::tool_search(
-    ///     "client",
-    ///     "Search the application's deferred calendar tools.",
-    ///     JsonSchema::from(json!({
-    ///         "type": "object",
-    ///         "properties": {
-    ///             "query": { "type": "string" },
-    ///             "limit": { "type": "number" }
-    ///         },
-    ///         "required": ["query"],
-    ///         "additionalProperties": false
-    ///     })),
-    /// );
-    ///
-    /// assert_eq!(definition.name(), "tool_search");
-    /// ```
     #[must_use]
     pub fn tool_search(
         execution: impl Into<Box<str>>,
@@ -195,9 +134,6 @@ impl ToolDefinition {
         }
     }
 
-    /// Requests provider-enforced strict function arguments. The caller must
-    /// supply a strict-compatible, closed parameter schema (including all
-    /// properties in `required`); the provider rejects incompatible schemas.
     #[must_use]
     pub const fn with_strict_parameters(mut self) -> Self {
         if let Self::Function { strict, .. } = &mut self {
@@ -206,9 +142,6 @@ impl ToolDefinition {
         self
     }
 
-    /// Adds an output schema to a function definition.
-    ///
-    /// Custom and provider-native tool definitions are returned unchanged.
     #[must_use]
     pub fn with_output_schema(mut self, output_schema: impl Into<JsonSchema>) -> Self {
         if let Self::Function {
@@ -221,7 +154,6 @@ impl ToolDefinition {
         self
     }
 
-    /// Marks a function or custom definition for provider-native deferred loading.
     #[must_use]
     #[allow(
         clippy::missing_const_for_fn,
@@ -237,11 +169,6 @@ impl ToolDefinition {
         self
     }
 
-    /// Marks a function or custom tool for provider-native asynchronous execution.
-    ///
-    /// The application still owns execution and must return the result on the
-    /// original call ID. Namespace and provider-hosted definitions are returned
-    /// unchanged.
     #[must_use]
     #[allow(
         clippy::missing_const_for_fn,
@@ -257,7 +184,6 @@ impl ToolDefinition {
         self
     }
 
-    /// Returns whether this function or custom tool opts into asynchronous execution.
     #[must_use]
     pub const fn is_async(&self) -> bool {
         match self {
@@ -268,7 +194,6 @@ impl ToolDefinition {
         }
     }
 
-    /// Returns the model-visible tool name.
     #[must_use]
     pub fn name(&self) -> &str {
         match self {
@@ -279,7 +204,6 @@ impl ToolDefinition {
         }
     }
 
-    /// Returns the model-visible tool description.
     #[must_use]
     pub fn description(&self) -> &str {
         match self {
@@ -290,7 +214,6 @@ impl ToolDefinition {
         }
     }
 
-    /// Returns function or tool-search parameters, or `None` for a custom tool.
     #[must_use]
     pub const fn parameters(&self) -> Option<&JsonSchema> {
         match self {
@@ -301,7 +224,6 @@ impl ToolDefinition {
         }
     }
 
-    /// Returns a function output schema when configured.
     #[must_use]
     pub const fn output_schema(&self) -> Option<&JsonSchema> {
         match self {
@@ -311,20 +233,17 @@ impl ToolDefinition {
     }
 }
 
-/// Grammar configuration for a custom tool's free-form input.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CustomToolFormat {
     #[serde(rename = "type")]
-    /// Provider format kind. Constructors currently produce `grammar`.
     pub kind: Box<str>,
-    /// Grammar syntax, such as `lark`.
+
     pub syntax: Box<str>,
-    /// Complete grammar definition.
+
     pub definition: Box<str>,
 }
 
 impl CustomToolFormat {
-    /// Creates a grammar-constrained custom-tool format.
     #[must_use]
     pub fn grammar(syntax: impl Into<Box<str>>, definition: impl Into<Box<str>>) -> Self {
         Self {
@@ -335,13 +254,11 @@ impl CustomToolFormat {
     }
 }
 
-/// Open JSON Schema fragment used at the model/tool boundary.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(transparent)]
 pub struct JsonSchema(Value);
 
 impl JsonSchema {
-    /// Borrows the underlying JSON Schema value.
     #[must_use]
     pub const fn as_value(&self) -> &Value {
         &self.0
@@ -354,13 +271,11 @@ impl From<Value> for JsonSchema {
     }
 }
 
-/// Arbitrary JSON retained for protocol fields whose schema is provider-defined.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(transparent)]
 pub struct JsonValue(Value);
 
 impl JsonValue {
-    /// Borrows the retained provider-defined JSON value.
     #[must_use]
     pub const fn as_value(&self) -> &Value {
         &self.0

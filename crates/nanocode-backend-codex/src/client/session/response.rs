@@ -27,30 +27,12 @@ use super::{
     state::RejectedRequestRepair,
 };
 
-/// Typed input accepted by `response.create`.
 #[derive(Clone, Debug)]
 pub struct ResponseInput {
     items: Vec<ResponseItem>,
 }
 
 impl ResponseInput {
-    /// Creates one user message from ordered typed content.
-    ///
-    /// ```
-    /// use crate::client::{
-    ///     ImageDetail,
-    ///     responses::ContentItem,
-    ///     session::ResponseInput,
-    /// };
-    ///
-    /// let _input = ResponseInput::content([
-    ///     ContentItem::input_text("Describe the deployment diagram."),
-    ///     ContentItem::input_image_with_detail(
-    ///         "https://example.com/deployment-diagram.png",
-    ///         ImageDetail::High,
-    ///     ),
-    /// ]);
-    /// ```
     #[must_use]
     pub fn content(content: impl IntoIterator<Item = ContentItem>) -> Self {
         Self {
@@ -58,12 +40,6 @@ impl ResponseInput {
         }
     }
 
-    /// Estimates model-visible tokens contributed by this input.
-    ///
-    /// This uses the same image, text, and tool-output accounting as managed
-    /// context. A caller can combine it with
-    /// [`ResponseTurn::active_context_tokens`] and choose its own compaction
-    /// margin before calling [`ResponseTurn::create`].
     #[must_use]
     pub fn estimated_tokens(&self) -> u64 {
         self.items
@@ -72,27 +48,6 @@ impl ResponseInput {
             .fold(0, u64::saturating_add)
     }
 
-    /// Creates ordered protocol-level input items.
-    ///
-    /// Use this after a completed response contains tool calls and the
-    /// application executes those calls itself. The output item must retain
-    /// the exact call ID returned by the model.
-    ///
-    /// ```
-    /// use crate::client::{
-    ///     responses::{FunctionOutputBody, ResponseItem},
-    ///     session::ResponseInput,
-    /// };
-    ///
-    /// let input = ResponseInput::items([ResponseItem::function_call_output(
-    ///     "call_region_01".to_owned(),
-    ///     FunctionOutputBody::Text(
-    ///         r#"{"region":"iad","status":"healthy"}"#.into(),
-    ///     ),
-    /// )]);
-    ///
-    /// assert!(input.estimated_tokens() > 0);
-    /// ```
     #[must_use]
     pub fn items(items: impl IntoIterator<Item = ResponseItem>) -> Self {
         Self {
@@ -115,7 +70,6 @@ impl From<&str> for ResponseInput {
     }
 }
 
-/// A completed and atomically committed Responses operation.
 #[derive(Clone)]
 pub struct CompletedResponse {
     output: Arc<[ResponseItem]>,
@@ -128,25 +82,21 @@ pub struct CompletedResponse {
 }
 
 impl CompletedResponse {
-    /// Returns every completed output item in provider order.
     #[must_use]
     pub fn output(&self) -> &[ResponseItem] {
         &self.output
     }
 
-    /// Returns concatenated assistant output text.
     #[must_use]
     pub fn output_text(&self) -> &str {
         &self.output_text
     }
 
-    /// Returns the model identifier reported by the provider, when available.
     #[must_use]
     pub fn reported_model(&self) -> Option<&str> {
         self.reported_model.as_deref()
     }
 
-    /// Iterates over complete function and custom tool calls.
     pub fn tool_calls(&self) -> impl Iterator<Item = &ResponseItem> {
         self.output.iter().filter(|item| {
             matches!(
@@ -159,29 +109,21 @@ impl CompletedResponse {
         })
     }
 
-    /// Returns token usage for this API operation.
     #[must_use]
     pub const fn usage(&self) -> Option<&Usage> {
         self.usage.as_ref()
     }
 
-    /// Returns the automatic local USD estimate.
-    ///
-    /// Nanocodex applies the selected model's built-in rates for the effective
-    /// service tier. `None` means the provider omitted usage; [`Self::cost_status`]
-    /// distinguishes that from a genuine zero-token estimate.
     #[must_use]
     pub const fn estimated_cost(&self) -> Option<&crate::client::EstimatedUsdCost> {
         self.estimated_cost.as_ref()
     }
 
-    /// Returns why an estimate is present or unavailable.
     #[must_use]
     pub const fn cost_status(&self) -> crate::client::CostStatus {
         self.cost_status
     }
 
-    /// Returns whether the model affirmatively ended its logical turn.
     #[must_use]
     pub const fn end_turn(&self) -> Option<bool> {
         self.end_turn
@@ -199,7 +141,6 @@ impl fmt::Debug for CompletedResponse {
     }
 }
 
-/// A completed and installed remote compaction.
 #[derive(Clone)]
 pub struct CompletedCompaction {
     usage: Option<Usage>,
@@ -208,19 +149,16 @@ pub struct CompletedCompaction {
 }
 
 impl CompletedCompaction {
-    /// Returns token usage reported by the compaction operation.
     #[must_use]
     pub const fn usage(&self) -> Option<&Usage> {
         self.usage.as_ref()
     }
 
-    /// Returns the automatic local USD estimate when usage was available.
     #[must_use]
     pub const fn estimated_cost(&self) -> Option<&crate::client::EstimatedUsdCost> {
         self.estimated_cost.as_ref()
     }
 
-    /// Returns why an estimate is present or unavailable.
     #[must_use]
     pub const fn cost_status(&self) -> crate::client::CostStatus {
         self.cost_status
@@ -233,8 +171,6 @@ type ResponseRun<'a> =
 #[cfg(target_family = "wasm")]
 type ResponseRun<'a> = Pin<Box<dyn Future<Output = Result<CompletedResponse, ResponseError>> + 'a>>;
 
-/// A single Responses operation that is both a typed stream and an awaitable
-/// completed aggregate.
 #[must_use = "a response does no work unless it is streamed or awaited"]
 pub struct Response<'a> {
     events: mpsc::Receiver<ResponseEvent>,
@@ -335,23 +271,18 @@ impl<'a> IntoFuture for Response<'a> {
     }
 }
 
-/// Cloneable typed failure returned by a response stream and its completed
-/// future.
 #[derive(Clone)]
 pub struct ResponseError {
     inner: Arc<ResponseErrorInner>,
 }
 
-/// Stable classification for one failed Responses operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ResponseErrorKind {
-    /// The provider rejected the request because its context window was
-    /// exceeded.
     ContextWindowExceeded,
-    /// The configured Tower service, transport, or provider API failed.
+
     Service,
-    /// A completed operation violated a Responses lifecycle invariant.
+
     Protocol,
 }
 
@@ -364,7 +295,6 @@ enum ResponseErrorInner {
 }
 
 impl ResponseError {
-    /// Wraps a caller-composed Tower service error without erasing its source.
     #[must_use]
     pub fn service(error: impl Error + Send + Sync + 'static) -> Self {
         let kind = if error_chain_responses_error(&error)
@@ -386,7 +316,6 @@ impl ResponseError {
         }
     }
 
-    /// Returns the stable operation-level error class.
     #[must_use]
     pub fn kind(&self) -> ResponseErrorKind {
         match self.inner.as_ref() {
@@ -395,17 +324,11 @@ impl ResponseError {
         }
     }
 
-    /// Returns the underlying provider or transport error when one exists.
-    ///
-    /// This traverses caller middleware and the standard Tower service error,
-    /// so callers do not need to downcast each possible service boundary.
     #[must_use]
     pub fn responses_error(&self) -> Option<&crate::client::ResponsesError> {
         self.source().and_then(error_chain_responses_error)
     }
 
-    /// Returns whether the provider rejected the request for context-window
-    /// exhaustion.
     #[must_use]
     pub fn is_context_window_exceeded(&self) -> bool {
         matches!(self.kind(), ResponseErrorKind::ContextWindowExceeded)
@@ -733,9 +656,6 @@ where
     })
 }
 
-/// Executes one provider request. A provider rejection that requires a
-/// client-owned history repair is applied to committed state, so the next
-/// request replays repaired history instead of resending the rejected payload.
 async fn execute<S>(
     session: &mut Session<S>,
     request: ResponsesAttempt,
@@ -901,7 +821,10 @@ pub(super) fn estimate_cost(
     usage: Option<&Usage>,
     model: crate::client::Model,
     service_tier: ServiceTier,
-) -> (Option<crate::client::EstimatedUsdCost>, crate::client::CostStatus) {
+) -> (
+    Option<crate::client::EstimatedUsdCost>,
+    crate::client::CostStatus,
+) {
     match usage {
         Some(usage) => (
             Some(crate::client::pricing::estimate_for_model(

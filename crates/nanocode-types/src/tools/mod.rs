@@ -1,5 +1,3 @@
-//! Dependency-light contract for caller-defined and runtime-provided tools.
-
 mod image_validation;
 pub use image_validation::valid_tool_image_data_url;
 
@@ -13,25 +11,17 @@ pub use crate::responses::ToolDefinition;
 
 use crate::ImageDetail;
 
-/// Unbounded tool output when the caller has not requested a token budget.
-/// `usize::MAX` preserves the existing numeric context API; wire adapters must
-/// omit optional limits for this sentinel.
 pub const DEFAULT_TOOL_OUTPUT_TOKENS: usize = usize::MAX;
 
-/// Model-visible body returned by a tool.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum ToolOutputBody {
-    /// Plain text, including serialized JSON returned by function tools.
     Text(String),
-    /// Ordered multimodal output.
+
     Content(Vec<ToolOutputContent>),
 }
 
 impl ToolOutputBody {
-    /// Replaces malformed image envelopes before embedded outputs enter model history.
-    /// Inline images validate MIME and base64 syntax, not decoding or dimensions.
-    /// File images validate only their opaque ID; they are never fetched or decoded.
     pub fn replace_invalid_image_envelopes(&mut self) {
         let Self::Content(content) = self else {
             return;
@@ -59,7 +49,6 @@ impl ToolOutputBody {
         }
     }
 
-    /// Returns the machine-readable value represented by this output.
     #[must_use]
     pub fn structured_result(&self) -> Value {
         match self {
@@ -69,62 +58,47 @@ impl ToolOutputBody {
     }
 }
 
-/// One model-visible item in a multimodal tool output.
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolOutputContent {
-    /// Text input returned to the model.
     InputText {
-        /// Complete text.
         text: String,
     },
-    /// Image input returned to the model.
+
     InputImage {
-        /// Data URL or provider-supported image URL.
         image_url: String,
-        /// Requested model image detail.
+
         detail: ImageDetail,
     },
-    /// Opaque provider file image input; never fetched or decoded locally.
+
     #[serde(rename = "input_image")]
     InputImageFile {
-        /// Validated opaque provider file identity.
         #[serde(serialize_with = "crate::responses::image_reference::serialize_file_id")]
         file_id: String,
-        /// Requested model image detail.
+
         detail: ImageDetail,
     },
-    /// Audio input returned to the model.
+
     InputAudio {
-        /// Data URL or provider-supported audio URL.
         audio_url: String,
     },
-    /// Opaque encrypted provider content returned without exposing plaintext.
+
     EncryptedContent {
-        /// Provider-generated encrypted payload.
         encrypted_content: String,
     },
 }
 
-/// Complete output of one tool invocation.
-///
-/// Use [`Self::text`], [`Self::json`], or [`Self::content`] for successful
-/// results. [`Self::error`] creates a structured model-visible failure without
-/// turning the handler invocation itself into an error.
 pub struct ToolOutput {
-    /// Model-visible output body.
     pub output: ToolOutputBody,
-    /// Whether the remote or local operation succeeded.
+
     pub success: bool,
-    /// Optional validated opaque metadata for events and adapters.
+
     pub metadata: Option<Box<RawValue>>,
     structured_result: Option<Value>,
     process_trace: Option<ToolProcessTrace>,
 }
 
-/// Lossless process-boundary representation of a tool output.
 #[doc(hidden)]
-#[allow(missing_docs)]
 #[derive(Deserialize, Serialize)]
 pub struct ToolOutputWire {
     pub output: ToolOutputBody,
@@ -134,9 +108,7 @@ pub struct ToolOutputWire {
     pub process_trace: Option<ToolProcessTraceWire>,
 }
 
-/// Process measurements attached by process-backed tool implementations.
 #[doc(hidden)]
-#[allow(missing_docs)]
 #[derive(Clone, Copy, Debug)]
 pub struct ToolProcessTrace {
     pub exit_code: Option<i32>,
@@ -146,9 +118,7 @@ pub struct ToolProcessTrace {
     pub wall_time_seconds: f64,
 }
 
-/// Serialized process measurements.
 #[doc(hidden)]
-#[allow(missing_docs)]
 #[derive(Deserialize, Serialize)]
 pub struct ToolProcessTraceWire {
     pub exit_code: Option<i32>,
@@ -158,18 +128,11 @@ pub struct ToolProcessTraceWire {
     pub wall_time_seconds: f64,
 }
 
-/// Error returned by an application-defined tool handler.
 pub type ToolError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
-/// Result returned by a tool handler.
-///
-/// The owning runtime converts an error into a failed model-visible tool
-/// result so the model can recover. Return `Ok(ToolOutput::error(...))` only
-/// when preserving a structured failure from a remote tool protocol.
 pub type ToolResult = std::result::Result<ToolOutput, ToolError>;
 
 impl ToolOutput {
-    /// Creates a successful plain-text output.
     #[must_use]
     pub fn text(output: impl Into<String>) -> Self {
         Self {
@@ -181,7 +144,6 @@ impl ToolOutput {
         }
     }
 
-    /// Creates a model-visible failed output.
     #[must_use]
     pub fn error(error: impl Into<String>) -> Self {
         Self {
@@ -193,7 +155,6 @@ impl ToolOutput {
         }
     }
 
-    /// Serializes one successful function result as JSON text.
     #[must_use]
     pub fn json(output: &impl Serialize) -> Self {
         match serde_json::to_value(output) {
@@ -202,10 +163,6 @@ impl ToolOutput {
         }
     }
 
-    /// Creates a JSON result with an explicit success state.
-    ///
-    /// Structured consumers receive the typed JSON value while the Responses
-    /// API receives its serialized text representation.
     #[must_use]
     pub fn from_json(output: Value, success: bool) -> Self {
         match serde_json::to_string(&output) {
@@ -220,7 +177,6 @@ impl ToolOutput {
         }
     }
 
-    /// Creates a successful multimodal output.
     #[must_use]
     pub const fn content(output: Vec<ToolOutputContent>) -> Self {
         Self {
@@ -232,9 +188,6 @@ impl ToolOutput {
         }
     }
 
-    /// Attaches validated opaque metadata.
-    ///
-    /// An encoding failure converts this output into a model-visible failure.
     #[must_use]
     pub fn with_metadata(mut self, metadata: impl Serialize) -> Self {
         match to_raw_value(&metadata) {
@@ -248,10 +201,6 @@ impl ToolOutput {
         self
     }
 
-    /// Returns the exact machine-readable tool result.
-    ///
-    /// An explicit structured result takes precedence. Otherwise plain text
-    /// remains a string and multimodal content becomes an array.
     #[must_use]
     pub fn structured_result(&self) -> Value {
         if let Some(value) = &self.structured_result {
@@ -260,8 +209,6 @@ impl ToolOutput {
         self.output.structured_result()
     }
 
-    /// Moves the explicit machine-readable result without cloning its payload.
-    /// Falls back to the model-visible body when no explicit result is present.
     #[doc(hidden)]
     #[must_use]
     pub fn take_structured_result(&mut self) -> Value {
@@ -270,14 +217,12 @@ impl ToolOutput {
             .unwrap_or_else(|| self.output.structured_result())
     }
 
-    /// Sets the exact machine-readable result independently of model-visible output.
     #[must_use]
     pub fn with_structured_result(mut self, value: Value) -> Self {
         self.structured_result = Some(value);
         self
     }
 
-    /// Attaches process measurements from a process-backed implementation.
     #[doc(hidden)]
     #[must_use]
     pub const fn with_process_trace(
@@ -298,18 +243,12 @@ impl ToolOutput {
         self
     }
 
-    /// Returns attached process measurements.
     #[doc(hidden)]
     #[must_use]
     pub const fn process_trace(&self) -> Option<&ToolProcessTrace> {
         self.process_trace.as_ref()
     }
 
-    /// Converts this output into its lossless process-boundary form.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the internal structured result cannot be encoded.
     #[doc(hidden)]
     pub fn into_wire(self) -> Result<ToolOutputWire, serde_json::Error> {
         Ok(ToolOutputWire {
@@ -324,11 +263,6 @@ impl ToolOutput {
         })
     }
 
-    /// Restores an output received from a process boundary.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if an opaque structured result cannot be decoded.
     #[doc(hidden)]
     pub fn from_wire(wire: ToolOutputWire) -> Result<Self, serde_json::Error> {
         Ok(Self {
@@ -371,26 +305,21 @@ impl From<ToolProcessTraceWire> for ToolProcessTrace {
 #[derive(Deserialize)]
 #[serde(remote = "ToolOutputContent", tag = "type", rename_all = "snake_case")]
 enum ToolOutputContentFields {
-    /// Text input returned to the model.
     InputText {
-        /// Complete text.
         text: String,
     },
-    /// Image input returned to the model.
+
     InputImage {
-        /// Data URL or provider-supported image URL.
         image_url: String,
-        /// Requested model image detail.
+
         detail: ImageDetail,
     },
-    /// Audio input returned to the model.
+
     InputAudio {
-        /// Data URL or provider-supported audio URL.
         audio_url: String,
     },
-    /// Opaque encrypted provider content returned without exposing plaintext.
+
     EncryptedContent {
-        /// Provider-generated encrypted payload.
         encrypted_content: String,
     },
 }
@@ -403,7 +332,7 @@ impl<'de> Deserialize<'de> for ToolOutputContent {
                 return Err(serde::de::Error::custom("expected image object"));
             };
             object.remove("type");
-            // Deserialize detail separately so the strict reference object sees only its keys.
+
             let detail = object.remove("detail");
             let reference: crate::responses::ImageReference =
                 serde_json::from_value(serde_json::Value::Object(object))

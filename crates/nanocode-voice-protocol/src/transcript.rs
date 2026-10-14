@@ -1,7 +1,5 @@
 use super::TranscriptEntry;
 
-/// Projects internal voice envelopes for display without changing model input.
-/// `None` is ordinary text; an empty projection is internal metadata only.
 #[must_use]
 pub fn project_transcript(text: &str, partial: bool) -> Option<Vec<TranscriptEntry>> {
     let text = text.trim();

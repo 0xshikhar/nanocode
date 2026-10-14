@@ -1,8 +1,3 @@
-// Derived from clabby/tact@1d9ccaefd1d8613dab020812af04a91cd9b4c52c (Apache-2.0).
-// Modified for Nanocodex's reusable native/WASM extension runtime.
-
-//! Synchronous subagent topology and descendant authorization.
-
 use super::model::AgentId;
 use std::collections::HashMap;
 

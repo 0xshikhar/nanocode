@@ -1,5 +1,3 @@
-//! Portable, bounded Claude prompt media, prepared for the model's native image
-//! resolution. Native files are frozen before acceptance.
 use crate::{ContentBlock, Message, Role};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use image::ImageReader;
@@ -12,16 +10,13 @@ use serde_json::json;
 use std::io::Cursor;
 
 const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
-/// Bounds an inline or local image before it is decoded and prepared
-/// within [`MAX_IMAGE_BYTES`].
+
 const MAX_SOURCE_IMAGE_BYTES: usize = 64 * 1024 * 1024;
-/// Claude views images in square patches of this many pixels, one visual token each.
+
 const IMAGE_PATCH: u32 = 28;
 const MAX_IMAGES: usize = 20;
 const MAX_TOTAL_BYTES: usize = 20 * 1024 * 1024;
-/// Anthropic accepts PDFs up to 32 MB per request; bound each decoded document
-/// and every prompt's combined media below that after base64 expansion. The
-/// number of documents is bounded only by that combined media size.
+
 const MAX_DOCUMENT_BYTES: usize = 10 * 1024 * 1024;
 const MAX_FILENAME_BYTES: usize = 255;
 
@@ -29,9 +24,6 @@ fn invalid(message: impl Into<String>) -> NanocodexError {
     NanocodexError::InvalidRequest(message.into())
 }
 
-/// The largest image a model processes without the Messages API reducing it,
-/// given as a long-edge limit and a visual-token budget. See
-/// <https://platform.claude.com/docs/en/build-with-claude/vision#resolution-and-token-cost>.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ImageResolution {
     max_edge: u32,
@@ -39,8 +31,6 @@ pub(crate) struct ImageResolution {
 }
 
 impl ImageResolution {
-    /// Claude 4.7 and later models use the high-resolution tier. All other
-    /// models, including unknown ones, use the standard tier.
     pub(crate) fn of(model: &str) -> Self {
         match model {
             "claude-opus-5-5" | "claude-fable-5-1" | "claude-sonnet-5-5" | "claude-haiku-5-5"
@@ -61,10 +51,6 @@ impl ImageResolution {
             && u64::from(columns) * u64::from(rows) <= u64::from(self.max_tokens)
     }
 
-    /// The largest aspect-preserving size within both limits, which is the
-    /// size the Messages API reduces an image to. It follows Anthropic's
-    /// reference implementation, including its rounding. See
-    /// <https://platform.claude.com/docs/en/build-with-claude/vision-coordinates#resize-your-image-before-uploading>.
     fn fit(self, width: u32, height: u32) -> (u32, u32) {
         if self.fits(width, height) {
             return (width, height);
@@ -77,7 +63,7 @@ impl ImageResolution {
         let short_edge = |long_edge: u32| {
             ((f64::from(long_edge) / aspect_ratio).round_ties_even() as u32).max(1)
         };
-        // The lower bound always fits and the upper bound never does.
+
         let (mut low, mut high) = (1, width);
         while low + 1 < high {
             let middle = low.midpoint(high);
@@ -99,8 +85,6 @@ fn image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
         .ok()
 }
 
-// Model-visible notes that replace an image Claude cannot use. The first three
-// repeat the notes of the shared image preparation.
 const IMAGE_UNPROCESSABLE: &str = "image content omitted because it could not be processed";
 const IMAGE_TOO_LARGE: &str =
     "image content omitted because it exceeded the supported size limit; use a smaller image";
@@ -109,13 +93,6 @@ pub(crate) const IMAGE_URL_UNSUPPORTED: &str =
 const IMAGE_FILE_UNSUPPORTED: &str =
     "image content omitted because Claude cannot use OpenAI image file references";
 
-/// Prepares base64 image data for the model's native resolution and the
-/// per-image byte limit, returning the prepared data and its media type, or
-/// the note that replaces an image that cannot be prepared. The shared image
-/// preparation decodes the image and re-encodes it when it is resized or is
-/// not PNG, JPEG, or WebP. It rounds sizes its own way, so its output is
-/// checked against both limits, and an encoding over the byte limit is shrunk
-/// until it fits.
 pub(crate) async fn prepare_base64(
     payload: &str,
     resolution: ImageResolution,
@@ -140,8 +117,7 @@ pub(crate) async fn prepare_base64(
         let next = match image_dimensions(&bytes) {
             Some((width, height)) if !resolution.fits(width, height) => long_edge - 1,
             _ if bytes.len() <= MAX_IMAGE_BYTES => return Ok((data, media_type)),
-            // A step drops nearly half of the pixels, so an encoding that barely
-            // shrinks is dominated by data that resizing keeps, such as metadata.
+
             _ if bytes.len() > previous_len / 10 * 9 => return Err(IMAGE_TOO_LARGE),
             _ => {
                 previous_len = bytes.len();
@@ -155,10 +131,6 @@ pub(crate) async fn prepare_base64(
     }
 }
 
-/// Prepares a prompt image the way tool-result images are prepared. An inline
-/// image is decoded, converted to a format Claude accepts, and reduced to the
-/// model's native resolution and the per-image byte limit. An image Claude
-/// cannot use, including any remote URL, yields the note that replaces it.
 async fn prepare_image(
     image_url: String,
     resolution: ImageResolution,
@@ -259,8 +231,6 @@ pub(crate) fn image_source(value: &str) -> Result<(serde_json::Value, usize)> {
     }
 }
 
-/// Maps an inline document data URL to a native Claude document source.
-/// PDFs stay base64; plain text is decoded into a text source.
 pub(crate) fn document_block(
     file_data: &str,
     filename: Option<&str>,
@@ -320,15 +290,12 @@ pub(crate) fn document_block(
     Ok((ContentBlock::Document { source, extra }, bytes.len()))
 }
 
-/// Reads a local image as a data URL for preparation, which identifies its
-/// format from the bytes, or returns why it cannot be read.
 #[cfg(not(target_family = "wasm"))]
 fn local_image(path: &std::path::Path) -> std::result::Result<String, &'static str> {
     use std::io::Read as _;
     const NOT_A_FILE: &str = "is not a regular file of at most 64 MiB";
     const UNREADABLE: &str = "could not be read";
-    // Reject nonregular paths before opening (in particular FIFOs). Check again
-    // on the opened handle, and bound the actual read even if the file grows.
+
     let metadata = std::fs::metadata(path).map_err(|_| UNREADABLE)?;
     if !metadata.is_file() || metadata.len() > MAX_SOURCE_IMAGE_BYTES as u64 {
         return Err(NOT_A_FILE);
@@ -363,11 +330,6 @@ fn local_image(_path: &std::path::Path) -> std::result::Result<String, &'static 
     Err("requires a native filesystem")
 }
 
-/// Freeze local paths exactly once and prepare inline images for the model's
-/// native resolution. Portable images need no host capability. An image Claude
-/// cannot use is replaced by a note that tells the model why, and the rest of
-/// the prompt is kept. Claude has no OpenAI image-detail field, so detail
-/// hints are not forwarded.
 pub(crate) async fn freeze(mut prompt: Prompt, resolution: ImageResolution) -> Result<Prompt> {
     if let PromptInput::Content(items) = &mut prompt.instruction {
         if items.len() > 100 {
@@ -491,14 +453,6 @@ pub(crate) fn messages(prompt: &Prompt) -> Result<Vec<Message>> {
     Ok(messages)
 }
 
-/// Admission identity retains paths, while its settled media receipt retains bytes.
-/// A terminal replay never calls this function, and a resume never reopens a
-/// local image after its receipt has committed.
-///
-/// Returns the prompt with the image resolution of the model the operation's
-/// requests name, `resolution` unless a continuation names another. An agent
-/// reopened with another model resumes a continued operation on the model its
-/// continuation names, while an operation without one starts on the agent's.
 pub(crate) async fn freeze_admitted(
     prompt: Prompt,
     policy: &dyn crate::execution::ClaudeExecutionPolicy,
@@ -514,8 +468,7 @@ pub(crate) async fn freeze_admitted(
     if !has_local {
         return Ok((freeze(prompt, resolution).await?, resolution));
     }
-    // A cursor advance incorporates and retires settled step receipts. Its
-    // admitted media must therefore survive in the continuation itself.
+
     if let Some(cursor) = continuation {
         let frozen: Prompt = serde_json::from_value(
             cursor.get("frozen_prompt").filter(|value| !value.is_null()).cloned()
@@ -535,8 +488,6 @@ pub(crate) async fn freeze_admitted(
         )
         .await?
     {
-        // The receipt was prepared for the model at its first admission, which
-        // a reopened agent may have changed before any request was sent.
         crate::execution::Step::Replay(value) => {
             let receipt = serde_json::from_value(value)
                 .map_err(|_| invalid("invalid frozen Claude prompt receipt"))?;

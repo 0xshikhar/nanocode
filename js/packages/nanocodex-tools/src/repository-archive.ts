@@ -2,7 +2,7 @@ import { createGzipDecoder, createTarDecoder } from "modern-tar";
 import type { Workspace } from "../tools/types.mjs";
 import type { ShellFetch } from "./shell.js";
 
-/** Extract a GitHub source snapshot directly into the host-owned workspace. */
+
 export async function downloadRepositoryArchive(
   fetch: ShellFetch,
   workspace: Workspace,
@@ -87,7 +87,7 @@ export async function downloadRepositoryArchive(
       const contents = new Uint8Array(await new Response(entry.body).arrayBuffer());
       signal?.throwIfAborted();
       files += 1;
-      // Overlap durable writes without retaining the complete archive in memory.
+
       const write = workspace.writeFile(target, contents)
         .catch((error: unknown) => { writeFailure ??= error; })
         .finally(() => { writes.delete(write); });
@@ -99,12 +99,12 @@ export async function downloadRepositoryArchive(
     if (!archiveRoot || files === 0) throw new Error("repository archive contains no files");
     signal?.throwIfAborted();
   } finally {
-    // Stop an upstream read before cancelling the decoder, including when
-    // validation or a durable write failed while the network was still active.
+
+
     transfer.abort();
     await entries.cancel().catch(() => {});
     entries.releaseLock();
-    // The caller may clean up the destination only after every write has settled.
+
     await Promise.all(writes);
   }
 }

@@ -243,9 +243,7 @@ pub(crate) async fn connect(
         mcp.auth = auth_mode,
         status = tracing::field::Empty,
     );
-    // Keep this operation span out of the current tracing context. RMCP's initialize call
-    // creates a long-lived transport task which inherits the current context; entering this
-    // span would therefore keep the complete startup/reload trace open until client shutdown.
+
     let result = match &server.transport {
         McpTransport::Stdio {
             command,
@@ -258,7 +256,7 @@ pub(crate) async fn connect(
             }
             let mut command = tokio::process::Command::new(command);
             command.args(args).envs(env);
-            // Session identity always overrides configured or inherited values.
+
             match session {
                 Some(session) => session.apply(command.as_std_mut()),
                 None => crate::SessionEnvironment::clear(command.as_std_mut()),
@@ -325,8 +323,6 @@ async fn connect_http(input: HttpConnect<'_>) -> Result<ConnectedServer, String>
     let replays_plaintext_proxy_credentials = default_headers.contains_key(PROXY_AUTHORIZATION);
     nanocode_tls::install_default_rustls_crypto_provider();
     let http_client = reqwest::Client::builder()
-        // Match RMCP's default: its streamed handshake responses are not always fully consumed
-        // before the next request, so retaining them as idle connections can stall real peers.
         .pool_max_idle_per_host(0)
         .redirect(super::same_origin_redirect_policy(
             replays_plaintext_proxy_credentials,
@@ -483,10 +479,7 @@ where
         otel.status_code = tracing::field::Empty,
         status = tracing::field::Empty,
     );
-    // Do not instrument `serve` with this span. RMCP's returned service retains the transport
-    // task, which would retain this span and every parent until the client is dropped. The span's
-    // own lifetime still measures the awaited initialize handshake without leaking into the
-    // long-lived transport.
+
     let result = match tokio::time::timeout(server.startup_timeout, ().serve(transport)).await {
         Ok(Ok(client)) => Ok(client),
         Ok(Err(error)) => Err(format!("MCP initialize failed: {}", error_chain(&error))),

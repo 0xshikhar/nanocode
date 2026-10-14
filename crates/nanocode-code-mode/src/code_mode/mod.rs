@@ -1,5 +1,3 @@
-//! Code Mode execution results, notifications, and nested-tool observation.
-
 mod audio;
 mod embedded;
 mod output;
@@ -139,22 +137,14 @@ struct LiveCell {
     relay: StdMutex<Option<CellRelay>>,
 }
 
-// A cell left running when its turn ended has no exec/wait observer, so its
-// nested starts and completions would otherwise stay invisible until a later
-// wait. The relay holds the observation lease, forwards those nested updates
-// as they happen, and queues every update for replay to the next observer.
 struct CellRelay {
     stop: Arc<Notify>,
     task: JoinHandle<()>,
 }
 
-// The session owns this state for the cell's full lifetime. An observation
-// holds the mutex as an exclusive lease, so dropping its future releases the
-// lease while preserving both unread updates and already-consumed output.
 struct CellObservationState {
     updates: mpsc::UnboundedReceiver<CellUpdate>,
-    // Updates a detached relay already received, in order. Nested lifecycle
-    // updates it delivered are marked so the next observer does not repeat them.
+
     replay: VecDeque<CellUpdate>,
     buffered: ObservationBuffer,
 }
@@ -166,8 +156,6 @@ struct ObservationBuffer {
     notifications: Vec<CodeModeNotification>,
 }
 
-// One compare-exchange decides whether termination or completion owns the
-// terminal transition. Stored values are committed only after completion wins.
 struct CellLifecycle {
     phase: AtomicU8,
 }
@@ -258,9 +246,6 @@ struct ObservedNestedCall {
     delivered: bool,
 }
 
-// Every observed start gets one terminal receipt, including root completion or
-// cancellation while its future is still pending. Dropping work cannot establish
-// whether an external effect happened, so never present interruption as rollback.
 struct PendingCallReceipts {
     calls: HashMap<u64, (NestedToolCall, Instant)>,
     updates: mpsc::UnboundedSender<CellUpdate>,
@@ -390,8 +375,6 @@ impl CodeModeRuntime {
         started_at: Instant,
         observer: &mut dyn CodeModeObserver,
     ) -> CodeModeExecution {
-        // Subscribe before admission: steering can arrive while cell startup awaits a lock.
-        // A fresh subscription never inherits an earlier observation's preemption.
         let preempt = (
             self.preempt.subscribe(),
             self.current_turn.load(Ordering::Acquire),
@@ -583,15 +566,12 @@ fn observer_yield_timeout(yield_time: Duration) -> Duration {
 }
 
 impl CodeModeControl {
-    /// Wake current observers without cancelling cells, nested calls, or their host.
     pub(super) fn preempt_turn(&self) {
         let turn = self.current_turn.load(Ordering::Acquire);
         self.preempt
             .send_modify(|generation| *generation = (turn, generation.1.wrapping_add(1)));
     }
 
-    /// Relays nested-tool updates of cells the finished turn left running.
-    /// The cells keep running; a later wait takes over their observation.
     pub(super) async fn detach_turn(
         &self,
         turn_id: u64,
@@ -616,7 +596,6 @@ impl CodeModeControl {
         turn_id: u64,
         mut observer: Option<&mut dyn CodeModeObserver>,
     ) {
-
         let _admission = self.admission.lock().await;
         self.admission_epoch.fetch_add(1, Ordering::AcqRel);
         let cells = {
@@ -648,7 +627,6 @@ impl CodeModeControl {
         &self,
         mut observer: Option<&mut dyn CodeModeObserver>,
     ) -> CodeModeQuiescence {
-
         let admission = Arc::clone(&self.admission).lock_owned().await;
         self.admission_epoch.fetch_add(1, Ordering::AcqRel);
         let cells = {
@@ -853,7 +831,6 @@ impl LiveCell {
         }
     }
 
-    /// Starts relaying nested updates when no exec/wait currently observes the cell.
     fn detach(&self, sink: Box<dyn CodeModeObserver>) {
         let mut relay = self
             .relay
@@ -870,8 +847,6 @@ impl LiveCell {
         *relay = Some(CellRelay { stop, task });
     }
 
-    /// Ends the relay and returns its lease. Stopping hands the queue to a new
-    /// observer at once; otherwise the relay drains until the actor closes it.
     async fn finish_relay(&self, stop: bool) {
         let relay = self
             .relay
@@ -887,7 +862,6 @@ impl LiveCell {
     }
 
     async fn begin_observation(&self) -> Result<OwnedMutexGuard<CellObservationState>, CellError> {
-        // A detached relay is not an observer: hand its lease to this one.
         self.finish_relay(true).await;
         Arc::clone(&self.observation)
             .try_lock_owned()
@@ -910,8 +884,7 @@ impl LiveCell {
     async fn join_and_observe(&self, observer: &mut dyn CodeModeObserver) {
         self.join_actor().await;
         self.finish_relay(true).await;
-        // Observation owns the queue cursor; an active observer releases its
-        // lease before cancellation delivers only the remaining updates.
+
         let observation = Arc::clone(&self.observation).lock_owned().await;
         let _ = observe_cell(
             self,
@@ -926,7 +899,7 @@ impl LiveCell {
 
     async fn join(&self) {
         self.join_actor().await;
-        // Without an observer, let a relay deliver the final receipts it owns.
+
         self.finish_relay(false).await;
     }
 
@@ -1021,7 +994,6 @@ async fn relay_cell_updates(
     }
 }
 
-// Keep every lifecycle update in one exhaustive, order-preserving observation loop.
 #[allow(clippy::too_many_lines)]
 async fn observe_cell(
     cell: &LiveCell,
@@ -1048,7 +1020,6 @@ async fn observe_cell(
                 signal.has_changed().unwrap_or(false) && signal.borrow().0 == *turn
             })
         {
-            // Drain only the already queued prefix, not an unbounded busy producer.
             preempt_remaining = Some(observation.updates.len() + observation.replay.len());
         }
         let preempted = preempt_remaining.is_some();
@@ -1066,8 +1037,6 @@ async fn observe_cell(
         let update = if let Some(update) = observation.replay.pop_front() {
             Some(update)
         } else if preempted {
-            // The snapshot prefix is already queued and has a single receiver.
-            // Drain it without borrowing that receiver in two select branches.
             observation.updates.recv().await
         } else {
             tokio::select! {
@@ -1353,7 +1322,7 @@ impl EmbeddedHost {
                     let Some(completed) = completed else {
                         continue;
                     };
-                    // A completed result wins over a simultaneously ready root terminal.
+
                     self.send_completed_call(cell_id, completed, &mut pending_receipts)?;
                 }
                 event = self.read_event() => {
@@ -1453,8 +1422,7 @@ impl EmbeddedHost {
             shell_session_id,
         } = completed;
         let success = call.success;
-        // Host execution is already known. Publish it independently of guest
-        // delivery, which may fail after the cell or its runtime has closed.
+
         pending_receipts.calls.remove(&id);
         let _ = pending_receipts
             .updates

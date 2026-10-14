@@ -1,7 +1,7 @@
 import { normalizeHandResources } from "nanocodex-tools/internal/hosted-machine";
 
-/** Present an already-authorized, sanitized account projection to the model.
- * Authorization and secret filtering remain the responsibility of the host. */
+
+
 export function projectEnvironment(info, { runtime, default_cwd }) {
   const services = new Set([
     ...(info.authenticated ?? []), ...Object.keys(info.connectorAccounts ?? {}),
@@ -32,14 +32,14 @@ export function projectEnvironment(info, { runtime, default_cwd }) {
   };
 }
 
-/** XML delimiters must never be supplied by labels, memories, or other data. */
+
 export function contextData(tag, value) {
   if (!/^[a-z][a-z0-9_]*$/.test(tag)) throw new TypeError("invalid context tag");
   const text = JSON.stringify(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
   return `<${tag}>\n${text}\n</${tag}>`;
 }
 
-/** Client-reported context is descriptive data, never identity or authorization. */
+
 export function requestOriginContext(value, now = Date.now()) {
   if (!value || typeof value !== "object" || Array.isArray(value)
     || Object.keys(value).some(key => !["client", "hand", "cwd", "native_cwd", "timezone", "location"].includes(key))) {
@@ -58,7 +58,7 @@ export function requestOriginContext(value, now = Date.now()) {
     || result.cwd.split("/").some(part => part === "." || part === ".."))) throw new TypeError("invalid request origin cwd");
   if (value.native_cwd !== undefined) {
     const path = value.native_cwd;
-    // Native paths describe the caller's directory; they never select a mount.
+
     const absolute = typeof path === "string" && (path.startsWith("/")
       || /^[A-Za-z]:[\\/]/.test(path) || /^\\\\[^\\/]+[\\/][^\\/]+/.test(path));
     if (!absolute || new TextEncoder().encode(path).length > 512
@@ -74,7 +74,7 @@ export function requestOriginContext(value, now = Date.now()) {
   return result;
 }
 
-/** Optional sensor data is bounded and revalidated when projected, never inferred from a Hand. */
+
 export function requestOriginLocation(value, now = Date.now()) {
   if (!value || typeof value !== "object" || Array.isArray(value) || !Number.isFinite(now)) return undefined;
   const { latitude, longitude, accuracy_meters, timestamp_ms, approximate } = value;
@@ -86,7 +86,7 @@ export function requestOriginLocation(value, now = Date.now()) {
   return { latitude, longitude, accuracy_meters, timestamp_ms, approximate };
 }
 
-/** Keep wallet metadata separate from payment authority. Never spread signer data. */
+
 function projectWallet(wallet) {
   if (wallet.status !== "ready") return { status: wallet.status };
   const balance = wallet.balance.status === "ready" ? {
@@ -97,7 +97,7 @@ function projectWallet(wallet) {
     chain: wallet.chain, chain_id: wallet.chain_id, balance };
 }
 
-/** Freshness is evaluated on every read, never reset by discovery caching or reconnect. */
+
 export function projectHandResources(value, online, now = Date.now()) {
   const sample = normalizeHandResources(value);
   if (!sample || !Number.isFinite(now) || sample.observed_at_ms > now + 30_000) return { status: "unknown" };

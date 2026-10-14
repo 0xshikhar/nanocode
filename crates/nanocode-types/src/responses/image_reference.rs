@@ -1,7 +1,5 @@
-//! Strict, opaque image references shared by edit requests and input content.
 use serde::{Deserialize, Serialize};
 
-/// Whether a provider file ID is a bounded, opaque ASCII identifier.
 #[must_use]
 pub fn valid_image_file_id(file_id: &str) -> bool {
     !file_id.is_empty()
@@ -22,18 +20,14 @@ pub fn serialize_file_id<S: serde::Serializer>(
     serializer.serialize_str(file_id)
 }
 
-/// Exactly one inline image URL or opaque provider file identity.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub enum ImageReference {
-    /// Existing inline/URL image representation.
     Inline {
-        /// Inline data URL or provider-supported image URL.
         image_url: String,
     },
-    /// Opaque uploaded file; not a URL or local filesystem path.
+
     File {
-        /// Nonempty ASCII letters, digits, underscores or hyphens, at most 512 bytes.
         #[serde(serialize_with = "serialize_file_id")]
         file_id: String,
     },

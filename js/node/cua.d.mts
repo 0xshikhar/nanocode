@@ -12,18 +12,18 @@ export type ComputerOptions = {
   executable: string;
   args?: readonly string[];
   environment?: Record<string, string>;
-  /** Trusted discovered catalog; connectComputerTools obtains this automatically. */
+
   definitions?: readonly ComputerToolDefinition[];
 };
 export type ComputerProviderTool = NamedTool & Readonly<{ providerDefinition: ComputerToolDefinition }>;
 export type ComputerAttachment = Readonly<{
-  /** Full provider catalog, including hidden lifecycle hooks. */
+
   definitions: readonly ComputerToolDefinition[];
-  /** Model-visible provider tools. */
+
   tools: readonly ComputerProviderTool[];
-  /** Trusted access to any discovered tool, including hidden hooks. */
+
   tool(name: string): ComputerProviderTool | undefined;
-  /** Finish an existing turn without creating a new provider process. */
+
   endTurn(sessionId: string, turnId: string, hookEventName?: "Stop" | "Interrupt" | "SubagentStop"): Promise<void>;
   close(): Promise<void>;
 }>;

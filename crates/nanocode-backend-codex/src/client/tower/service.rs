@@ -33,8 +33,7 @@ use crate::client::{
 
 struct ConnectionState {
     socket: Option<ResponsesSocket>,
-    // The first sticky-routing token observed from either transport. It is
-    // replayed unchanged within one logical turn and cleared at its boundary.
+
     turn_state: Option<String>,
     generation: u32,
     next_purpose: ConnectionPurpose,
@@ -194,7 +193,6 @@ impl Drop for AttemptGuard<'_> {
     }
 }
 
-/// Stateful transport attempt service at the base of a Responses Tower stack.
 #[derive(Clone)]
 pub struct ResponsesService {
     config: Arc<ModelConfig>,
@@ -204,7 +202,6 @@ pub struct ResponsesService {
 }
 
 impl ResponsesService {
-    /// Builds a stateful transport service with default retry limits.
     #[must_use]
     pub(crate) fn new(config: Arc<ModelConfig>) -> Self {
         let platform = platform::ServicePlatform::new(&config);
@@ -216,8 +213,6 @@ impl ResponsesService {
         }
     }
 
-    /// Builds a transport attempt service with a caller-configured HTTPS
-    /// client.
     #[cfg(not(target_family = "wasm"))]
     #[cfg_attr(docsrs, doc(cfg(not(target_family = "wasm"))))]
     #[must_use]
@@ -239,8 +234,6 @@ impl ResponsesService {
         self
     }
 
-    /// Builds the configured standard Responses service with a fixed total
-    /// attempt limit.
     #[must_use]
     pub(crate) fn standard_with_max_attempts(
         config: Arc<ModelConfig>,
@@ -252,8 +245,6 @@ impl ResponsesService {
         Retry::new(retry, service)
     }
 
-    /// Builds the standard retry stack with a caller-configured HTTPS client
-    /// and fixed total-attempt limit.
     #[cfg(not(target_family = "wasm"))]
     #[cfg_attr(docsrs, doc(cfg(not(target_family = "wasm"))))]
     #[must_use]
@@ -299,8 +290,6 @@ impl ResponsesService {
         } else {
             https::run(self, &mut guard, request, started_at).await
         }
-        // Resolve provider indices before retry policy can change the input
-        // from an incremental delta to full replay (or back again).
         .map_err(|error| error.with_request_input(request));
         guard.complete();
         drop(guard);

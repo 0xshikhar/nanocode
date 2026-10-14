@@ -7,7 +7,7 @@ pub(super) struct WarmupExecution {
     pub(super) connection_generation: u32,
     pub(super) usage: Option<Usage>,
     pub(super) server_reasoning_included: bool,
-    // A persisted response ID cannot continue on a replacement transport.
+
     #[serde(skip)]
     transport_continuation_valid: bool,
 }
@@ -18,8 +18,6 @@ pub(super) struct WarmupOutcome {
     pub(super) server_reasoning_included: bool,
 }
 
-// Owns the terminal event even when an outer cancellation select drops the future.
-// This cannot publish after the hosting process or isolate has been lost.
 struct CompactionLifecycle<'a> {
     events: &'a EventSink,
     stats: &'a mut RunStats,
@@ -53,13 +51,11 @@ impl CompactionLifecycle<'_> {
 impl Drop for CompactionLifecycle<'_> {
     fn drop(&mut self) {
         if !self.finished {
-            // Drop cannot return an event publication error to the cancelled caller.
             let _ = self.fail("compaction cancelled");
         }
     }
 }
 
-// Untagged success preserves receipts written before failures were recorded.
 #[derive(Deserialize, Serialize)]
 #[serde(untagged)]
 enum RecordedCompactionOutcome {
@@ -189,8 +185,7 @@ where
         if let Some(content) = serialize_trace_content(factory.profile().prefix()) {
             record_span_content(&span, "model.input", &content);
         }
-        // A durable warmup must settle its own admitted effect even if another
-        // owner warmed the same cache while it was interrupted.
+
         let shared_prompt_cache = self
             .execution_steps
             .is_none()
@@ -230,8 +225,6 @@ where
         };
         let duration_ns = elapsed_ns(started_at);
         if execution.is_none() && !shared_prefix_warmed {
-            // Older durable receipts encode a failed warmup as None. Replaying
-            // that receipt must not establish a successful prewarm baseline.
             span.record("status", "failed");
             span.record("otel.status_code", "ERROR");
             span.record("duration_ns", duration_ns);
@@ -383,9 +376,7 @@ where
         let model = self.model;
         let service_tier = self.service_tier;
         let trigger = compaction::trigger();
-        // This barrier is shared by explicit, pre-turn, and mid-turn compaction.
-        // It must settle before even tool-output trimming, and failures leave
-        // the original conversation available for retry or recovery.
+
         if let Some(hook) = &self.before_compaction {
             use crate::execution::{BeforeCompactionRequest, CompactionReceipt};
             let preservation_step = format!("before-{step_id}");
@@ -484,9 +475,9 @@ where
                 let success = match self.client.execute(request).instrument(span.clone()).await {
                     Ok(success) => success,
                     Err(error) => {
-                        let error = NanocodexError::from(Into::<crate::client::ResponseError>::into(error));
-                        // Only completed provider failures consume the compaction budget.
-                        // Policy, ownership, and storage failures retain their recovery semantics.
+                        let error =
+                            NanocodexError::from(Into::<crate::client::ResponseError>::into(error));
+
                         if error.responses_error().is_none() {
                             return Err(error);
                         }

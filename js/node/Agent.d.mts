@@ -14,20 +14,22 @@ import type { Workspace } from "./workspace.mjs";
 import type { Tools } from "../tools/Tools.mjs";
 
 export type Agent = DefaultAgent;
-/** Code Mode always exposes exec/wait; host tools run inside exec. */
+
 type ToolExposureOptions =
   | { mcp?: false | undefined; toolMode?: "code-only" | undefined }
   | { mcp: McpServers; toolMode?: "code-only" | undefined };
 
-/** Creates a Node-hosted Rust/WASM Agent. */
+
+export function create(options: create.ClaudeOptions): Promise<DefaultAgent<"claude">>;
+export function create(options: create.CodexOptions): Promise<DefaultAgent<"codex">>;
 export function create(options: create.Options): Promise<create.ReturnType>;
 export declare namespace create {
-  /** Codex (OpenAI Responses) harness options. */
+
   type CodexOptions = AgentOptions & ToolExposureOptions & {
     codeEvaluator?: CodeEvaluator | undefined;
-    /** Opt-in durable application-tool and Code Mode receipts for safe cold recovery. */
+
     codeEffectJournal?: CodeEffectJournal | undefined;
-    /** Caller-owned rooted filesystem mounted through standard workspace tools. */
+
     filesystem?: Workspace | undefined;
     module?: unknown;
     transport: ResponsesTransport;
@@ -40,13 +42,13 @@ export declare namespace create {
     | {
       durability: DurabilityStore;
       durabilityId: string;
-      /** The root remains durable, and so is every fork, side conversation and subagent: each reports its own `session.persistence()`. */
+
       tools?: ToolConfiguration<SubagentTool> | undefined;
     }
   );
-  /** Claude (Messages) harness options; see docs/CLAUDE_JAVASCRIPT.md. */
+
   type ClaudeOptions = import('../runtime/claude.mjs').Options & { harness: 'claude' };
-  /** Options of either harness family, discriminated by `harness`; both return the same Agent. */
+
   type Options = CodexOptions | ClaudeOptions;
   type ReturnType = Agent;
 }

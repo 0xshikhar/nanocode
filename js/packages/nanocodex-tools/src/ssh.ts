@@ -19,7 +19,7 @@ export type SshConnect = (
   options: Readonly<{ allowHalfOpen: boolean; secureTransport: "off" }>,
 ) => SshSocket;
 
-/** Creates a workspace-backed SSH command over an injected Web Streams socket transport. */
+
 export function createWorkspaceSshCommand(options: Readonly<{
   connect: SshConnect;
   filesystem(): Workspace;

@@ -1,5 +1,3 @@
-//! Private, bounded local workflow evidence. Capture and privacy filtering belong to the adapter.
-//! Opening a store never starts capture. All mutations are serialized and durably persisted.
 use crate::Error;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use fs2::FileExt;
@@ -20,7 +18,6 @@ const MAX_STORE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_RECORDINGS: usize = 100;
 const RETENTION_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 
-/// Configurable downward only; defaults are hard ceilings.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Limits {
@@ -53,7 +50,6 @@ impl Limits {
     }
 }
 
-/// Explicit foreground allowlist. IDs come from the native observer, never window titles.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Scope {
@@ -116,7 +112,7 @@ pub enum MouseButton {
     Right,
     Other,
 }
-/// Intentionally cannot carry text, key names/codes, clipboard content or arbitrary JSON.
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SafeEvent {
@@ -133,7 +129,7 @@ pub enum FrameMime {
     Png,
     Jpeg,
 }
-/// Only pass bytes after the capture adapter's privacy checks and masking have succeeded.
+
 pub struct FilteredFrame<'a> {
     pub bytes: &'a [u8],
     pub width: u32,
@@ -158,7 +154,7 @@ enum Evidence {
         mime: FrameMime,
     },
 }
-/// Attribution supplied only when known; native polling must use Unknown.
+
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Source {
@@ -223,7 +219,6 @@ impl Record {
     }
 }
 
-/// Strict external request vocabulary; append is available only through typed Rust methods.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
@@ -270,7 +265,7 @@ pub enum Request {
 struct Inner {
     records: BTreeMap<String, Record>,
 }
-/// Keep this store alive for the lifetime of the Hand, independently of transport connections.
+
 pub struct Store {
     root: PathBuf,
     inner: Mutex<Inner>,
@@ -278,8 +273,6 @@ pub struct Store {
 }
 impl Store {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, Error> {
-        // Unix modes below cannot establish Windows ACL privacy. Fail closed
-        // for direct store consumers as well as the native recording service.
         if cfg!(windows) {
             return Err("private recording storage unavailable on Windows".into());
         }
@@ -310,7 +303,7 @@ impl Store {
             }
             let manifest = item.path().join("manifest.json");
             reject_symlink(&manifest)?;
-            // A directory without its first committed manifest is an incomplete start.
+
             if !manifest.exists() {
                 fs::remove_dir_all(item.path())?;
                 continue;
@@ -342,7 +335,7 @@ impl Store {
                     }
                 }
             }
-            // Remove only known temporary/unreferenced content left by interrupted atomic writes.
+
             let refs: BTreeSet<_> = record
                 .events
                 .iter()
@@ -393,7 +386,7 @@ impl Store {
             .lock()
             .map_err(|_| "recording store lock poisoned".into())
     }
-    /// Applies duration limits even when no capture event is available.
+
     pub fn active_recording(&self) -> Result<Option<String>, Error> {
         let mut inner = self.guard()?;
         self.expire(&mut inner)?;
@@ -403,7 +396,7 @@ impl Store {
             .find(|r| r.state == State::Recording)
             .map(|r| r.id.clone()))
     }
-    /// Interrupt on Hand shutdown or a capture failure. Reasons are a closed vocabulary.
+
     pub fn interrupt_active(&self, reason: &str) -> Result<(), Error> {
         if !matches!(
             reason,
@@ -429,7 +422,7 @@ impl Store {
         }
         Ok(())
     }
-    /// Returns only an actively recording session and its immutable privacy scope.
+
     pub fn active_config(&self) -> Result<Option<(String, Scope)>, Error> {
         let mut inner = self.guard()?;
         self.expire(&mut inner)?;
@@ -439,7 +432,7 @@ impl Store {
             .find(|r| r.state == State::Recording)
             .map(|r| (r.id.clone(), r.scope.clone())))
     }
-    // Retention applies only after a terminal transition; active sessions are never pruned.
+
     fn prune(&self, inner: &mut Inner) -> Result<(), Error> {
         let expired: Vec<_> = inner
             .records
@@ -662,7 +655,7 @@ impl Store {
     pub fn append_event(&self, id: &str, event: SafeEvent) -> Result<Value, Error> {
         self.append_event_from(id, event, Source::Unknown)
     }
-    /// Use Human or Agent only when the caller has direct evidence of that origin.
+
     pub fn append_event_from(
         &self,
         id: &str,
@@ -735,8 +728,7 @@ impl Store {
         if record.state != State::Recording {
             return Err("recording is not accepting evidence".into());
         }
-        // Unchanged consecutive samples carry no new evidence. After another event,
-        // a repeated frame remains a useful temporal reference to the existing blob.
+
         if let (
             Some(Entry {
                 evidence:
@@ -783,7 +775,7 @@ impl Store {
         let dir = self.root.join(id);
         let old_size = fs::metadata(dir.join("manifest.json"))?.len();
         let record_size = disk_usage(&dir)? - old_size + manifest_size + extra;
-        // Reserve room for the terminal reason and atomic manifest replacement.
+
         if record_size + 1024 > record.limits.max_bytes {
             return self.finish(&mut inner, id, "storage_limit");
         }
@@ -813,7 +805,7 @@ impl Store {
                 return Err("existing frame failed integrity check".into());
             }
         }
-        // Stop at the boundary, without requiring an extra sample to discover the limit.
+
         if record.events.len() >= record.limits.max_events - 1 {
             record.lifecycle(State::Stopped, Some("event_limit"));
         }

@@ -3,7 +3,7 @@ import type { PdfExtractionOptions } from "./pdf-command.js";
 
 type TextItem = { str: string; transform: number[]; width: number; height: number; hasEOL?: boolean };
 
-/** In-process PDF.js extraction. Import this module only in the isolated media service or local tools. */
+
 export async function extractPdfText(data: Uint8Array, options: PdfExtractionOptions, signal?: AbortSignal): Promise<string> {
   let document: Awaited<ReturnType<typeof getDocumentProxy>> | undefined;
   try {
@@ -24,7 +24,7 @@ export async function extractPdfText(data: Uint8Array, options: PdfExtractionOpt
       try {
         const content = await page.getTextContent();
         const items = content.items.filter(item => "str" in item) as TextItem[];
-        // Normalize positions to displayed page coordinates, including /Rotate.
+
         const [a, b, c, d, e, f] = page.getViewport({ scale: 1 }).transform;
         const displayed = items.map(item => {
           const [x, y] = item.transform.slice(4);
@@ -64,7 +64,7 @@ function formatPage(items: TextItem[], options: PdfExtractionOptions): string {
       const spaces = options.layout
         ? Math.max(0, Math.round((x - left) / cell) - text.length)
         : text && x - right > cell * 0.2 && !text.endsWith(" ") && !item.str.startsWith(" ") ? 1 : 0;
-      // Bad coordinates must not allocate unbounded padding.
+
       text += " ".repeat(Math.min(spaces, 10_000)) + item.str;
       right = x + item.width;
     }

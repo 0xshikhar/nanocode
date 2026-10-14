@@ -1,8 +1,3 @@
-// Derived from clabby/tact@1d9ccaefd1d8613dab020812af04a91cd9b4c52c (Apache-2.0).
-// Modified for Nanocodex's reusable native/WASM extension runtime.
-
-//! Async child-agent sessions, turns, and lifecycle orchestration.
-
 use super::diagnostics::{CompletionError, CompletionErrorCode};
 use super::durable::{self, RestoreReport, SubagentStore};
 use super::{
@@ -38,7 +33,7 @@ use web_time::Instant;
 
 pub(super) struct ChildSession {
     pub(super) descriptor: AgentDescriptor,
-    /// Immutable task used by the host authorization binding.
+
     pub(super) binding_task: String,
     pub(super) host_context: Option<Arc<str>>,
     pub(super) event_task: Option<Task<()>>,
@@ -49,8 +44,7 @@ pub(super) struct ChildSession {
     pub(super) output_validator: Validator,
     pub(super) output_schema: Value,
     pub(super) stored_runtime: Option<SessionCheckpoint>,
-    /// The latest boundary is a durable journal record, loaded on rehydration
-    /// instead of being held in memory while the child is idle.
+
     pub(super) journaled_runtime: bool,
     pub(super) next_instruction_revision: u64,
     pub(super) active_instruction_revision: Option<u64>,
@@ -59,23 +53,19 @@ pub(super) struct ChildSession {
     pub(super) last_output: Option<Value>,
     pub(super) last_used: u64,
     pub(super) evicted: bool,
-    /// Consecutive automatic restart resumes without committed progress.
+
     pub(super) resume_attempts: u32,
-    /// Bounded tool calls observed during the current or interrupted turn.
+
     pub(super) in_flight_calls: Vec<durable::InFlightCall>,
-    /// Observed calls dropped by the retention bound this turn.
+
     pub(super) in_flight_omitted: u32,
-    /// Revision of a root child's completion announced but not yet
-    /// acknowledged by the host (journaled with the terminal status).
+
     pub(super) pending_completion: Option<u64>,
-    /// Instruction revision of the turn that produced the current terminal
-    /// status. Wait marks and reported completion revisions both use it, so a
-    /// later delegation (which bumps next_instruction_revision) never makes an
-    /// old result look new.
+
     pub(super) settled_revision: Option<u64>,
-    /// Commit state of omitted live calls, so checkpoints also retire them.
+
     pub(super) in_flight_progress: durable::OmittedProgress,
-    /// Journal-restored children need a fresh host binding before execution.
+
     announce: bool,
 }
 
@@ -106,7 +96,6 @@ pub(super) fn completion_instructions(schema: &str) -> String {
     )
 }
 
-/// Supersession is normal coordination, not a failed child or tool execution.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum SubmissionOutcome {
     Accepted { decoded_json_text: bool },
@@ -124,47 +113,40 @@ pub struct Registry {
     revision: watch::Sender<u64>,
     capacity: Capacity,
     max_resident: AtomicUsize,
-    /// Whether the host chose a residency limit instead of the default.
+
     max_resident_explicit: std::sync::atomic::AtomicBool,
     residency_lock: tokio::sync::Mutex<()>,
     message_lock: tokio::sync::Mutex<()>,
     store: std::sync::RwLock<Option<Arc<dyn SubagentStore>>>,
-    /// Per-root journals adopted from durable root handles.
+
     journals: std::sync::RwLock<HashMap<String, Arc<dyn SubagentStore>>>,
-    /// Per-root restoration outcome. Pending and failed roots must never be saved.
+
     restored: std::sync::Mutex<HashMap<String, RestorationOutcome>>,
-    /// Per-root FIFO spawn admission for adopted journals. The restoration
-    /// gate is a watch, which wakes concurrent waiters in no defined order;
-    /// spawns queue here instead, so agent IDs follow call order.
+
     spawn_admission: std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     journal_writer: std::sync::atomic::AtomicBool,
-    /// Orders background snapshots and the final pre-teardown journal flush.
+
     journal_write_lock: tokio::sync::Mutex<()>,
     checkpoints: std::sync::Mutex<HashMap<(String, AgentId), durable::JournalCheckpoint>>,
-    /// Terminal checkpoints registered before their completed status is visible.
+
     pending_checkpoints: std::sync::Mutex<HashMap<String, usize>>,
-    /// In-flight mid-turn checkpoint captures; `true` requests one more pass.
+
     progress_captures: std::sync::Mutex<HashMap<(String, AgentId), bool>>,
-    /// Children that finished a tool call in this runtime since their last
-    /// journaled progress checkpoint.
+
     completed_tools: std::sync::Mutex<std::collections::HashSet<(String, AgentId)>>,
     pending_resume: std::sync::Mutex<HashMap<String, Vec<AgentId>>>,
-    /// Terminal results each caller session already received from `wait`.
+
     wait_reported: std::sync::Mutex<HashMap<(String, AgentId), u64>>,
-    /// Consecutive waits per caller with nothing new and nothing left active.
+
     idle_waits: std::sync::Mutex<HashMap<String, (Vec<AgentId>, u32)>>,
-    /// This registry, for per-agent ordered status workers.
+
     this: std::sync::OnceLock<Weak<Self>>,
-    /// Per-agent ordered status delivery: a settled turn's final checkpoint,
-    /// journal write and announcement run off the harness loop, in order with
-    /// that agent's other status updates.
+
     status_queues: std::sync::Mutex<HashMap<(String, AgentId), mpsc::UnboundedSender<OrderedJob>>>,
-    /// Completions a live host failed to take: (attempts, retry scheduled).
+
     completion_retries: std::sync::Mutex<HashMap<(String, AgentId), (u32, bool)>>,
 }
 
-/// Bounded backoff for re-announcing an undelivered completion in a live
-/// runtime: 2 s doubling to a 5 minute ceiling, never a hot loop.
 fn completion_retry_delay(attempt: u32) -> Duration {
     Duration::from_millis(1000_u64 << attempt.clamp(1, 9)).min(Duration::from_secs(300))
 }
@@ -182,22 +164,19 @@ struct AgentScope {
     sessions: HashMap<AgentId, ChildSession>,
     messages: MessageThreads,
     closing: bool,
-    /// Shutdown saved the durable pre-teardown tree; later Closing/Closed
-    /// transitions are live-only and must never reach the journal.
+
     journal_frozen: bool,
 }
 
-/// Evidence a checkpoint commits, bound to the turn it was taken from.
 struct CommittedCalls {
     revision: u64,
     call_ids: Vec<String>,
     omitted: u32,
 }
 
-/// Work on one agent's ordered status queue.
 enum OrderedJob {
     Update(AgentUpdate),
-    /// A settled turn: final checkpoint, then journal, then announcement.
+
     Settle {
         status: AgentStatus,
         completion: Option<u64>,
@@ -216,14 +195,12 @@ const fn settled_update(id: AgentId, status: AgentStatus, completion: Option<u64
     }
 }
 
-/// One root journal value and the checkpoint records (key, JSON) it newly references.
 struct JournalWrite {
     payload: String,
     records: Vec<(Arc<str>, Arc<str>)>,
 }
 
 impl AgentScope {
-    /// Encodes this root's journal and the checkpoint records it newly references.
     fn journal_payload(
         &self,
         root_session_id: &str,
@@ -281,17 +258,34 @@ impl BatchStartup {
         ids.push(id);
     }
 
-    pub(super) async fn rollback(mut self) {
+    pub(super) async fn rollback(mut self) -> std::io::Result<()> {
         let cleanup = self.cleanup.take();
         let registry = Arc::clone(&self.registry);
         drop(self);
         if let Some((root_session_id, ids)) = cleanup {
-            registry.close_batch(&root_session_id, ids).await;
+            registry.close_batch(&root_session_id, ids).await?;
+        }
+        Ok(())
+    }
+
+    pub(super) async fn fail(self, error: std::io::Error) -> std::io::Error {
+        match self.rollback().await {
+            Ok(()) => error,
+            Err(cleanup) => std::io::Error::other(format!(
+                "{error}; subagent startup cleanup failed: {cleanup}"
+            )),
         }
     }
 
-    pub(super) fn commit(mut self) {
+    pub(super) async fn commit(mut self) -> std::io::Result<()> {
+        if let Some((root_session_id, _)) = &self.cleanup
+            && self.registry.store_for(root_session_id).is_some()
+            && let Err(error) = self.registry.persist_durably(root_session_id).await
+        {
+            return Err(self.fail(error).await);
+        }
         self.cleanup = None;
+        Ok(())
     }
 }
 
@@ -302,7 +296,7 @@ impl Drop for BatchStartup {
         };
         let registry = Arc::clone(&self.registry);
         drop(platform::spawn(async move {
-            registry.close_batch(&root_session_id, ids).await;
+            let _ = registry.close_batch(&root_session_id, ids).await;
         }));
     }
 }
@@ -316,9 +310,7 @@ pub struct AgentSummary {
     pub status: AgentStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_output: Option<Value>,
-    /// For a completed agent: the instruction revision of the turn whose
-    /// result this is. Hosts match a committed wait/list receipt to exactly
-    /// one logical completion with (agent_id, completion_revision).
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completion_revision: Option<u64>,
 }
@@ -332,11 +324,10 @@ pub struct AgentDirectoryEntry {
     pub status: AgentStatus,
     pub can_message: bool,
     pub can_manage: bool,
-    /// See AgentSummary::completion_revision.
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completion_revision: Option<u64>,
-    /// A restored child whose automatic resume is not yet delivered: it is
-    /// interrupted now but about to run, so hosts must keep the runtime live.
+
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub resuming: bool,
 }
@@ -384,8 +375,6 @@ impl RegistryState {
         self.next_access
     }
 
-    /// Reinstalls one journaled child without live-spawn parent checks: a
-    /// closed parent may legitimately own closed descendants.
     fn insert_restored(
         &mut self,
         root_session_id: &str,
@@ -473,8 +462,7 @@ impl RegistryState {
             )
             .into());
         };
-        // Compare the immutable origin of this call, never the live revision at
-        // dispatch. Steering admission and acceptance share this registry lock.
+
         if session.steering || session.active_instruction_revision != Some(instruction_revision) {
             return Ok(SubmissionOutcome::Superseded);
         }
@@ -687,9 +675,7 @@ impl RegistryState {
             .filter(|id| include_self || caller != Some(*id))
             .filter_map(|id| {
                 let session = scope.sessions.get(&id)?;
-                // Restoration releases its gate before resuming children (resume
-                // also waits on that gate). Keep recoverable Interrupted entries
-                // discoverable during that interval and after a failed resume.
+
                 let recoverable_interrupted = matches!(session.status, AgentStatus::Interrupted)
                     && (session.harness.is_some()
                         || session.stored_runtime.is_some()
@@ -868,8 +854,6 @@ impl RegistryState {
         self.summaries_in_scope(root_session_id, ids)
     }
 
-    /// Summaries plus each child's instruction revision, so a resumed child's
-    /// next terminal result is distinguishable from one already reported.
     fn wait_snapshot(
         &self,
         session_id: &str,
@@ -1126,7 +1110,7 @@ impl RegistryState {
 }
 
 const AGENT_STOP_TIMEOUT: Duration = Duration::from_secs(30);
-/// Identical waits allowed to re-read already-reported terminal agents.
+
 const IDLE_WAIT_LIMIT: u32 = 2;
 
 fn lock_unpoisoned<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -1135,7 +1119,6 @@ fn lock_unpoisoned<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, 
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// Identifies one terminal result of one child turn.
 fn wait_mark(status: &AgentStatus, revision: u64) -> u64 {
     use std::hash::{Hash as _, Hasher as _};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -1197,9 +1180,6 @@ impl Registry {
             })
     }
 
-    /// Adopts the durable journal exposed by a root handle: installs it,
-    /// restores the root's task tree and resumes interrupted children.
-    /// Any harness whose builder attaches durability exposes one.
     fn adopt_journal(self: &Arc<Self>, handle: &AgentHandle) {
         let Some(journal) = handle.child_journal() else {
             return;
@@ -1252,8 +1232,7 @@ impl Registry {
                     return;
                 }
             }
-            // Queue restored completions before releasing waiters: a parent's
-            // wait that observes one must follow its announcement in order.
+
             registry
                 .announce_restored_completions(&root, &completed)
                 .await;
@@ -1267,13 +1246,6 @@ impl Registry {
         }));
     }
 
-    /// Admits a spawn under `session_id`'s root: waits for its restoration in
-    /// call order. Hold the guard until the spawn's agent IDs are reserved.
-    ///
-    /// Concurrent spawns waiting on [`Self::await_restored`] alone would resume
-    /// (and reserve IDs) in the restoration watch's wake order, not their own.
-    /// Each queues on its root's FIFO admission lock first, in the same poll
-    /// that obtained the root under the FIFO state lock, so arrival order holds.
     pub(crate) async fn admit_spawn(
         &self,
         session_id: &str,
@@ -1298,7 +1270,6 @@ impl Registry {
         Ok(guard)
     }
 
-    /// Waits until an adopted root's journaled tree is restored.
     pub(crate) async fn await_restored(&self, session_id: &str) -> std::io::Result<()> {
         let root = self
             .state
@@ -1326,13 +1297,7 @@ impl Registry {
         Ok(())
     }
 
-    /// Makes every root task tree in this registry durable.
-    ///
-    /// Install the store before spawning children, then call [`Self::restore`]
-    /// for a recovered root before it uses subagent tools.
     pub fn set_store(self: &Arc<Self>, store: Arc<dyn SubagentStore>) {
-        // Durable children reload from their journal records, so idle ones need
-        // not keep whole conversations resident in memory-capped hosts.
         if !self.max_resident_explicit.load(Ordering::Relaxed) {
             self.max_resident
                 .store(crate::DURABLE_MAX_RESIDENT_SUBAGENTS, Ordering::Relaxed);
@@ -1344,7 +1309,6 @@ impl Registry {
         self.ensure_journal_writer();
     }
 
-    /// Starts the single background writer that journals every durable root.
     fn ensure_journal_writer(self: &Arc<Self>) {
         if self
             .journal_writer
@@ -1357,14 +1321,13 @@ impl Registry {
         let mut revision = self.revision.subscribe();
         drop(platform::spawn(async move {
             let mut saved = HashMap::<String, String>::new();
-            // Child session ID -> checkpoint record key last recorded as its own session.
+
             let mut recorded = HashMap::<String, Arc<str>>::new();
             loop {
                 let Some(live) = registry.upgrade() else {
                     return;
                 };
-                // Capture under the same lock as the final flush: an older
-                // background payload must never overwrite shutdown's snapshot.
+
                 let write_guard = live.journal_write_lock.lock().await;
                 let payloads = live.journal_payloads().await;
                 let stores = payloads
@@ -1375,7 +1338,6 @@ impl Registry {
                     let Some(store) = store else { continue };
                     let JournalWrite { payload, records } = write;
                     if saved.get(&root_session_id) == Some(&payload) {
-                        // The saved journal already references these records.
                         live.acknowledge(&root_session_id, &records);
                         continue;
                     }
@@ -1386,8 +1348,7 @@ impl Registry {
                     {
                         Ok(()) => {
                             live.acknowledge(&root_session_id, &records);
-                            // Only boundaries already in a saved journal become
-                            // sessions, so a recorded child is always restorable.
+
                             for (key, checkpoint) in live.child_checkpoints(&root_session_id).await
                             {
                                 let session_id = checkpoint.session_id().to_owned();
@@ -1421,8 +1382,6 @@ impl Registry {
         }));
     }
 
-    /// Latest committed checkpoint (record key, boundary) of every child
-    /// journaled under a root.
     async fn child_checkpoints(&self, root_session_id: &str) -> Vec<(Arc<str>, SessionCheckpoint)> {
         let state = self.state.lock().await;
         let checkpoints = self
@@ -1436,7 +1395,6 @@ impl Registry {
         ids.sort_unstable();
         ids.into_iter()
             .filter_map(|id| {
-                // Boundaries already recorded were released from memory.
                 let checkpoint = match checkpoints.get(&(root_session_id.to_owned(), id)) {
                     Some(checkpoint) => checkpoint.clone(),
                     None => durable::JournalCheckpoint::encode(
@@ -1476,7 +1434,6 @@ impl Registry {
         id: AgentId,
         snapshot: SessionCheckpoint,
     ) -> bool {
-        // Encode once, outside the lock; journal writes only reference it.
         match durable::JournalCheckpoint::encode(&snapshot) {
             Ok(checkpoint) => {
                 self.insert_checkpoint(root_session_id, id, checkpoint);
@@ -1489,7 +1446,6 @@ impl Registry {
         }
     }
 
-    /// Loads a child's journaled boundary: its unsaved encoding, or the stored record.
     async fn journal_snapshot(
         &self,
         root_session_id: &str,
@@ -1528,8 +1484,6 @@ impl Registry {
             .insert((root_session_id.to_owned(), id), checkpoint);
     }
 
-    /// Drops in-memory boundaries once they are recorded as child sessions; the
-    /// journal record still holds them for rehydration.
     fn release_recorded(&self, root_session_id: &str, key: &Arc<str>) {
         let mut checkpoints = self
             .checkpoints
@@ -1542,7 +1496,6 @@ impl Registry {
         }
     }
 
-    /// Releases encoded checkpoints once a saved journal references their records.
     fn acknowledge(&self, root_session_id: &str, records: &[(Arc<str>, Arc<str>)]) {
         if records.is_empty() {
             return;
@@ -1561,7 +1514,6 @@ impl Registry {
         }
     }
 
-    /// Registers a final checkpoint as pending (shutdown waits for it).
     fn begin_pending_checkpoint(&self, root_session_id: &str) -> bool {
         if self.store_for(root_session_id).is_none() {
             return false;
@@ -1591,11 +1543,6 @@ impl Registry {
         self.changed();
     }
 
-    /// Journals a running child's latest committed step.
-    ///
-    /// Turn-boundary checkpoints alone would make a restart replay every step
-    /// of a long delegated turn. Captures coalesce per child, and a capture
-    /// that lands after the turn settled never replaces its final boundary.
     pub(super) fn capture_progress(self: &Arc<Self>, root_session_id: &str, id: AgentId) {
         if self.store_for(root_session_id).is_none() {
             return;
@@ -1615,14 +1562,13 @@ impl Registry {
         let registry = Arc::clone(self);
         drop(platform::spawn(async move {
             loop {
-                // Taken before the snapshot, so the checkpoint includes that tool.
                 let progressed = registry
                     .completed_tools
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .remove(&key);
                 let harness = registry.running_harness(&key.0, key.1).await;
-                // Also taken before the snapshot, which therefore commits them.
+
                 let commits = registry.committable_calls(&key.0, key.1).await;
                 if let Some(harness) = harness
                     && let Ok(snapshot) = harness.snapshot().await
@@ -1659,8 +1605,6 @@ impl Registry {
         }));
     }
 
-    /// A provider call began from a committed step holding every result the
-    /// live runtime has settled so far; the next checkpoint captures them.
     async fn commit_boundary(&self, root_session_id: &str, id: AgentId) {
         let mut state = self.state.lock().await;
         let Some(session) = state
@@ -1680,7 +1624,6 @@ impl Registry {
         progress.settled = 0;
     }
 
-    /// Calls a checkpoint captured from now on commits, for its active turn.
     async fn committable_calls(
         &self,
         root_session_id: &str,
@@ -1706,9 +1649,6 @@ impl Registry {
         })
     }
 
-    /// Drops calls whose results a recorded checkpoint now holds. Ordered
-    /// after the checkpoint, so a journal never has the pruned evidence
-    /// without the checkpoint that replaces it.
     async fn retire_committed(&self, root_session_id: &str, id: AgentId, commits: CommittedCalls) {
         {
             let mut state = self.state.lock().await;
@@ -1719,7 +1659,7 @@ impl Registry {
             else {
                 return;
             };
-            // A newer turn has its own evidence.
+
             if session.active_instruction_revision != Some(commits.revision) {
                 return;
             }
@@ -1734,9 +1674,6 @@ impl Registry {
         self.changed();
     }
 
-    /// A resumed child journaled a checkpoint after finishing a tool call in
-    /// this runtime. Its turn is advancing, so a later restart is a new loss
-    /// rather than the same one recurring: the consecutive budget starts over.
     async fn reset_resume_attempts(&self, root_session_id: &str, id: AgentId) {
         let mut state = self.state.lock().await;
         if let Some(session) = state
@@ -1749,8 +1686,6 @@ impl Registry {
         }
     }
 
-    /// Journals bounded tool calls observed during a child's turn until the
-    /// turn settles, so a restart can name the calls it must reconcile.
     async fn track_in_flight(
         &self,
         root_session_id: &str,
@@ -1767,10 +1702,10 @@ impl Registry {
             arguments: Option<Value>,
             #[serde(default)]
             parent_call_id: Option<String>,
-            /// Codex Code Mode cell lifetime.
+
             #[serde(default)]
             cell: Option<Cell>,
-            /// Claude reports the cell under metadata._nanocodex_code.
+
             #[serde(default)]
             metadata: Option<Value>,
         }
@@ -1780,9 +1715,6 @@ impl Registry {
             running: bool,
         }
         impl Call {
-            /// The Code Mode cell this result observed: its original exec
-            /// call and whether it is still running. Claude omits running for
-            /// a cell that may produce more updates.
             fn cell(&self) -> Option<(&str, bool)> {
                 if let Some(cell) = &self.cell {
                     return Some((cell.origin_call_id.as_str(), cell.running));
@@ -1828,8 +1760,7 @@ impl Registry {
                         .in_flight_omitted
                         .saturating_add(u32::try_from(evicted.len()).unwrap_or(u32::MAX));
                 }
-                // Kept, not removed: a result reaches the restored history only
-                // once a later checkpoint commits it (see commit_boundary).
+
                 AgentEventKind::ToolResult => {
                     let cell = call.cell();
                     let top_level =
@@ -1841,8 +1772,6 @@ impl Registry {
                     {
                         existing.result_recorded = true;
                         if existing.live && existing.parent_call_id.is_none() {
-                            // A yielded exec keeps running: its output is in
-                            // the conversation, but the cell is not finished.
                             if matches!(cell, Some((origin, true)) if origin == call.call_id) {
                                 existing.yielded = true;
                             } else {
@@ -1850,10 +1779,7 @@ impl Registry {
                             }
                         }
                     }
-                    // Only a terminal cell result (from its exec or a later
-                    // wait) reports the cell's nested work as finished. Nested
-                    // results never enter the conversation themselves, and a
-                    // yielded cell is lost with its runtime.
+
                     if top_level && let Some((origin, false)) = cell {
                         for listed in &mut session.in_flight_calls {
                             if !listed.live {
@@ -1864,7 +1790,6 @@ impl Registry {
                             {
                                 listed.settled = true;
                             } else if listed.call_id == origin && listed.yielded {
-                                // Settled by this terminal result once it commits.
                                 listed.yielded = false;
                                 listed.settled = true;
                             }
@@ -1892,11 +1817,6 @@ impl Registry {
             .and_then(|session| session.harness.clone())
     }
 
-    /// Restores a root's journaled task tree after a runtime restart.
-    ///
-    /// Restored children are non-resident and rehydrate on first use. Agents
-    /// whose turn was in flight are reported as interrupted; call
-    /// [`Self::resume_interrupted`] once the root handle is registered.
     pub async fn restore(
         self: &Arc<Self>,
         root_session_id: &str,
@@ -1909,7 +1829,7 @@ impl Registry {
         };
         let journal: durable::PersistedScope = serde_json::from_str(&payload)
             .map_err(|error| std::io::Error::other(format!("invalid subagent journal: {error}")))?;
-        // Embedded (version 1) journals carry whole child conversations.
+
         drop(payload);
         if !(durable::MIN_JOURNAL_VERSION..=durable::JOURNAL_VERSION).contains(&journal.version) {
             return Err(std::io::Error::other(format!(
@@ -1919,9 +1839,7 @@ impl Registry {
         }
         let mut agents = journal.agents;
         agents.sort_by_key(|agent| agent.descriptor.id);
-        // Current records stay in the store until a child runs. Older
-        // journals are loaded now so their per-family checkpoints can be
-        // upgraded with the child's lineage and re-recorded.
+
         let lazy = journal.version == durable::JOURNAL_VERSION;
         let mut stored = HashMap::new();
         for agent in &mut agents {
@@ -1962,7 +1880,7 @@ impl Registry {
             }
             match (stored.remove(&id), &session.stored_runtime) {
                 (Some(checkpoint), _) => self.insert_checkpoint(root_session_id, id, checkpoint),
-                // Embedded and per-family checkpoints become records on the next save.
+
                 (None, Some(snapshot)) => {
                     self.insert_checkpoint(
                         root_session_id,
@@ -1982,8 +1900,7 @@ impl Registry {
             }
         }
         drop(state);
-        // Persist each resume attempt before admitting it: a runtime lost during
-        // every resume must still exhaust its bounded recovery budget.
+
         if !report.interrupted.is_empty() || !report.completed.is_empty() {
             self.save_scope(root_session_id, store.as_ref())
                 .await
@@ -2002,7 +1919,6 @@ impl Registry {
         Ok(report)
     }
 
-    /// Synchronously saves one root's current journal, ordered with the writer.
     async fn save_scope(
         &self,
         root_session_id: &str,
@@ -2040,13 +1956,10 @@ impl Registry {
         Ok(())
     }
 
-    /// Continues every child whose turn was interrupted by the restart.
     pub async fn resume_interrupted(
         self: &Arc<Self>,
         root_session_id: &str,
     ) -> Vec<(AgentId, std::io::Result<MessageReceipt>)> {
-        // Each id stays pending until its resume delivery settles, so the
-        // directory never shows a child about to run as resting in between.
         let ids = self
             .pending_resume
             .lock()
@@ -2068,9 +1981,6 @@ impl Registry {
             }
         };
         for id in ids {
-            // Restate the current delegated task (the latest delegation, not
-            // the immutable authorization binding): a resumed child must
-            // finish it, not summarize partial progress as its result.
             let (task, evidence) = self
                 .state
                 .lock()
@@ -2106,7 +2016,7 @@ impl Registry {
                 )
                 .await;
             settle(id);
-            // Waiters treat a pending automatic resume as still running.
+
             self.changed();
             results.push((id, result));
         }
@@ -2128,7 +2038,6 @@ impl Registry {
         self.capacity.reserve_many(count)
     }
 
-    /// Installs a host routing policy before accepting child spawns.
     pub fn set_spawn_router(&self, router: Arc<dyn crate::SpawnRouter>) {
         *self
             .spawn_router
@@ -2161,8 +2070,6 @@ impl Registry {
             .contains_key(session_id)
     }
 
-    /// Resolve an owned child's session for host resource lifecycle management.
-    /// The caller must have the same management authority required for closure.
     pub async fn child_session_id(&self, caller: &str, id: AgentId) -> std::io::Result<String> {
         self.await_restored(caller).await?;
         let state = self.state.lock().await;
@@ -2175,7 +2082,6 @@ impl Registry {
             .ok_or_else(|| std::io::Error::other(format!("unknown agent_id {id}")))
     }
 
-    /// Returns embedding-private context for one retained child session.
     #[doc(hidden)]
     pub async fn host_context(&self, root_session_id: &str, id: AgentId) -> Option<Arc<str>> {
         self.state
@@ -2187,7 +2093,6 @@ impl Registry {
             .and_then(|session| session.host_context.as_ref().map(Arc::clone))
     }
 
-    /// Returns embedding-private context inherited by a descendant session.
     #[doc(hidden)]
     pub async fn host_context_for_session(&self, session_id: &str) -> Option<Arc<str>> {
         let state = self.state.lock().await;
@@ -2214,9 +2119,6 @@ impl Registry {
         (0..count).map(|_| state.reserve_for(session_id)).collect()
     }
 
-    /// Accepts a result and reports whether the acceptance is journaled. An
-    /// unsaved acceptance stays accepted in this runtime and the writer
-    /// retries; only a restart before it lands resumes the turn.
     pub(super) async fn submit_result_durably(
         self: &Arc<Self>,
         session_id: &str,
@@ -2243,7 +2145,6 @@ impl Registry {
         Ok((outcome, durable))
     }
 
-    /// Ok means saved; every skip, failure or interrupted write is an error.
     async fn persist_durably(self: &Arc<Self>, root_session_id: &str) -> std::io::Result<()> {
         let (done, saved) = oneshot::channel();
         let registry = Arc::clone(self);
@@ -2256,7 +2157,6 @@ impl Registry {
             .map_err(|_| std::io::Error::other("subagent journal write was interrupted"))?
     }
 
-    /// Runs (or queues) one agent's status work in order.
     fn send_status(&self, root_session_id: &str, update: AgentUpdate) {
         let id = match &update {
             AgentUpdate::Status { id, .. } | AgentUpdate::Completion { id, .. } => *id,
@@ -2267,7 +2167,6 @@ impl Registry {
 
     fn enqueue_status(&self, root_session_id: &str, id: AgentId, job: OrderedJob) {
         let Some(registry) = self.this.get().cloned() else {
-            // Registries outside an Arc (unit fixtures) deliver inline.
             match job {
                 OrderedJob::Update(update) => self.send(root_session_id, update),
                 OrderedJob::Settle {
@@ -2316,9 +2215,7 @@ impl Registry {
                     }
                     self.finish_pending_checkpoint(root_session_id);
                 }
-                // The pending completion is journaled before it is announced.
-                // A failed write still announces (the writer retries), and the
-                // completion stays pending until the host acknowledges it.
+
                 if let Err(error) = self.persist_durably(root_session_id).await {
                     tracing::warn!(%error, %root_session_id, "settled subagent turn not journaled yet; the writer retries");
                 }
@@ -2328,7 +2225,6 @@ impl Registry {
         }
     }
 
-    /// The host received a completion: stop re-announcing it.
     pub async fn acknowledge_completion(&self, root_session_id: &str, id: AgentId, revision: u64) {
         let acknowledged = {
             let mut state = self.state.lock().await;
@@ -2350,10 +2246,6 @@ impl Registry {
         }
     }
 
-    /// The live host could not take a completion (its callback failed or the
-    /// child was not yet bound). The completion stays pending in the journal,
-    /// so a restore announces it again; until then this re-announces it after
-    /// a bounded backoff while it is still the pending completion.
     pub fn retry_completion(self: &Arc<Self>, root_session_id: &str, id: AgentId, revision: u64) {
         let key = (root_session_id.to_owned(), id);
         let delay = {
@@ -2367,7 +2259,7 @@ impl Registry {
             completion_retry_delay(entry.0)
         };
         tracing::warn!(%id, revision, ?delay, "subagent completion was not delivered; retrying");
-        // A pending retry never keeps a shut-down runtime's registry alive.
+
         let registry = Arc::downgrade(self);
         drop(platform::spawn(async move {
             platform::sleep(delay).await;
@@ -2402,7 +2294,6 @@ impl Registry {
         }));
     }
 
-    /// Synchronously journals one root, ordered with the background writer.
     async fn persist_now(&self, root_session_id: &str) -> std::io::Result<()> {
         let Some(store) = self.store_for(root_session_id) else {
             return Err(std::io::Error::other("no subagent store is installed"));
@@ -2418,8 +2309,7 @@ impl Registry {
                 "subagent task tree is still restoring",
             ));
         }
-        // Ordered with the writer and shutdown: a frozen scope already wrote
-        // its final journal, which this must never overwrite.
+
         let _write_guard = self.journal_write_lock.lock().await;
         let payload = {
             let state = self.state.lock().await;
@@ -2446,9 +2336,6 @@ impl Registry {
         }
     }
 
-    /// Announces children completed during restore by an accepted result.
-    /// Completion notices are sent only after the journal records them, so
-    /// a turn still in flight with an accepted result was never announced.
     async fn announce_restored_completions(&self, root_session_id: &str, ids: &[AgentId]) {
         for &id in ids {
             let announced = {
@@ -2522,9 +2409,7 @@ impl Registry {
         contract: OutputContract,
     ) -> std::io::Result<()> {
         let OutputContract { validator, schema } = contract;
-        // Capture before publishing the child or starting its first turn. Native
-        // snapshots may wait for an active turn's conversation lock; spawning a
-        // background capture here can journal a child with no recovery state.
+
         let checkpoint = if self.store_for(&root_session_id).is_some() {
             match agent.checkpoint().await {
                 Ok(snapshot) => Some(snapshot),
@@ -2620,8 +2505,7 @@ impl Registry {
                 None
             } else {
                 let revision = session.next_instruction_revision.checked_add(1)?;
-                // Only the automatic resume continues the interrupted turn and
-                // its unknown calls; any other new turn starts without them.
+
                 if !matches!(session.status, AgentStatus::Interrupted) {
                     session.in_flight_calls.clear();
                     session.in_flight_omitted = 0;
@@ -2699,14 +2583,13 @@ impl Registry {
             session.active = false;
             let revision = session.active_instruction_revision.take();
             session.steering = false;
-            // The turn settled in this runtime, so restart recovery made progress.
+
             session.resume_attempts = 0;
             session.in_flight_calls.clear();
             session.in_flight_omitted = 0;
             session.in_flight_progress = durable::OmittedProgress::default();
             let submitted_output = session.submitted_output.take();
-            // Acceptance belongs to this turn even if cancellation/close wins settlement.
-            // Keep its evidence, without claiming the interrupted execution completed.
+
             if let Some(output) = &submitted_output {
                 session.last_output = Some(output.clone());
             }
@@ -2722,20 +2605,14 @@ impl Registry {
                 }
             }
             .clone_into(&mut session.status);
-            // Register capture while state is still locked: shutdown must not
-            // observe Completed before its final checkpoint is pending.
-            // The final checkpoint is pending from here; the ordered settle job
-            // captures it off this harness loop, which must stay free to answer.
+
             let harness = session
                 .harness
                 .clone()
                 .filter(|_| self.begin_pending_checkpoint(root_session_id));
             let settled = revision.unwrap_or(session.next_instruction_revision);
             session.settled_revision = Some(settled);
-            // Only a root child's completion needs the host outbox (an idle
-            // root conversation may need a wake). A nested parent reads its
-            // children from this registry, whose journal records the Completed
-            // status before any announcement, so there is nothing to ack.
+
             let completion = (matches!(session.status, AgentStatus::Completed { .. })
                 && session.descriptor.parent.is_none())
             .then_some(settled);
@@ -2744,8 +2621,7 @@ impl Registry {
             }
             (session.status.clone(), completion, harness)
         };
-        // Never await the journal here: capture -> journal -> announce runs in
-        // order on this agent's status queue.
+
         let (status, completion, harness) = status;
         self.enqueue_status(
             root_session_id,
@@ -2767,9 +2643,6 @@ impl Registry {
     async fn enforce_resident_limit(&self, root_session_id: &str) {
         let _residency_guard = self.residency_lock.lock().await;
         loop {
-            // Serialize candidate selection with delivery admission. A message
-            // is committed before this guard becomes available, so pending
-            // mailbox work makes its target ineligible for eviction.
             let _message_guard = self.message_lock.lock().await;
             let eviction = self
                 .state
@@ -2781,8 +2654,6 @@ impl Registry {
             };
             match harness.snapshot().await {
                 Ok(snapshot) => {
-                    // A durable host reloads an evicted child from its journal
-                    // record; only non-durable hosts keep the snapshot in memory.
                     let stored = if self.store_for(root_session_id).is_some()
                         && self.record_checkpoint(root_session_id, id, snapshot.clone())
                     {
@@ -2821,8 +2692,7 @@ impl Registry {
             if harness.close().await.is_err() {
                 self.harness_closed(root_session_id, id).await;
             }
-            // Drain the old generation before another delivery may rehydrate this
-            // ID. Its late runtime_closed callback must never close the new driver.
+
             let tasks = {
                 let mut state = self.state.lock().await;
                 let session = state
@@ -2848,9 +2718,7 @@ impl Registry {
             let Some(scope) = state.scopes.get_mut(root_session_id) else {
                 return;
             };
-            // close_all sets this only after taking message_lock, so an
-            // explicit close already draining its harness stays a permanent
-            // release even if shutdown has started waiting for that lock.
+
             let detach = scope.closing;
             let Some(session) = scope.sessions.get_mut(&id) else {
                 return;
@@ -2918,8 +2786,7 @@ impl Registry {
         let mut entries = state.directory(session_id, include_completed, include_self);
         let root = state.root_session_id(session_id).to_owned();
         drop(state);
-        // A restored child whose automatic resume has not been delivered yet
-        // will run; mark it so hosts keep the runtime resident until then.
+
         if let Some(resuming) = self
             .pending_resume
             .lock()
@@ -2934,7 +2801,6 @@ impl Registry {
         Ok(entries)
     }
 
-    /// Keep weak factory capabilities, never a second owner of a child driver.
     pub(crate) fn register_handle(self: &Arc<Self>, handle: AgentHandle) {
         self.adopt_journal(&handle);
         self.session_handles
@@ -2943,8 +2809,6 @@ impl Registry {
             .insert(handle.session_id().to_owned(), handle);
     }
 
-    // Caller holds residency_lock and message_lock, fencing eviction, close and
-    // competing deliveries until the exact child is rehydrated and admitted.
     async fn rehydrate(
         self: &Arc<Self>,
         session_id: &str,
@@ -3056,8 +2920,7 @@ impl Registry {
             session.harness_task = Some(task);
             session.event_task = Some(event_task);
             session.evicted = false;
-            // Publish the host binding before releasing the child's event stream.
-            // In-memory eviction keeps its existing binding; journal restoration does not.
+
             let announce = std::mem::take(&mut session.announce).then(|| {
                 let mut descriptor = session.descriptor.clone();
                 descriptor.task = session.binding_task.clone();
@@ -3242,8 +3105,7 @@ impl Registry {
             return Err(std::io::Error::other("agent_ids must not be empty"));
         }
         let mut revision = self.revision.subscribe();
-        // A caller timeout beyond the clock's range waits until an agent
-        // becomes terminal instead of overflowing the deadline.
+
         let deadline = Instant::now().checked_add(duration);
         loop {
             let (snapshot, root) = {
@@ -3251,9 +3113,7 @@ impl Registry {
                 let root = state.root_session_id(session_id).to_owned();
                 (state.wait_snapshot(session_id, ids)?, root)
             };
-            // A restored child whose automatic resume is not yet delivered is
-            // about to run. Reporting it as interrupted let a waiting parent
-            // conclude it stopped and re-delegate the same work.
+
             let resuming = self
                 .pending_resume
                 .lock()
@@ -3274,8 +3134,7 @@ impl Registry {
                 .collect::<Vec<_>>();
             let all_terminal = terminal.len() == snapshot.len();
             let summaries = snapshot.into_iter().map(|(summary, _)| summary).collect();
-            // Only results this caller has not seen end a wait. Re-reporting
-            // seen results instantly turned code-mode wait loops into spins.
+
             let fresh = {
                 let mut reported = lock_unpoisoned(&self.wait_reported);
                 terminal.iter().fold(false, |fresh, &(id, mark)| {
@@ -3287,8 +3146,6 @@ impl Registry {
                 return Ok((summaries, false));
             }
             if all_terminal {
-                // Nothing new can arrive: return the snapshot so a re-read
-                // works, but reject a loop that keeps asking.
                 let mut key = ids.to_vec();
                 key.sort_unstable();
                 key.dedup();
@@ -3368,9 +3225,22 @@ impl Registry {
             .await
     }
 
-    async fn close_batch(&self, root_session_id: &str, ids: Vec<AgentId>) {
+    async fn close_batch(&self, root_session_id: &str, ids: Vec<AgentId>) -> std::io::Result<()> {
+        let mut errors = Vec::new();
         for id in ids.into_iter().rev() {
-            drop(self.close(root_session_id, id).await);
+            if let Err(error) = self.close(root_session_id, id).await {
+                errors.push(format!("subagent {id}: {error}"));
+            }
+        }
+        if self.store_for(root_session_id).is_some()
+            && let Err(error) = self.persist_now(root_session_id).await
+        {
+            errors.push(format!("persisting startup cleanup: {error}"));
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(std::io::Error::other(errors.join("; ")))
         }
     }
 
@@ -3390,8 +3260,7 @@ impl Registry {
                 .contains_key(&root);
             if captures_pending {
                 drop(state);
-                // A wedged harness must not block teardown forever; freeze the
-                // newest checkpoint already recorded once the deadline passes.
+
                 match timeout_at(capture_deadline, revision.changed()).await {
                     Ok(Ok(())) => continue,
                     Ok(Err(_)) => {
@@ -3407,9 +3276,7 @@ impl Registry {
                     }
                 }
             }
-            // A repeated shutdown (for example a retry after a failed first
-            // flush) must not replace the pre-teardown journal with its
-            // live Closing/Closed statuses.
+
             let frozen = state
                 .scopes
                 .get(&root)
@@ -3427,8 +3294,7 @@ impl Registry {
                 }
                 _ => None,
             };
-            // Freeze and transition under one state lock. Explicit closes that
-            // won message_lock are already reflected in this durable snapshot.
+
             break (state.request_close_all(session_id)?, final_journal);
         };
         let CloseRequest {
@@ -3444,8 +3310,7 @@ impl Registry {
             Ok(())
         };
         drop(write_guard);
-        // Even if persistence failed, join the live subtree; report the error
-        // after cleanup rather than leaving children running during shutdown.
+
         for (id, status) in status_updates {
             self.send_status(&root_session_id, AgentUpdate::Status { id, status });
         }
@@ -3455,9 +3320,6 @@ impl Registry {
             .stop_and_close(root_session_id, ids, harnesses, true)
             .await;
         if result.is_ok() {
-            // Factory recipes may retain the embedding's registry. Drop the root
-            // capability at scope shutdown so those approved recipes do not form
-            // a retained registry/factory cycle after all drivers have drained.
             self.session_handles
                 .write()
                 .expect("session handles poisoned")
@@ -3482,9 +3344,7 @@ impl Registry {
         let closing_result = self.close_harnesses(harnesses, deadline).await;
         self.wait_until_inactive(&root_session_id, &ids, deadline)
             .await?;
-        // Closing an already-finished driver can race with its natural shutdown.
-        // Once every harness reports inactive, command errors no longer identify
-        // a live resource and must not prevent task handles from being joined.
+
         drop(closing_result);
         let ClosedSessions {
             summaries,
@@ -3683,8 +3543,6 @@ fn complete_session(session: &mut ChildSession, output: Option<Value>) -> AgentS
     AgentStatus::Completed { output }
 }
 
-/// Preserve valid JSON values; tolerate one encoded container only when the
-/// decoded value independently satisfies the exact child contract.
 fn validate_submitted_output(
     validator: &Validator,
     output: Value,
@@ -3812,8 +3670,6 @@ impl SubagentControl {
         self.registry.set_max_concurrency(limit);
     }
 
-    /// Changes the maximum number of reusable subagent runtimes retained after
-    /// their turns become inactive. Values below one are clamped to one.
     pub fn set_max_resident(&self, limit: usize) {
         self.registry.set_max_resident(limit);
     }
@@ -3844,10 +3700,6 @@ pub(super) fn forward_events(
             return;
         }
         while let Some(event) = events.recv().await {
-            // Each provider call starts from a committed step (prompt plus all
-            // finished tool results), and each tool batch begins at one. Claude
-            // reports only a provider call's completion, still before any tool
-            // of the round it returned runs.
             let boundary = matches!(
                 event.kind,
                 AgentEventKind::ModelCallStarted | AgentEventKind::ModelCallCompleted
@@ -3890,8 +3742,6 @@ pub(super) fn forward_events(
     })
 }
 
-/// Enclosing Code Mode cell of a nested call. Claude events name it; Codex
-/// nested call IDs embed it as "PARENT/code-N".
 fn parent_call<'a>(call_id: &'a str, parent_call_id: Option<&'a str>) -> Option<&'a str> {
     parent_call_id
         .filter(|parent| !parent.is_empty())

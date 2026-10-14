@@ -1,10 +1,3 @@
-//! Registry-publishable WebSocket connection policy.
-//!
-//! The proxy and Happy Eyeballs behavior is adapted from the MIT-licensed
-//! `openai-oss-forks/{tokio-tungstenite,tungstenite-rs}` revisions previously
-//! pinned by this workspace. Keeping it here preserves that behavior while the
-//! public crate depends only on crates.io packages.
-
 use std::{collections::VecDeque, env, future::Future, io, net::SocketAddr, time::Duration};
 
 use base64::{Engine, engine::general_purpose::STANDARD};

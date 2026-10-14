@@ -1,12 +1,8 @@
-//! Backend-owned native default catalog and its per-session cleanup.
 use nanocode_agent::{AgentHandle, NanocodexError, Result};
-use nanocode_code_mode::{Tool, ToolContext, ToolDefinition, ToolInput, ToolResult, Tools};
-use nanocode_tools::async_trait;
+use nanocode_code_mode::{Tool, Tools};
+use nanocode_tools::ToolCollection as _;
 use std::{path::PathBuf, sync::Arc};
 
-/// Installs canonical Claude file/Bash tools, or a caller's replacement selection,
-/// plus additive shared tools (for example host-provided computer tools).
-/// Background Bash jobs belong to this catalog and are joined during shutdown.
 pub fn install_default_tools(
     workspace: PathBuf,
     handle: &AgentHandle,
@@ -33,13 +29,14 @@ pub fn install_default_tools(
             .map_err(|error| NanocodexError::InvalidRequest(error.to_string()))?
         }
     };
-    let mut builder = selected.into_builder();
-    for tool in additive {
-        builder = builder.tool(SharedTool(tool));
-    }
-    let selected = builder
+    let mut selected = selected
+        .into_builder()
+        .exposure(nanocode_code_mode::ToolExposure::CodeModeOnly)
         .build()
         .map_err(|error| NanocodexError::InvalidRequest(error.to_string()))?;
+    for tool in additive {
+        selected = selected.add_shared_tool(tool)?;
+    }
     Ok(
         crate::claude_tools::install(&selected, workspace, handle)?.adapter_shutdown(move || {
             let jobs = jobs.clone();
@@ -48,15 +45,4 @@ pub fn install_default_tools(
             }
         }),
     )
-}
-
-struct SharedTool(Arc<dyn Tool>);
-#[async_trait]
-impl Tool for SharedTool {
-    fn definition(&self) -> ToolDefinition {
-        self.0.definition()
-    }
-    async fn execute(&self, input: ToolInput, context: ToolContext<'_>) -> ToolResult {
-        self.0.execute(input, context).await
-    }
 }

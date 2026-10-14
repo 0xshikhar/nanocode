@@ -13,7 +13,6 @@ use crate::{
 
 const MAX_SKILLS_PER_ROOT: usize = 512;
 
-/// A directory whose children are `<name>/SKILL.md` skill folders.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct SkillRoot {
     pub path: PathBuf,
@@ -31,25 +30,21 @@ impl SkillRoot {
     }
 }
 
-/// One discovered skill folder. The name is the folder name (Claude Code's
-/// rule); consumers parse `SKILL.md` frontmatter themselves.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct SkillEntry {
     pub name: String,
-    /// The folder as found under its root (may be a symlink).
+
     pub dir: PathBuf,
     pub skill_md: PathBuf,
-    /// Symlink-resolved folder, used for deduplication.
+
     pub canonical_dir: PathBuf,
     pub root: SkillRoot,
 }
 
-/// Resolved skills: one winner per name, plus every shadowed candidate.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct SkillSet {
-    /// Winners, sorted by name.
     pub skills: Vec<SkillEntry>,
-    /// Same-named skills from lower-precedence roots, in root order.
+
     pub shadowed: Vec<SkillEntry>,
     pub diagnostics: Vec<Diagnostic>,
 }
@@ -60,8 +55,6 @@ impl SkillSet {
     }
 }
 
-/// Resolves `roots` in precedence order (first wins). Symlinked skill folders
-/// are followed; a folder reached twice (same canonical path) is listed once.
 pub fn resolve_skills(roots: &[SkillRoot]) -> SkillSet {
     let mut set = SkillSet::default();
     let mut winners: BTreeMap<String, SkillEntry> = BTreeMap::new();
@@ -199,27 +192,20 @@ pub(crate) fn user_skill_roots(home: &AgentHome) -> Vec<SkillRoot> {
 }
 
 impl AgentHome {
-    /// User-level skill roots in precedence order: `$CODEX_HOME/skills`,
-    /// `$CLAUDE_CONFIG_DIR/skills`, then `~/.agents/skills` (when the user
-    /// home is known). Roots need not exist.
     pub fn skill_roots(&self) -> Vec<SkillRoot> {
         user_skill_roots(self)
     }
 
-    /// User-level skills resolved over [`Self::skill_roots`].
     pub fn skills(&self) -> SkillSet {
         resolve_skills(&self.skill_roots())
     }
 
-    /// User and project skill roots: user roots first (personal skills win,
-    /// as in Claude Code), then [`ProjectHome::skill_roots`].
     pub fn skill_roots_for(&self, project: &ProjectHome) -> Vec<SkillRoot> {
         let mut roots = self.skill_roots();
         roots.extend(project.skill_roots());
         roots
     }
 
-    /// Skills resolved over [`Self::skill_roots_for`].
     pub fn skills_for(&self, project: &ProjectHome) -> SkillSet {
         resolve_skills(&self.skill_roots_for(project))
     }

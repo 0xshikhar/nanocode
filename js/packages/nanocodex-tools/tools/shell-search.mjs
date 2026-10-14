@@ -1,5 +1,5 @@
-// Host-owned search/text commands. Literal-context searches avoid synchronous
-// RE2; other regex/program syntax stays upstream behind source/read admission.
+
+
 const CHUNK = 64 * 1024;
 const FALLBACK_WORK = 2_000_000;
 const encoder = new TextEncoder();
@@ -23,10 +23,10 @@ export function createSearchCommands({ Bash }) {
           try { if ((await ctx.fs.stat(ctx.fs.resolvePath(ctx.cwd, path))).isDirectory) directoryInput = true; } catch {}
         }
         const fallback = () => boundedCommand(command, name, args, ctx, searchArguments(name, args));
-        // Explicit -i and upstream smart-case share cooperative ASCII folding.
-        // Smart-case checks ASCII capitals in the original pattern.
-        // Fold ASCII literals cooperatively, but leave Unicode case folding and
-        // upstream's Unicode prefilter semantics with the original command.
+
+
+
+
         const smartCase = name === "rg" && template && (parsed.ignoreCase || !/[A-Z]/.test(parsed.pattern));
         const asciiCase = smartCase && /^[\x00-\x7f]*$/.test(template.literal);
         if (template && (!smartCase || asciiCase) && !directoryInput && (parsed.files.length > 0 || ctx.stdin.length > 0 || name !== "rg")) {
@@ -42,8 +42,8 @@ export function createSearchCommands({ Bash }) {
   }));
 }
 
-// Load/admit every source before the original can compile. The final budget
-// includes stdin AND source files, plus every subsequent data read.
+
+
 async function boundedCommand(command, name, args, ctx, plan) {
   if (plan.uncertain) return refusal(ctx, name, "uncertain regex/script admission; use a native Hand");
   const paths = plan.paths ?? new Set();
@@ -61,7 +61,7 @@ async function boundedCommand(command, name, args, ctx, plan) {
     const path = ctx.fs.resolvePath(ctx.cwd, operand);
     sourcePaths.add(path);
     let stat;
-    try { stat = await ctx.fs.stat(path); } catch { continue; } // Upstream owns missing-file diagnostics.
+    try { stat = await ctx.fs.stat(path); } catch { continue; }
     if (stat.isDirectory) continue;
     if (stat.size > Math.min(8192 - sourceBytes, ctx.limits.maxInputBytes - retained)) return refusal(ctx, name, "synchronous regex/script-file compilation admission; use a native Hand");
     const text = await ctx.fs.readFile(path);
@@ -72,8 +72,8 @@ async function boundedCommand(command, name, args, ctx, plan) {
   if (sourceBytes > 8192) return refusal(ctx, name, "synchronous regex/script compilation admission; use a native Hand");
   const policy = name === "sed" || name === "awk" ? programPolicy(name, programs, plan) : {};
   if (policy.uncertain) return refusal(ctx, name, "uncertain dynamic regex admission; use a native Hand");
-  // Recognized search and stream sources are isolated from data operands.
-  // A filename such as report{5000}.txt is not regex source.
+
+
   const cost = policy.safe ? 1 : name === "sed" || name === "awk"
     ? Math.max(sourceBytes, fallbackCost(policy.costSources ?? programs)) : Math.max(fallbackCost(plan.costSources ?? []), fallbackCost(programs));
   if (cost >= FALLBACK_WORK) return refusal(ctx, name, "synchronous regex compilation/work admission; simplify the pattern or use a native Hand");
@@ -90,8 +90,8 @@ async function boundedCommand(command, name, args, ctx, plan) {
         if (cache.has(path)) {
           const supplied = cacheReads.get(path) ?? 0;
           cacheReads.set(path, supplied + 1);
-          // The first source read was precharged. Later reads may also name
-          // this file as data; charge them even though storage is cached.
+
+
           if (supplied > 0) {
             const size = cacheSizes.get(path);
             if (size > cap - retained) {
@@ -112,7 +112,7 @@ async function boundedCommand(command, name, args, ctx, plan) {
           limit(ctx, name, changed);
         }
         if (stat.size > cap - retained) {
-          // Fatal accounting prevents upstream catches from masking admission.
+
           limit(ctx, name, reason());
         }
         retained += stat.size;
@@ -157,7 +157,7 @@ function parseArgs(name, args) {
     else value.files.push(arg);
   }
   if (value.pattern === undefined || !Number.isSafeInteger(value.max)) return;
-  // rg -c/-m/-L/-h have different contracts; delegate rather than approximate.
+
   if (name === "rg" && (value.count || value.max || value.filesWithout || args.includes("-h"))) return;
   return value;
 }
@@ -180,7 +180,7 @@ function parseTemplate(pattern, mode) {
     if (char === "\\") {
       const next = pattern[++i];
       if (next === undefined || !/[.*+?^${}()|[\]\\/\-]/.test(next)) return;
-      // Basic regular expression escaped grouping/quantifiers are operators, not literals.
+
       if (mode === "basic" && /[(){}|]/.test(next)) return;
       literal += next;
     } else {
@@ -230,8 +230,8 @@ async function search(name, parsed, template, ctx, unicodeFallback) {
       errors += `${diagnostic}: ${file}: No such file or directory\n`; continue;
     }
     if (name === "rg" && text.includes("\0")) continue;
-    // Do not lowercase an unbounded string or change Unicode match offsets.
-    // Returning the original command also preserves its whole-line prefilter.
+
+
     if (unicodeFallback) {
       for (let offset = 0; offset < text.length; offset += CHUNK) {
         if (/[^\x00-\x7f]/.test(text.slice(offset, offset + CHUNK))) return await unicodeFallback();
@@ -240,8 +240,8 @@ async function search(name, parsed, template, ctx, unicodeFallback) {
     }
     let selected = 0, lineNumber = 0, position = 0, lastYield = 0;
     while (position < text.length) {
-      // Finding a newline and literals in bounded windows keeps timers responsive
-      // even for minified single-line files. Do not split/retain the whole input.
+
+
       let lineEnd = position;
       while (lineEnd < text.length) {
         const end = Math.min(text.length, lineEnd + CHUNK);
@@ -339,8 +339,8 @@ function fallbackCost(args) {
   return Math.max(1, Math.min(FALLBACK_WORK, source.length * repeat));
 }
 function failure(name, reason) { return { stdout: "", stderr: `${name}: ${reason}\n`, exitCode: 126 }; }
-// Resource admission is execution-fatal, not ordinary command status. A
-// successful final pipeline command must not authorize following shell effects.
+
+
 function refusal(ctx, name, reason) {
   chargeRefusal(ctx, name, reason);
   return failure(name, reason);
@@ -349,8 +349,8 @@ function chargeRefusal(ctx, name, reason) {
   try {
     ctx.executionScope?.consumeLimited("search_admission", 1, 0, `${name}: ${reason}`);
   } catch (error) {
-    // Preserve upstream's fatal error identity while allowing local file-read
-    // catches to distinguish admission from ordinary missing-file diagnostics.
+
+
     error.shellLimit = true;
     error.fatalSearchAdmission = true;
     throw error;
@@ -361,9 +361,9 @@ function limit(ctx, name, reason) {
   throw Object.assign(new Error(`${name}: ${reason}`), { shellLimit: true });
 }
 
-// Admission grammar for the installed upstream search parsers, not a second
-// command parser. Unknown forms retain whole-argv costing and the old source
-// file scan. In particular, rg does not recognize -- as an option terminator.
+
+
+
 function searchArguments(name, args) {
   const legacy = () => ({ paths: patternFilePaths(args), costSources: args });
   const rg = name === "rg", paths = [], sources = [], operands = [];
@@ -371,13 +371,13 @@ function searchArguments(name, args) {
   const longFlags = new Set((rg
     ? "ignore-case case-sensitive smart-case fixed-strings word-regexp line-regexp invert-match multiline multiline-dotall count count-matches files files-with-matches files-without-match stats only-matching quiet no-line-number line-number with-filename no-filename null byte-offset column no-column vimgrep json hidden no-ignore no-ignore-dot no-ignore-vcs follow search-zip text heading passthru include-zero glob-case-insensitive unrestricted"
     : "ignore-case line-number invert-match count files-with-matches files-without-match recursive word-regexp line-regexp extended-regexp perl-regexp fixed-strings only-matching no-filename quiet silent").split(" "));
-  // Glob/type/preprocessor options can introduce other regex sources. Leave
-  // those and unrecognized value options on the conservative legacy path.
+
+
   const rgValues = { regexp: "e", file: "f", "max-count": "m", replace: "r", "max-depth": "d", "max-filesize": "size", "context-separator": "separator", threads: "j" };
   const add = (flag, value) => {
     if (flag === "f") paths.push(value);
     else if (flag === "e") {
-      if (!rg) sources.length = 0; // grep keeps only its last standalone -e.
+      if (!rg) sources.length = 0;
       sources.push(value);
     }
   };
@@ -400,13 +400,13 @@ function searchArguments(name, args) {
       if (value === undefined) return legacy();
       add(flag, value); continue;
     }
-    // Both parsers handle context counts before expanding short clusters.
+
     if (/^-[ABC]\d+$/.test(arg) || /^-m\d+$/.test(arg)) continue;
     if (["-A", "-B", "-C", "-m", "-e"].includes(arg)) {
       if (args[i + 1] === undefined) return legacy();
       add(arg[1], args[++i]); continue;
     }
-    // rg first recognizes attached value options at the start of an argument.
+
     if (rg && "efmrdj".includes(arg[1]) && arg.length > 2) { add(arg[1], arg.slice(2)); continue; }
     for (let j = 1; j < arg.length; j++) {
       const flag = arg[j];
@@ -415,8 +415,8 @@ function searchArguments(name, args) {
         if (value === undefined) return legacy();
         add(flag, value); break;
       }
-      // Unlike grep's attached -f, each rg value flag within a cluster
-      // consumes the next argv entry, then parsing resumes in that cluster.
+
+
       if (rg && "efmrdj".includes(flag)) {
         if (args[i + 1] === undefined) return legacy();
         add(flag, args[++i]); continue;
@@ -447,8 +447,8 @@ function patternFilePaths(args) {
   return paths;
 }
 
-// Small source-option grammar. Unknown source-producing options route before
-// parsing; the original interpreter retains ordinary execution semantics.
+
+
 function programArguments(name, args) {
   const paths = [], sources = [];
   let options = true, haveProgram = false, separatorsSafe = true;
@@ -492,17 +492,17 @@ function programArguments(name, args) {
 function programPolicy(name, programs, plan) {
   if (plan.help) return { safe: true };
   if (name === "sed") {
-    // Numeric addressing and these no-argument operations cannot compile a
-    // user regex. Other sed programs use conservative regex work admission.
+
+
     const safe = programs.every((source) => source.split(/[;\n]/).every((part) => !part.trim()
       || /^\s*(?:(?:\d+(?:\s*~\s*\d+)?|\$)(?:\s*,\s*(?:\+?\d+|\$))?\s*)?!?\s*[pdnNhHgGx=DPlq]\s*\d*\s*$/.test(part)));
-    // Recognize only one complete slash-delimited substitution with a nonempty
-    // pattern and ordinary flags. Replacement braces are literal output, not
-    // repetition counts. Empty-pattern reuse, addresses, extra commands and
-    // other delimiters retain the conservative whole-program cost. Bracket
-    // expressions also stay conservative: upstream ignores slash delimiters
-    // inside them, so a delimiter-only scan cannot identify their replacement.
-    // Keep the full source length as a work floor at the call site.
+
+
+
+
+
+
+
     const costSources = programs.map((source) => {
       const substitution = source.match(/^\s*s\/((?:\\[^\r\n]|[^/\\\r\n])+)\/((?:\\[^\r\n]|[^/\\\r\n])*)\/[gp]*\s*$/);
       return substitution && !substitution[1].includes("[") ? substitution[1] : source;
@@ -513,8 +513,8 @@ function programPolicy(name, programs, plan) {
   const noRegex = (source) => !/[\/~@|]/.test(source)
     && !/\b(?:sub|gsub|match|split|gensub|patsplit|FS|RS|FPAT|FIELDWIDTHS|ARGV|ARGC|ENVIRON|getline|system|eval)\b/.test(source);
   if (programs.every(noRegex)) return { safe: true };
-  // Only a static record regex plus a non-regex action is admitted. Dynamic
-  // operands, regex builtins and programmable separators route before compile.
+
+
   const staticPatterns = programs.every((source) => {
     const pattern = source.match(/^\s*(?:\$\d+\s*~\s*)?\/((?:\\.|[^/])*)\/\s*(\{[\s\S]*\})?\s*$/);
     return pattern && noRegex(pattern[2] ?? "");

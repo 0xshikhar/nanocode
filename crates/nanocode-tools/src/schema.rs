@@ -1,7 +1,6 @@
 use schemars::{JsonSchema, r#gen::SchemaSettings};
 use serde_json::{Map, Value};
 
-/// Produces the compact JSON Schema shape used for macro-generated tools.
 #[doc(hidden)]
 #[must_use]
 pub fn schema_for<T: JsonSchema>() -> Value {

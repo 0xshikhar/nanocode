@@ -1,6 +1,3 @@
-// Derived from clabby/tact@1d9ccaefd1d8613dab020812af04a91cd9b4c52c (Apache-2.0).
-// Modified for Nanocodex's reusable native/WASM extension runtime.
-
 use nanocode_agent::events::AgentEvent;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -16,7 +13,6 @@ static NEXT_RUNTIME_ID: AtomicU64 = AtomicU64::new(0);
 pub struct AgentId(u64);
 
 impl AgentId {
-
     pub(super) const fn next(counter: &mut u64) -> Self {
         *counter = counter.saturating_add(1);
         Self(*counter)
@@ -46,7 +42,6 @@ impl FromStr for AgentId {
 pub struct MessageId(u64);
 
 impl MessageId {
-
     pub(super) const fn next(counter: &mut u64) -> Self {
         *counter = counter.saturating_add(1);
         Self(*counter)
@@ -116,7 +111,7 @@ pub enum MessagePurpose {
     Coordinate,
     Finding,
     Question,
-    /// Answer a received message; requires a reference and reversed direction.
+
     Reply,
 }
 
@@ -148,8 +143,7 @@ pub struct AgentMessage {
     pub to: AgentId,
     pub priority: MessagePriority,
     pub purpose: MessagePurpose,
-    /// Correlates with an existing two-party thread, independently of intent.
-    /// Only explicit replies require reversing the referenced message direction.
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub in_reply_to: Option<MessageId>,
     pub body: String,
@@ -290,10 +284,7 @@ pub enum AgentUpdate {
         id: AgentId,
         status: AgentStatus,
     },
-    /// A completed turn's status with the instruction revision identifying
-    /// that logical completion. The registry journals it as pending before
-    /// announcing it, re-announces it after every restore, and clears it only
-    /// when the host acknowledges delivery (Registry::acknowledge_completion).
+
     Completion {
         id: AgentId,
         status: AgentStatus,
@@ -303,8 +294,6 @@ pub enum AgentUpdate {
 }
 
 pub struct ScopedAgentUpdate {
-    /// A closed status tears down only live resources; durable bindings survive.
-    /// Captured by the registry when closing, independent of observer scheduling.
     pub detach: bool,
     pub root_session_id: String,
     pub update: AgentUpdate,

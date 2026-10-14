@@ -1,5 +1,4 @@
-//! Owned OpenAI agent lifecycle for Nanocodex.
-#![deny(missing_docs, rustdoc::broken_intra_doc_links)]
+#![deny(rustdoc::broken_intra_doc_links)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 #[cfg(all(target_family = "wasm", not(target_os = "unknown")))]
@@ -18,31 +17,22 @@ mod reasoning;
 mod registration;
 #[cfg(feature = "openai")]
 mod service_tier_serde;
-pub use harness::{ClaudeModel, HarnessFamily, HarnessModel, ModelCapabilities, ModelTransport};
+pub use harness::{ClaudeModel, HarnessFamily, ModelCapabilities, ModelSelection, ModelTransport};
 #[cfg(feature = "openai")]
 mod model;
 #[cfg(feature = "openai")]
 mod prompt_cache;
-/// Neutral interception contract implemented by optional execution layers.
+
 #[cfg(feature = "openai")]
 #[cfg_attr(docsrs, doc(cfg(feature = "openai")))]
 pub mod execution {
     pub use crate::agent::execution::*;
 }
-#[cfg(all(feature = "rollout", not(target_family = "wasm")))]
-#[cfg_attr(
-    docsrs,
-    doc(cfg(all(feature = "rollout", not(target_family = "wasm"))))
-)]
-/// Codex-compatible durable rollout recording and restoration.
-pub mod rollout;
-/// Harness-neutral session identity, lineage, checkpoints, forks, and
-/// capabilities, plus the Codex-native snapshot payload.
+
 pub mod session;
-/// Per-turn token accounting and USD estimates.
+
 pub mod usage;
 
-/// Backend implementor surface used by first-party lifecycle crates.
 #[doc(hidden)]
 pub mod backend {
     pub use crate::agent::backend::*;
@@ -50,6 +40,10 @@ pub mod backend {
     pub use crate::session::TurnBoundary;
 }
 
+pub use crate::client::{Model, ReasoningMode, Thinking, events::AgentEvents};
+#[cfg(feature = "openai")]
+#[cfg_attr(docsrs, doc(cfg(feature = "openai")))]
+pub use crate::client::{OpenAi, ResponseError, ResponseErrorKind};
 pub use agent::{
     AgentHandle, AgentSessionContext, BuilderBackend, Nanocodex, PromptRequest, PromptRoute,
     SpawnOptions, Turn, TurnControl, TurnResult, WeakAgent,
@@ -66,10 +60,6 @@ pub use nanocode_code_mode::tool;
 #[cfg(feature = "openai")]
 #[cfg_attr(docsrs, doc(cfg(feature = "openai")))]
 pub use nanocode_code_mode::{Tool, Tools};
-pub use crate::client::{Model, ReasoningMode, Thinking, events::AgentEvents};
-#[cfg(feature = "openai")]
-#[cfg_attr(docsrs, doc(cfg(feature = "openai")))]
-pub use crate::client::{OpenAi, ResponseError, ResponseErrorKind};
 pub use session::{
     Capabilities, ForkPoint, ForkRequest, Lineage, Mutability, Origin, Persistence,
     SessionCheckpoint, SessionInfo,
@@ -78,7 +68,6 @@ pub use usage::{
     CostStatus, EstimatedUsdCost, ReportedTurnUsage, ServiceTier, TurnUsage, UsdAmount,
 };
 
-/// Complete typed lifecycle events emitted by an agent.
 pub mod events {
     #[cfg(feature = "openai")]
     pub use crate::client::events::OpenAiEvent;
@@ -97,7 +86,6 @@ pub mod events {
     pub use crate::client::responses::AgentMessageContent;
 }
 
-/// Prompts and multimodal user input accepted by the agent.
 pub mod input {
     pub use crate::client::{
         ImageDetail, Prompt, PromptInput, PromptMessage, PromptMessageRole, UserInput,
@@ -105,11 +93,9 @@ pub mod input {
     };
 }
 
-/// Advanced Responses transport and Tower service configuration.
 #[cfg(all(feature = "openai", not(target_family = "wasm")))]
 #[cfg_attr(docsrs, doc(cfg(all(feature = "openai", not(target_family = "wasm")))))]
 pub mod transport {
-    pub use crate::error::ResponsesError;
     pub use crate::client::{
         responses::RequestProfile,
         tower::{
@@ -118,9 +104,9 @@ pub mod transport {
         },
         transport::{ResponsesHistory, ResponsesTransport},
     };
+    pub use crate::error::ResponsesError;
 }
 
-/// Complete tool contracts, registry, built-ins, Code Mode, and MCP.
 #[cfg(feature = "openai")]
 #[cfg_attr(docsrs, doc(cfg(feature = "openai")))]
 pub mod tools {
@@ -134,15 +120,13 @@ pub mod __private {
     pub use nanocode_code_mode::__private::*;
 }
 
-/// Responses client and transport implementation.
 pub mod client;
-/// Codex-specific HTTP tools.
+
 pub mod builtin_tools;
 pub use error::ErrorExt;
 
 #[cfg(feature = "openai")]
 pub use agent::checkpoint::CodexCheckpointExt;
 
-/// Typed configuration for the Codex backend.
 #[cfg(feature = "openai")]
 pub use crate::client::OpenAi as Codex;

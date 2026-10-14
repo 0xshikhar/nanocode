@@ -81,7 +81,7 @@ export function imageGeneration(options = {}) {
         result = requireObject(
           await request({ images: images.map(value => {
             const ref = imageReference(value);
-            // Preserve existing inline-only transport payloads for custom hosts.
+
             return typeof value === "string" ? ref.image_url : ref;
           }), prompt, transparent_background: transparent }, context.signal),
           "image_gen__imagegen response",
@@ -92,7 +92,7 @@ export function imageGeneration(options = {}) {
         return toolResult(error.message, failure, { success: false, value: failure, metadata: error.image_ids });
       }
       const reference = imageReference(result);
-      // Keep existing inline history hooks compatible; file IDs are opaque references.
+
       await rememberImage(context.sessionId, reference.image_url ?? reference, context);
       return result;
     },
@@ -208,8 +208,8 @@ function jsonRequester(options, defaultUrl) {
       method: "POST",
       headers,
       body: JSON.stringify(body),
-      // These adapters commonly carry caller-owned bearer credentials.
-      // Never let fetch forward them to a redirect target.
+
+
       redirect: "manual",
       signal,
     });
@@ -235,8 +235,8 @@ function jsonRequester(options, defaultUrl) {
 function normalizeWebCommands(input) {
   const commands = requireObject(input, "web__run");
   const normalized = {};
-  // Mirror serde's SearchCommands: unknown fields are ignored and Option fields
-  // accept null, but operations must be arrays of correctly typed records.
+
+
   for (const [name, schema] of Object.entries(webParameters.properties)) {
     const value = commands[name];
     if (value === undefined || value === null) continue;
@@ -335,7 +335,7 @@ function base64(bytes) {
 }
 
 
-// Normalize references without fetching URLs or decoding provider file IDs.
+
 export function imageReference(value) {
   if (typeof value === "string") value = { image_url: value };
   if (!value || typeof value !== "object" || Array.isArray(value)) {

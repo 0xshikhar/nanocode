@@ -1,4 +1,4 @@
-/** Returns the UTF-8 size of a JavaScript string without allocating encoded bytes. */
+
 export function utf8ByteLength(value) {
   let bytes = 0;
   for (let index = 0; index < value.length; index += 1) {
@@ -17,7 +17,7 @@ export function utf8ByteLength(value) {
       bytes += 4;
       index += 1;
     } else {
-      // TextEncoder replaces unpaired surrogates with U+FFFD, also three bytes.
+
       bytes += 3;
     }
   }

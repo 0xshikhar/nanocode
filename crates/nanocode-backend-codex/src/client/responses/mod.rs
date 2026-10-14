@@ -1,4 +1,3 @@
-//! Responses protocol contracts and backend request construction.
 pub use nanocode_types::responses::*;
 #[cfg(feature = "client")]
 mod request;

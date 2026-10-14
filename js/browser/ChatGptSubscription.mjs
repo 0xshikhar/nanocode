@@ -5,7 +5,7 @@ import { openSubscription } from "../runtime/chatgpt-subscription.mjs";
 
 let initialized;
 
-/** Opens a Rust-managed ChatGPT subscription over caller-owned storage and fetch. */
+
 export async function open(options) {
   installHostBridge();
   initialized ||= init(options?.module === undefined

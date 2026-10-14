@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use crate::client::{
     auth::{OpenAiAuth, OpenAiAuthMode, OpenAiAuthSnapshot},
     responses::{
@@ -8,6 +7,7 @@ use crate::client::{
         valid_image_file_id,
     },
 };
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use nanocode_tools::ToolDefinition;
 use reqwest::header::{AUTHORIZATION, USER_AGENT};
 use serde::{Deserialize, Serialize};
@@ -23,7 +23,6 @@ const IMAGE_MODEL: &str = "gpt-image-2";
 const MAX_EDIT_IMAGES: usize = 5;
 const MAX_OUTPUT_HINT_BYTES: usize = 1_024;
 
-/// Executes the backend HTTP tool using configured authentication.
 pub struct ImageGenerationHandler {
     client: reqwest::Client,
     generation_endpoint: String,
@@ -33,8 +32,6 @@ pub struct ImageGenerationHandler {
 }
 
 impl ImageGenerationHandler {
-
-    /// Creates a handler using the supplied HTTP client.
     pub fn with_client(config: ImageGenerationConfig, client: reqwest::Client) -> Self {
         let api_base_url = config.api_base_url.trim_end_matches('/');
         Self {

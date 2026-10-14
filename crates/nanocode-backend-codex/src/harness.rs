@@ -1,1 +1,3 @@
-pub use nanocode_agent::{ClaudeModel, HarnessFamily, HarnessModel, ModelCapabilities, ModelTransport};
+pub use nanocode_agent::{
+    ClaudeModel, HarnessFamily, ModelCapabilities, ModelSelection, ModelTransport,
+};

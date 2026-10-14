@@ -1,14 +1,12 @@
-//! Claude-native adapter for the same durable owner and execution state machine.
-
 use std::sync::Arc;
 
+use nanocode_agent::Result as AgentResult;
 use nanocode_backend_claude::{
     ClaudeBuilder,
     execution::{
         Admission as ClaudeAdmission, ClaudeExecutionPolicy, ClaudeSteer, PolicyFuture, Step,
     },
 };
-use nanocode_agent::Result as AgentResult;
 use serde_json::{Value, value::RawValue};
 
 use crate::{
@@ -26,16 +24,26 @@ impl DurableAgentExt for ClaudeBuilder {
             store: state.shared_store(),
             record: state.record().await.map_err(agent_error)?,
         };
-        // The catalog record owns provenance: a branch's copied checkpoint
-        // still carries its source's lineage.
+
         let builder = match &branches.record {
             Some(record) => self.lineage(record.lineage.clone()),
             None => self,
         };
         let (owner, checkpoint) = state.acquire_agent().await.map_err(agent_error)?;
-        let checkpoint = checkpoint
-            .map(|value| value.decode::<Value>().map_err(agent_error))
-            .transpose()?;
+        let checkpoint = match checkpoint {
+            Some(value) => Some(value.decode::<Value>().map_err(agent_error)?),
+            None => {
+                let imported = builder.configured_checkpoint()?;
+                if let Some(checkpoint) = &imported {
+
+                    owner
+                        .commit_checkpoint(EncodedPayload::encode(checkpoint).map_err(agent_error)?)
+                        .await
+                        .map_err(agent_error)?;
+                }
+                imported
+            }
+        };
         builder.child_journal(journal).execution_policy(
             Arc::new(ClaudeExecution {
                 state_id,
@@ -53,18 +61,16 @@ struct ClaudeExecution {
     branches: Branches,
 }
 
-/// A fork's own durable state, opened in the parent's store on first use, so
-/// [`ClaudeExecutionPolicy::branch`] can stay synchronous.
 struct LazyClaudeExecution {
     store: SharedStore,
     record: SessionRecord,
     ready: tokio::sync::OnceCell<ClaudeExecution>,
-    /// The opened state already held a checkpoint, as for a restored child.
+
     reopened: std::sync::atomic::AtomicBool,
-    /// This policy wrote the state's first checkpoint.
+
     initialized: std::sync::atomic::AtomicBool,
-    /// The child's own model, recorded when its state is first described.
-    model: std::sync::Mutex<Option<nanocode_agent::HarnessModel>>,
+
+    model: std::sync::Mutex<Option<nanocode_agent::ModelSelection>>,
 }
 
 impl LazyClaudeExecution {
@@ -115,8 +121,7 @@ fn branch_child(
     child: &nanocode_agent::SessionInfo,
 ) -> AgentResult<Option<Arc<dyn ClaudeExecutionPolicy>>> {
     if branches.record.is_none() {
-        // Without catalog metadata there is no durable branch record; the
-        // durable parent refuses the fork instead of creating an ephemeral one.
+
         return Ok(None);
     }
     Ok(Some(Arc::new(LazyClaudeExecution::new(
@@ -234,7 +239,7 @@ impl ClaudeExecutionPolicy for LazyClaudeExecution {
     fn initial_checkpoint(
         &self,
         state: Value,
-        model: nanocode_agent::HarnessModel,
+        model: nanocode_agent::ModelSelection,
     ) -> PolicyFuture<'_, ()> {
         Box::pin(async move {
             if self.initialized.load(std::sync::atomic::Ordering::SeqCst) {
@@ -243,8 +248,7 @@ impl ClaudeExecutionPolicy for LazyClaudeExecution {
             if let Ok(mut recorded) = self.model.lock() {
                 *recorded = Some(model);
             }
-            // Opening the state records the child in the catalog; a restored
-            // child keeps the history it already holds.
+
             let policy = self.get().await?;
             if self.reopened.load(std::sync::atomic::Ordering::SeqCst) {
                 return Ok(());
@@ -491,8 +495,7 @@ impl ClaudeExecutionPolicy for ClaudeExecution {
 
     fn cancel_unstarted(&self, id: String) -> PolicyFuture<'_, bool> {
         Box::pin(async move {
-            // The state machine refuses a checkpoint-free cancellation once an
-            // attempt is running or recorded steps, continuation or steering.
+
             match self.owner.cancel(id, None).await {
                 Ok(()) => Ok(true),
                 Err(crate::Error::CancellationCheckpointRequired { .. }) => Ok(false),

@@ -1,7 +1,7 @@
-/** Optional range storage. Absolute paths have already passed root confinement.
- * Range writes/truncation MUST also maintain the shell filesystem metadata.
- * No callback is retried automatically after a write has been requested.
- */
+
+
+
+
 export type ShellBinaryIO = Readonly<{
   readRange(path: string, offset: number, length: number): Promise<Uint8Array>;
   writeRange?(path: string, offset: number, contents: Uint8Array): Promise<void>;
@@ -18,11 +18,11 @@ export type ShellBinaryFileSystem = Readonly<{
     size: number;
   }>>;
 }>;
-/** Invoke within the existing execution lock, refresh and cancellation boundary.
- * Host must disable this fast path when cat/sha256sum have custom overrides.
- * Undefined means no effects occurred and normal interpreter execution is safe.
- * Admission uses the interpreter's real parser (Bash.transform), not token regexes.
- */
+
+
+
+
+
 export declare function tryExecuteBinaryCommand(options: Readonly<{
   bash: { transform(command: string): { ast: unknown } };
   filesystem: ShellBinaryFileSystem;

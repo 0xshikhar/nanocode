@@ -6,7 +6,7 @@ const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,122}$/;
 const CAPABILITY = /^[a-z0-9][a-z0-9._:-]{0,63}$/;
 const normalizedSnapshots = new WeakSet();
 
-/** Normalizes the non-secret machines represented by one attached tool host. */
+
 export function normalizeHostedMachines(machines = []) {
   if (normalizedSnapshots.has(machines)) return machines;
   if (!Array.isArray(machines) || machines.length > MAX_MACHINES) {
@@ -57,8 +57,8 @@ export function normalizeHostedMachines(machines = []) {
   return normalized;
 }
 
-/** Whitelist publisher observations. Missing/invalid measurements remain unknown;
- * in particular a missing free-space sample never becomes zero or total capacity. */
+
+
 export function normalizeHandResources(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)
     || !Number.isSafeInteger(value.observed_at_ms) || value.observed_at_ms <= 0) return undefined;

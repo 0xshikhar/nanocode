@@ -42,17 +42,16 @@ enum Command {
     },
 }
 
-/// Cloneable serialized access to one caller-owned store.
-///
-/// Each durable agent still owns an independent state driver and fencing token.
-/// This handle only lets those drivers address their own state IDs through a
-/// backend whose public contract requires exclusive mutable access.
 #[derive(Clone)]
 pub(crate) struct SharedStore {
     commands: mpsc::Sender<Command>,
 }
 
 impl SharedStore {
+    pub(crate) fn same_store(&self, other: &Self) -> bool {
+        self.commands.same_channel(&other.commands)
+    }
+
     pub(crate) fn new<S>(mut store: S) -> crate::Result<Self>
     where
         S: StateStore + 'static,

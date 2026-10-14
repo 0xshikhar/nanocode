@@ -108,11 +108,8 @@ impl WebRtcSideband {
             .await
             .map(|(socket, _response)| socket)
     }
-
 }
 
-/// Caller-owned PCM media peer whose signaling can use an authenticated broker.
-/// Dropping the peer closes its native ICE/DTLS tasks.
 pub struct RealtimeMediaPeer {
     media: WebRtcMedia,
     sdp: String,
@@ -120,7 +117,6 @@ pub struct RealtimeMediaPeer {
 }
 
 impl RealtimeMediaPeer {
-    /// Creates an Opus WebRTC offer carrying 24 kHz mono PCM audio.
     pub async fn offer() -> Result<Self, RealtimeError> {
         crate::client::transport::install_default_rustls_crypto_provider();
         let offer = create_offer().await?;
@@ -136,12 +132,10 @@ impl RealtimeMediaPeer {
         })
     }
 
-    /// SDP to negotiate through the caller's signaling service.
     pub fn sdp(&self) -> &str {
         &self.sdp
     }
 
-    /// Applies the broker's SDP answer with a bounded negotiation deadline.
     pub async fn answer(&self, sdp: String) -> Result<(), RealtimeError> {
         timeout(
             CONNECT_TIMEOUT,
@@ -155,7 +149,6 @@ impl RealtimeMediaPeer {
         .map_err(|error| RealtimeError::WebRtc(error.to_string()))
     }
 
-    /// Waits until ICE and DTLS establish the media transport.
     pub async fn wait_connected(&self) -> Result<(), RealtimeError> {
         use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
         timeout(CONNECT_TIMEOUT, async {
@@ -173,7 +166,6 @@ impl RealtimeMediaPeer {
         .map_err(|_| RealtimeError::ConnectTimeout)?
     }
 
-    /// Sends 24 kHz mono signed little-endian PCM to the media encoder.
     pub async fn send(&self, audio: RealtimeAudio) -> Result<(), RealtimeError> {
         self.media
             .input
@@ -182,12 +174,10 @@ impl RealtimeMediaPeer {
             .map_err(|_| RealtimeError::WebRtc("media input closed".to_owned()))
     }
 
-    /// Receives decoded 24 kHz mono PCM audio.
     pub async fn recv(&mut self) -> Option<Result<RealtimeAudio, RealtimeError>> {
         self.media.recv().await
     }
 
-    /// Closes the media peer.
     pub async fn close(mut self) {
         self.media.close().await;
         self._cleanup.0 = None;
@@ -255,8 +245,7 @@ pub(super) async fn connect(config: ConnectConfig<'_>) -> Result<WebRtcConnectio
     trace!(target: "crate::client::realtime::wire", sdp = %call.sdp, call_id = %call.id, "GPT Realtime WebRTC answer");
     debug!(call_id = %call.id, "applying GPT Realtime WebRTC answer");
     let sideband = WebRtcSideband::from_config(&config, auth, &call.id)?;
-    // ICE/DTLS negotiation and control admission are independent once the
-    // provider has created the call. Do not serialize their network round trips.
+
     let apply_answer = async {
         timeout(
             CONNECT_TIMEOUT,
@@ -628,8 +617,7 @@ async fn create_offer() -> Result<Offer, RealtimeError> {
         .create_offer(None)
         .await
         .map_err(|error| RealtimeError::WebRtc(error.to_string()))?;
-    // The server answer supplies reachable candidates. Local ICE gathering
-    // continues during call creation; waiting for every interface adds latency.
+
     let sdp = offer.sdp.clone();
     peer.set_local_description(offer)
         .await
@@ -668,7 +656,6 @@ struct Offer {
     audio: mpsc::Receiver<Result<RealtimeAudio, RealtimeError>>,
 }
 
-/// Close native ICE/DTLS tasks if setup fails or its future is cancelled.
 struct PendingPeer(Option<Arc<RTCPeerConnection>>);
 
 impl Drop for PendingPeer {

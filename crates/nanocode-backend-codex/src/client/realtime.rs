@@ -1,9 +1,3 @@
-//! GPT Realtime WebSocket sessions.
-//!
-//! The transport deliberately stops at typed audio and conversation events.
-//! Device capture/playback and delegation to a coding agent are application
-//! concerns; this keeps the library usable with pipes and custom media stacks.
-
 use std::{
     borrow::Cow,
     collections::{BTreeMap, HashMap, VecDeque},
@@ -41,16 +35,14 @@ use crate::client::{
 mod webrtc;
 pub use webrtc::RealtimeMediaPeer;
 
-/// Sample rate required for GPT Realtime PCM audio.
 pub const REALTIME_SAMPLE_RATE: u32 = 24_000;
-/// Channel count required for GPT Realtime PCM audio.
+
 pub const REALTIME_CHANNELS: u16 = 1;
-/// Default model used by native Realtime sessions.
+
 pub const REALTIME_MODEL: &str = "gpt-realtime-1.5";
-/// Default model used by ChatGPT-authenticated Codex voice sessions.
+
 pub const CHATGPT_REALTIME_MODEL: &str = "gpt-live-1-codex";
 
-/// Voices supported by Codex's Frameless/V3 ChatGPT voice sessions.
 pub const CHATGPT_REALTIME_VOICES: &[RealtimeVoice] = &[
     RealtimeVoice::Juniper,
     RealtimeVoice::Maple,
@@ -63,10 +55,8 @@ pub const CHATGPT_REALTIME_VOICES: &[RealtimeVoice] = &[
     RealtimeVoice::Cove,
 ];
 
-/// Default voice used by Codex's Frameless/V3 ChatGPT voice sessions.
 pub const CHATGPT_REALTIME_VOICE: RealtimeVoice = RealtimeVoice::Cove;
 
-/// Voices supported by direct Platform Realtime sessions.
 pub const PLATFORM_REALTIME_VOICES: &[RealtimeVoice] = &[
     RealtimeVoice::Alloy,
     RealtimeVoice::Ash,
@@ -80,7 +70,6 @@ pub const PLATFORM_REALTIME_VOICES: &[RealtimeVoice] = &[
     RealtimeVoice::Cedar,
 ];
 
-/// Default voice used by direct Platform Realtime sessions.
 pub const PLATFORM_REALTIME_VOICE: RealtimeVoice = RealtimeVoice::Marin;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -108,68 +97,56 @@ const SIDEBAND_RECONNECT_BASE_DELAY: Duration = Duration::from_millis(200);
 const SIDEBAND_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(5);
 const SIDEBAND_STABLE_CONNECTION_DURATION: Duration = Duration::from_secs(30);
 
-/// Realtime wire protocol version.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum RealtimeVersion {
-    /// Legacy Quicksilver handoff protocol.
     V1,
-    /// Native GPT Realtime function-tool protocol.
+
     #[default]
     V2,
-    /// Frameless Bidi client-delegation protocol.
+
     V3,
 }
 
-/// Realtime transport selected for a session.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RealtimeTransport {
-    /// A directly owned WebSocket.
     WebSocket,
-    /// An owned WebRTC call with a sideband WebSocket.
+
     WebRtc,
 }
 
-/// Realtime session behavior.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum RealtimeSessionMode {
-    /// Full conversational input and output.
     #[default]
     Conversational,
-    /// Input transcription without model responses.
+
     Transcription,
 }
 
-/// Realtime model output modality.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum RealtimeOutputModality {
-    /// Text model output.
     Text,
-    /// Synthesized audio output.
+
     #[default]
     Audio,
 }
 
-/// Routing policy for coding-agent output in Frameless sessions.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum RealtimeResponseHandoffMode {
-    /// Hidden thinking context without an explicit semantic channel.
     #[default]
     Thinking,
-    /// Commentary context that should not be spoken as a final answer.
+
     Commentary,
-    /// Select commentary or speakable routing from BEM channel prefixes.
+
     BemTags,
 }
 
-/// Role of text appended to a running realtime conversation.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum RealtimeInputTextRole {
-    /// User-authored text.
     #[default]
     User,
-    /// Developer-authored context.
+
     Developer,
-    /// Assistant-authored prior output.
+
     Assistant,
 }
 
@@ -192,52 +169,49 @@ impl RealtimeInputTextRole {
 
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
-/// A GPT Realtime output voice supported by the current realtime protocol.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub enum RealtimeVoice {
-    /// Alloy voice.
     Alloy,
-    /// Arbor voice.
+
     Arbor,
-    /// Ash voice.
+
     Ash,
-    /// Ballad voice.
+
     Ballad,
-    /// Breeze voice.
+
     Breeze,
-    /// Cedar voice.
+
     Cedar,
-    /// Coral voice.
+
     Coral,
-    /// Cove voice.
+
     Cove,
-    /// Echo voice.
+
     Echo,
-    /// Ember voice.
+
     Ember,
-    /// Juniper voice.
+
     Juniper,
-    /// Maple voice.
+
     Maple,
-    /// Marin voice, the direct Platform default.
+
     #[default]
     Marin,
-    /// Sage voice.
+
     Sage,
-    /// Shimmer voice.
+
     Shimmer,
-    /// Sol voice.
+
     Sol,
-    /// Spruce voice.
+
     Spruce,
-    /// Vale voice.
+
     Vale,
-    /// Verse voice.
+
     Verse,
 }
 
 impl RealtimeVoice {
-    /// Returns the protocol value for this voice.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -295,14 +269,12 @@ impl RealtimeVoice {
     }
 }
 
-/// Role of one text item used to seed a Frameless realtime conversation.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum RealtimeTextRole {
-    /// Developer-provided context or policy.
     Developer,
-    /// A prior user message.
+
     User,
-    /// A prior assistant message.
+
     Assistant,
 }
 
@@ -323,17 +295,14 @@ impl RealtimeTextRole {
     }
 }
 
-/// One role-bearing text item used to seed a Frameless realtime conversation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RealtimeInitialItem {
-    /// Conversation role for the text.
     pub role: RealtimeTextRole,
-    /// Complete text content for the item.
+
     pub text: String,
 }
 
 impl RealtimeInitialItem {
-    /// Creates one initial role-bearing text item.
     #[must_use]
     pub fn new(role: RealtimeTextRole, text: impl Into<String>) -> Self {
         Self {
@@ -378,18 +347,12 @@ impl FromStr for RealtimeVoice {
     }
 }
 
-/// One owned 24 kHz mono signed-16-bit little-endian PCM chunk.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RealtimeAudio {
     data: Vec<u8>,
 }
 
 impl RealtimeAudio {
-    /// Creates a PCM chunk from signed-16-bit little-endian bytes.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the byte count does not contain complete samples.
     pub fn pcm16_le(data: impl Into<Vec<u8>>) -> Result<Self, RealtimeError> {
         let data = data.into();
         if data.len() % size_of::<i16>() != 0 {
@@ -400,7 +363,6 @@ impl RealtimeAudio {
         Ok(Self { data })
     }
 
-    /// Creates a PCM chunk from native signed samples.
     #[must_use]
     pub fn from_samples(samples: impl IntoIterator<Item = i16>) -> Self {
         let samples = samples.into_iter();
@@ -411,106 +373,87 @@ impl RealtimeAudio {
         Self { data }
     }
 
-    /// Returns the signed-16-bit little-endian PCM bytes.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.data
     }
 
-    /// Consumes the chunk and returns its PCM bytes.
     #[must_use]
     pub fn into_bytes(self) -> Vec<u8> {
         self.data
     }
 
-    /// Returns the number of mono samples in this chunk.
     #[must_use]
     pub const fn samples(&self) -> usize {
         self.data.len() / size_of::<i16>()
     }
 
-    /// Returns whether this chunk contains no samples.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.data.is_empty()
     }
 }
 
-/// A typed event from a GPT Realtime conversation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RealtimeEvent {
-    /// The server accepted the session configuration.
     SessionReady {
-        /// Provider-assigned realtime session identity.
         session_id: String,
     },
-    /// Voice activity detection observed new user speech.
+
     SpeechStarted,
-    /// Incremental transcription of user speech.
+
     InputTranscriptDelta(String),
-    /// Completed transcription of one user utterance.
+
     InputTranscriptDone(String),
-    /// Incremental transcript of synthesized output speech.
+
     OutputTranscriptDelta(String),
-    /// Completed transcript of synthesized output speech.
+
     OutputTranscriptDone(String),
-    /// Synthesized 24 kHz mono PCM16 audio.
+
     Audio(RealtimeAudio),
-    /// Realtime requested work from the background coding agent.
+
     AgentRequest {
-        /// Function call identity to complete with [`RealtimeSession::complete_agent_request`].
         call_id: String,
-        /// User request selected by the realtime model for delegation.
+
         prompt: String,
-        /// Voice transcript entries added since the previous delegation.
+
         transcript: Vec<RealtimeTranscriptEntry>,
     },
-    /// Realtime requested an intentionally silent tool result.
+
     RemainSilent {
-        /// Function call identity to acknowledge with [`RealtimeSession::complete_silent_request`].
         call_id: String,
     },
-    /// A realtime response began.
+
     ResponseStarted,
-    /// A realtime response completed.
+
     ResponseDone,
-    /// Transcript entries not yet included in a background-agent handoff when the transport ended.
+
     TranscriptTail(Vec<RealtimeTranscriptEntry>),
-    /// The provider reported a session error.
+
     Error(String),
 }
 
-/// One role-bearing voice transcript entry associated with a Realtime delegation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RealtimeTranscriptEntry {
-    /// Transcript participant as the Realtime wire role (`user` or `assistant`).
     pub role: String,
-    /// Complete transcript text for this contiguous role entry.
+
     pub text: String,
 }
 
-/// Receiver for the independent typed event stream of a realtime session.
 pub struct RealtimeEvents {
     receiver: mpsc::Receiver<RealtimeEvent>,
 }
 
 impl RealtimeEvents {
-    /// Waits for the next typed realtime event.
     pub async fn recv(&mut self) -> Option<RealtimeEvent> {
         self.receiver.recv().await
     }
 
-    /// Attempts to receive an already-buffered event.
     pub fn try_recv(&mut self) -> Option<RealtimeEvent> {
         self.receiver.try_recv().ok()
     }
 }
 
-/// Caller-owned WebRTC negotiation result and its independent control handles.
-///
-/// The caller applies [`Self::sdp`] to its own peer connection. Nanocodex owns
-/// only the authenticated realtime sideband and never creates or closes the
-/// caller's media peer.
 pub struct RealtimeSdpConnection {
     sdp: String,
     session: RealtimeSession,
@@ -518,20 +461,17 @@ pub struct RealtimeSdpConnection {
 }
 
 impl RealtimeSdpConnection {
-    /// Returns the provider's SDP answer verbatim.
     #[must_use]
     pub fn sdp(&self) -> &str {
         &self.sdp
     }
 
-    /// Separates the SDP answer, cheap command handle, and optional event stream.
     #[must_use]
     pub fn into_parts(self) -> (String, RealtimeSession, RealtimeEvents) {
         (self.sdp, self.session, self.events)
     }
 }
 
-/// Cloneable command handle for one active GPT Realtime session.
 #[derive(Clone)]
 pub struct RealtimeSession {
     commands: mpsc::Sender<Command>,
@@ -540,21 +480,14 @@ pub struct RealtimeSession {
     closed: watch::Receiver<bool>,
 }
 
-/// Protocol-specific handling applied after live input steers an active agent turn.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RealtimeAgentSteer {
-    /// Realtime V2 received the steering tool result immediately.
     Acknowledged,
-    /// Frameless moved the active delegation target to the newest request.
+
     ReplacedDelegation,
 }
 
 impl RealtimeSession {
-    /// Returns whether this protocol accepts incremental background-agent appends.
-    ///
-    /// Codex streams agent message deltas into Frameless delegations. Realtime
-    /// V2 instead receives each completed agent message as one `[BACKEND]`
-    /// conversation item.
     #[must_use]
     pub const fn streams_agent_output(&self) -> bool {
         matches!(
@@ -563,29 +496,15 @@ impl RealtimeSession {
         )
     }
 
-    /// Returns whether the embedding, rather than automatic bridge policy, owns handoff output.
     #[must_use]
     pub const fn client_managed_handoffs(&self) -> bool {
         self.client_managed_handoffs
     }
 
-    /// Appends one owned 24 kHz mono PCM16 input chunk.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the session has closed or sending times out.
     pub async fn send_audio(&self, audio: RealtimeAudio) -> Result<(), RealtimeError> {
         self.send(CommandKind::Audio(audio)).await.map(|_| ())
     }
 
-    /// Appends role-bearing text to the running realtime conversation.
-    ///
-    /// V2 user text receives Codex's `[USER]` prefix. Other versions preserve
-    /// caller text unchanged.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the bounded text queue is closed or unavailable.
     pub async fn send_text(
         &self,
         role: RealtimeInputTextRole,
@@ -598,11 +517,6 @@ impl RealtimeSession {
         .await
     }
 
-    /// Appends text that the realtime model should treat as directly speakable.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the bounded output queue is closed or unavailable.
     pub async fn append_speech(&self, text: impl Into<String>) -> Result<(), RealtimeError> {
         let text = text.into();
         if text.trim().is_empty() {
@@ -611,11 +525,6 @@ impl RealtimeSession {
         self.enqueue(CommandKind::Speech { text }).await
     }
 
-    /// Completes a background-agent request and asks Realtime to speak the result.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the session has closed or sending times out.
     pub async fn complete_agent_request(
         &self,
         call_id: impl Into<String>,
@@ -629,16 +538,6 @@ impl RealtimeSession {
         .map(|_| ())
     }
 
-    /// Applies Codex's protocol-specific acknowledgement for a steering request.
-    ///
-    /// Realtime V2 completes the new tool call with Codex's steering
-    /// acknowledgement and creates a response. Frameless keeps the delegation
-    /// open and makes the newest delegation item the target for subsequent
-    /// background-agent output.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the V2 acknowledgement cannot be delivered.
     pub async fn steer_agent_request(
         &self,
         call_id: impl Into<String>,
@@ -656,14 +555,6 @@ impl RealtimeSession {
         }
     }
 
-    /// Appends streamed background-agent output to the active voice handoff.
-    ///
-    /// Realtime V2 receives a `[BACKEND]` user item. Frameless appends text to
-    /// the active delegation context without asking for a separate response.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the output cannot be delivered.
     pub async fn append_agent_output(
         &self,
         call_id: impl Into<String>,
@@ -673,11 +564,6 @@ impl RealtimeSession {
             .await
     }
 
-    /// Appends coding-agent output with its commentary/final phase.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the output cannot be delivered.
     pub async fn append_agent_output_with_phase(
         &self,
         call_id: impl Into<String>,
@@ -693,14 +579,6 @@ impl RealtimeSession {
         .map(|_| ())
     }
 
-    /// Sends completed coding-agent output when no realtime delegation is active.
-    ///
-    /// Realtime V2 receives a `[BACKEND]` conversation item and creates a
-    /// response. Frameless receives a session-level context append.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the output cannot be delivered.
     pub async fn append_standalone_agent_output(
         &self,
         output: impl Into<String>,
@@ -709,11 +587,6 @@ impl RealtimeSession {
             .await
     }
 
-    /// Sends standalone coding-agent output with its commentary/final phase.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the output cannot be delivered.
     pub async fn append_standalone_agent_output_with_phase(
         &self,
         output: impl Into<String>,
@@ -727,15 +600,6 @@ impl RealtimeSession {
         .map(|_| ())
     }
 
-    /// Completes a streamed background-agent handoff using Codex's protocol behavior.
-    ///
-    /// Realtime V2 completes the original tool call with Codex's completion
-    /// acknowledgement and creates a response. Frameless requires no terminal
-    /// wire item after the final delegation context append.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the V2 completion cannot be delivered.
     pub async fn complete_agent_run(
         &self,
         call_id: impl Into<String>,
@@ -747,11 +611,6 @@ impl RealtimeSession {
         .map(|_| ())
     }
 
-    /// Completes a `remain_silent` request without creating spoken output.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the session has closed or sending times out.
     pub async fn complete_silent_request(
         &self,
         call_id: impl Into<String>,
@@ -763,20 +622,10 @@ impl RealtimeSession {
         .map(|_| ())
     }
 
-    /// Closes the realtime WebSocket.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the close command cannot be delivered.
     pub async fn close(&self) -> Result<(), RealtimeError> {
         self.close_with_transcript_tail().await.map(|_| ())
     }
 
-    /// Closes the realtime transport and returns transcript not yet handed to the agent.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the close command cannot be delivered.
     pub async fn close_with_transcript_tail(
         &self,
     ) -> Result<Vec<RealtimeTranscriptEntry>, RealtimeError> {
@@ -813,7 +662,6 @@ impl RealtimeSession {
     }
 }
 
-/// Builder for one independent GPT Realtime conversation.
 #[derive(Clone)]
 pub struct RealtimeSessionBuilder {
     auth: OpenAiAuth,
@@ -866,80 +714,66 @@ impl RealtimeSessionBuilder {
         }
     }
 
-    /// Selects the GPT Realtime model.
     #[must_use]
     pub fn model(mut self, model: impl Into<String>) -> Self {
         self.model = Some(model.into());
         self
     }
 
-    /// Selects the realtime wire protocol version.
     #[must_use]
     pub const fn version(mut self, version: RealtimeVersion) -> Self {
         self.version = Some(version);
         self
     }
 
-    /// Selects the realtime transport explicitly.
     #[must_use]
     pub const fn transport(mut self, transport: RealtimeTransport) -> Self {
         self.transport = Some(transport);
         self
     }
 
-    /// Selects conversational or transcription-only operation.
     #[must_use]
     pub const fn session_mode(mut self, mode: RealtimeSessionMode) -> Self {
         self.session_mode = mode;
         self
     }
 
-    /// Selects text or audio model output.
     #[must_use]
     pub const fn output_modality(mut self, modality: RealtimeOutputModality) -> Self {
         self.output_modality = modality;
         self
     }
 
-    /// Lets the embedding own all coding-agent handoff responses.
     #[must_use]
     pub const fn client_managed_handoffs(mut self, managed: bool) -> Self {
         self.client_managed_handoffs = managed;
         self
     }
 
-    /// Controls the provider's Frameless delegation acknowledgement filler.
-    ///
-    /// Omitting this policy preserves the Realtime API default. Realtime V1 and
-    /// V2 ignore it.
     #[must_use]
     pub const fn delegation_ack_filler(mut self, enabled: bool) -> Self {
         self.delegation_ack_filler = Some(enabled);
         self
     }
 
-    /// Sends automatic coding-agent responses as conversation items.
     #[must_use]
     pub const fn codex_responses_as_items(mut self, as_items: bool) -> Self {
         self.codex_responses_as_items = as_items;
         self
     }
 
-    /// Prefixes automatic coding-agent response items.
     #[must_use]
     pub fn codex_response_item_prefix(mut self, prefix: impl Into<String>) -> Self {
         self.codex_response_item_prefix = Some(prefix.into());
         self
     }
 
-    /// Selects Frameless coding-agent handoff channel routing.
     #[must_use]
     pub const fn codex_response_handoff_mode(mut self, mode: RealtimeResponseHandoffMode) -> Self {
         self.codex_response_handoff_mode = mode;
         self
     }
 
-    /// Replaces BEM prefixes keyed by `analysis`, `commentary`, and `final`.
     #[must_use]
     pub fn codex_response_handoff_channel_prefixes(
         mut self,
@@ -949,39 +783,30 @@ impl RealtimeSessionBuilder {
         self
     }
 
-    /// Selects the output voice.
     #[must_use]
     pub const fn voice(mut self, voice: RealtimeVoice) -> Self {
         self.voice = Some(voice);
         self
     }
 
-    /// Replaces the derived Realtime WebSocket URL.
     #[must_use]
     pub fn websocket_url(mut self, websocket_url: impl Into<String>) -> Self {
         self.websocket_url = Some(websocket_url.into());
         self
     }
 
-    /// Supplies a stable caller-owned session identity header.
     #[must_use]
     pub fn session_id(mut self, session_id: impl Into<String>) -> Self {
         self.session_id = Some(session_id.into());
         self
     }
 
-    /// Replaces the role-bearing text history used to seed a Frameless session.
-    ///
-    /// Initial items are supported by ChatGPT-authenticated Frameless sessions
-    /// only. The list may contain at most 128 items and at most 8,192 estimated
-    /// tokens per item and in aggregate.
     #[must_use]
     pub fn initial_items(mut self, items: impl IntoIterator<Item = RealtimeInitialItem>) -> Self {
         self.initial_items = items.into_iter().collect();
         self
     }
 
-    /// Appends one role-bearing text item to the Frameless session bootstrap.
     #[must_use]
     pub fn initial_item(mut self, role: RealtimeTextRole, text: impl Into<String>) -> Self {
         self.initial_items
@@ -989,26 +814,12 @@ impl RealtimeSessionBuilder {
         self
     }
 
-    /// Supplies a host-generated `x-oai-attestation` value for ChatGPT calls.
-    ///
-    /// The value is opaque to Nanocodex and is reused only for the call and its
-    /// sideband join. When omitted, Nanocodex sends the same unavailable-token
-    /// envelope Codex uses when host attestation generation times out.
     #[must_use]
     pub fn attestation_header(mut self, value: impl Into<Arc<str>>) -> Self {
         self.attestation_header = Some(value.into());
         self
     }
 
-    /// Connects and configures the realtime conversation.
-    ///
-    /// The returned command handle and event stream are independent. Dropping
-    /// every command handle closes the socket task.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for invalid configuration, authentication, timeout, or
-    /// a failed WebSocket/WebRTC handshake.
     pub async fn connect(self) -> Result<(RealtimeSession, RealtimeEvents), RealtimeError> {
         validate_session_builder(&self)?;
         let version = self.version.unwrap_or(match self.auth.mode() {
@@ -1149,17 +960,6 @@ impl RealtimeSessionBuilder {
         ))
     }
 
-    /// Creates a realtime call from an SDP offer owned by the embedding.
-    ///
-    /// The answer is returned directly before Nanocodex waits for the control
-    /// sideband to join. The caller owns its peer connection and all media.
-    /// Commands accepted while the sideband joins remain queued on the session.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for invalid configuration, authentication, or a failed
-    /// realtime call-creation request. Sideband failures are reported through
-    /// the returned event stream after the answer is available.
     pub async fn connect_with_sdp(
         self,
         offer_sdp: impl Into<String>,
@@ -1229,11 +1029,6 @@ impl RealtimeSessionBuilder {
     }
 }
 
-/// Builder for attaching Nanocodex's authenticated control sideband to a call
-/// already created and negotiated by the embedding.
-///
-/// Existing calls are never reconfigured: attachment performs no call-create
-/// request and sends no `session.update`.
 pub struct RealtimeCallAttachmentBuilder {
     auth: OpenAiAuth,
     call_id: String,
@@ -1265,63 +1060,54 @@ impl RealtimeCallAttachmentBuilder {
         }
     }
 
-    /// Selects the realtime wire protocol. Existing calls default to V1.
     #[must_use]
     pub const fn version(mut self, version: RealtimeVersion) -> Self {
         self.version = Some(version);
         self
     }
 
-    /// Replaces the derived Realtime sideband URL.
     #[must_use]
     pub fn websocket_url(mut self, websocket_url: impl Into<String>) -> Self {
         self.websocket_url = Some(websocket_url.into());
         self
     }
 
-    /// Supplies a stable caller-owned session identity header.
     #[must_use]
     pub fn session_id(mut self, session_id: impl Into<String>) -> Self {
         self.session_id = Some(session_id.into());
         self
     }
 
-    /// Supplies a host-generated `x-oai-attestation` value for the sideband.
     #[must_use]
     pub fn attestation_header(mut self, value: impl Into<Arc<str>>) -> Self {
         self.attestation_header = Some(value.into());
         self
     }
 
-    /// Lets the embedding own all coding-agent handoff responses.
     #[must_use]
     pub const fn client_managed_handoffs(mut self, managed: bool) -> Self {
         self.client_managed_handoffs = managed;
         self
     }
 
-    /// Sends automatic coding-agent responses as conversation items.
     #[must_use]
     pub const fn codex_responses_as_items(mut self, as_items: bool) -> Self {
         self.codex_responses_as_items = as_items;
         self
     }
 
-    /// Prefixes automatic coding-agent response items.
     #[must_use]
     pub fn codex_response_item_prefix(mut self, prefix: impl Into<String>) -> Self {
         self.codex_response_item_prefix = Some(prefix.into());
         self
     }
 
-    /// Selects Frameless coding-agent handoff channel routing.
     #[must_use]
     pub const fn codex_response_handoff_mode(mut self, mode: RealtimeResponseHandoffMode) -> Self {
         self.codex_response_handoff_mode = mode;
         self
     }
 
-    /// Replaces BEM prefixes keyed by `analysis`, `commentary`, and `final`.
     #[must_use]
     pub fn codex_response_handoff_channel_prefixes(
         mut self,
@@ -1331,12 +1117,6 @@ impl RealtimeCallAttachmentBuilder {
         self
     }
 
-    /// Attaches the authenticated sideband and returns independent controls.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for unsupported V2 attachment, authentication, or a
-    /// failed initial sideband handshake.
     pub async fn connect(self) -> Result<(RealtimeSession, RealtimeEvents), RealtimeError> {
         let version = self.version.unwrap_or(RealtimeVersion::V1);
         validate_external_call_version(version)?;
@@ -1561,64 +1341,59 @@ const fn approx_token_count(text: &str) -> usize {
         / APPROX_BYTES_PER_TOKEN
 }
 
-/// Failure from configuring or operating a GPT Realtime session.
 #[derive(Debug, thiserror::Error)]
 pub enum RealtimeError {
-    /// Managed credentials could not be resolved.
     #[error(transparent)]
     Authentication(#[from] OpenAiAuthError),
-    /// Developer instructions were empty.
+
     #[error("GPT Realtime instructions must not be empty")]
     InvalidInstructions,
-    /// The realtime model identifier was empty.
+
     #[error("GPT Realtime model must not be empty")]
     InvalidModel,
-    /// The selected protocol, transport, or mode combination is unsupported.
+
     #[error("invalid GPT Realtime configuration: {0}")]
     InvalidConfiguration(String),
-    /// The selected voice was not recognized.
+
     #[error("unsupported GPT Realtime voice {0:?}")]
     InvalidVoice(String),
-    /// PCM input was malformed.
+
     #[error("invalid GPT Realtime audio: {0}")]
     InvalidAudio(String),
-    /// The realtime URL was invalid.
+
     #[error("invalid GPT Realtime URL: {0}")]
     InvalidUrl(String),
-    /// An authorization header could not be represented.
+
     #[error("invalid GPT Realtime authorization: {0}")]
     InvalidAuthorization(String),
-    /// A caller-owned session header was invalid.
+
     #[error("invalid GPT Realtime session ID: {0}")]
     InvalidSessionId(String),
-    /// Initial text history violated the Frameless bootstrap policy.
+
     #[error("invalid GPT Realtime initial items: {0}")]
     InvalidInitialItems(String),
-    /// Connecting exceeded the transport deadline.
+
     #[error("GPT Realtime connection timed out")]
     ConnectTimeout,
-    /// Sending exceeded the transport deadline.
+
     #[error("GPT Realtime send timed out")]
     SendTimeout,
-    /// The realtime session is closed.
+
     #[error("GPT Realtime session is closed")]
     Closed,
-    /// A WebSocket operation failed.
+
     #[error("GPT Realtime WebSocket failed: {0}")]
     WebSocket(String),
-    /// A WebRTC sideband handshake failed with an HTTP response.
+
     #[error("GPT Realtime sideband handshake failed with HTTP {status}")]
-    WebSocketHandshake {
-        /// HTTP status returned by the sideband endpoint.
-        status: u16,
-    },
-    /// Creating the authenticated Realtime call failed.
+    WebSocketHandshake { status: u16 },
+
     #[error("GPT Realtime HTTP call failed: {0}")]
     Http(String),
-    /// Negotiating or decoding Realtime WebRTC media failed.
+
     #[error("GPT Realtime WebRTC failed: {0}")]
     WebRtc(String),
-    /// A realtime JSON message could not be encoded or decoded.
+
     #[error("invalid GPT Realtime message: {0}")]
     Message(String),
 }
@@ -2099,8 +1874,6 @@ async fn run_socket_with_pending(
                 )
                 .await
                 {
-                    // Buffered commands must drain without waiting for fresh socket
-                    // traffic or another producer to wake the select below.
                     SocketCommandExit::Continue => continue,
                     SocketCommandExit::Terminal { returned_tail } => {
                         tail_returned = returned_tail;
@@ -2922,8 +2695,10 @@ fn realtime_backend_output(protocol: RealtimeProtocol, output: String) -> String
 fn truncate_realtime_text_to_token_budget(text: &str, budget_tokens: usize) -> String {
     let mut truncation_budget = budget_tokens;
     loop {
-        let candidate =
-            crate::client::session::compaction::truncate_middle_with_token_budget(text, truncation_budget);
+        let candidate = crate::client::session::compaction::truncate_middle_with_token_budget(
+            text,
+            truncation_budget,
+        );
         let candidate_tokens = approx_token_count(&candidate);
         if candidate_tokens <= budget_tokens {
             break candidate;
@@ -3357,8 +3132,6 @@ fn apply_transcript_done(
         entries.last_mut().filter(|entry| entry.role == role)
     };
     if !force_new && let Some(last) = entry {
-        // A delayed V3 final may precede already accumulated speech. Only
-        // replace it when the final extends that speech; leave live events intact.
         if protocol != RealtimeProtocol::Frameless || text.starts_with(&last.text) {
             last.text = text.to_owned();
         }

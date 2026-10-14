@@ -6,7 +6,7 @@ const IDLE_SNAPSHOT = Object.freeze({
   status: "idle",
 });
 
-/** Creates the stable browser runtime consumed by framework bindings. */
+
 export function createConfig(options = {}) {
   return createAgentConfig(options, {
     create: createWorkerAgent,
@@ -14,7 +14,7 @@ export function createConfig(options = {}) {
   });
 }
 
-/** @internal Dependency-injected config constructor used by focused tests. */
+
 export function createAgentConfig(options = {}, runtime) {
   const entries = new Map();
   const agentOptions = Object.freeze({ ...(options.agent ?? {}) });
@@ -182,9 +182,9 @@ export function createAgentConfig(options = {}, runtime) {
     if (destroyed || entry.activeSubscribers === 0) return;
     const replace = force || entry.refetchRequested;
     if (entry.activeTurns > 0) {
-      // A refetch (or a new observer after a live Worker failure) requests a
-      // replacement; it is not authority to abandon accepted work. Coalesce
-      // the request until every eagerly observed result lease has settled.
+
+
+
       if (replace || entry.agent === undefined) entry.refetchRequested = true;
       return;
     }
@@ -203,10 +203,10 @@ export function createAgentConfig(options = {}, runtime) {
       void Promise.resolve(runtime.prepare(entry.createOptions, {
         signal: operation.controller.signal,
       })).catch(() => {
-        // Agent.create reports an actionable error if warmup cannot be reused.
+
       });
     } catch {
-      // Agent.create reports an actionable error if warmup cannot be reused.
+
     }
     void runGeneration(entry, operation, closing);
   }
@@ -294,9 +294,9 @@ export function createAgentConfig(options = {}, runtime) {
   function release(entry) {
     queueMicrotask(() => {
       if (entry.activeSubscribers > 0 || destroyed) return;
-      // A route subscription is only a presentation observer. Accepted turns
-      // retain the Agent until their result settles; an actually idle Agent is
-      // still reclaimed immediately.
+
+
+
       if (entry.activeTurns > 0) return;
       const closing = retireAgent(entry);
       publish(entry, "idle", undefined, undefined);
@@ -370,8 +370,8 @@ export function createAgentConfig(options = {}, runtime) {
             subscription.subscribed = false;
           }
           notifications.push(subscriptions);
-          // Destruction is the explicit application boundary allowed to force
-          // shutdown even when an accepted result lease does not settle.
+
+
           closures.push(retireAgent(entry));
         }
         entries.clear();

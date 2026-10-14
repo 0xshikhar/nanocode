@@ -1,9 +1,8 @@
-//! Codex-specific tool implementations over the shared tool contract.
 pub use crate::client::ImageDetail;
 pub use nanocode_tools::{
     Tool, ToolContext, ToolInput, ToolOutput, ToolOutputBody, ToolOutputContent, ToolResult,
 };
-/// Shared output contracts.
+
 pub mod contract {
     pub use nanocode_tools::*;
 }
@@ -13,19 +12,15 @@ mod runtime_config;
 #[cfg(feature = "native")]
 pub use runtime_config::{ImageGenerationConfig, WebSearchConfig};
 #[cfg(all(feature = "native", not(target_family = "wasm")))]
-/// Image generation and editing tool.
 pub mod image_generation;
 #[cfg(all(feature = "native", not(target_family = "wasm")))]
-/// Web search tool.
 pub mod web_search;
 
-/// Shared typed tool macro.
 pub use nanocode_tools::tool;
 
 #[doc(hidden)]
 pub use nanocode_tools::__private;
 
-/// Builds backend-owned HTTP tools for a shared execution runtime.
 #[cfg(feature = "native")]
 pub fn handlers(
     web: Option<WebSearchConfig>,

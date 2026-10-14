@@ -5,14 +5,14 @@ import { createNodeHost } from './host.mjs';
 import { createBrowserHost } from '../browser/host.mjs';
 
 function createCodexHost(options) {
-  // Function-backed Web API transports retain their own callbacks and evaluator.
+
   if (options.hostAuth || options.createResponse || options.createWebSocket || options.WebSocketImpl) {
     return createBrowserHost(options);
   }
   return createNodeHost(options);
 }
 
-/** Explicit Claude Messages runtime; no authentication or tools are inferred. */
+
 export function create(options) {
   return createClaude(options, async (module) => {
     if (module === undefined) return createRequire(import.meta.url)('../pkg-node/nanocodex.js').Nanocodex;

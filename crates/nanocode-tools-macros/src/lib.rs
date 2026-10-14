@@ -1,5 +1,4 @@
-//! Shared typed-tool procedural macros for Codex and Claude.
-#![deny(missing_docs, rustdoc::broken_intra_doc_links)]
+#![deny(rustdoc::broken_intra_doc_links)]
 
 use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
@@ -16,13 +15,6 @@ struct ToolArgs {
     parallel: bool,
 }
 
-/// Defines a typed JSON function tool from an async Rust function.
-///
-/// The function must return `Result<T, E>`. Function arguments become a
-/// strict JSON object schema and `T` becomes the output schema. The required
-/// `description = "..."` argument is model-visible; `name = "..."` is
-/// optional and defaults to the Rust function name. `parallel = true`
-/// explicitly permits overlapping local execution and defaults to `false`.
 #[proc_macro_attribute]
 pub fn tool(attributes: TokenStream, item: TokenStream) -> TokenStream {
     expand_tool(attributes.into(), item.into())

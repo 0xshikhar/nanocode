@@ -35,11 +35,11 @@ export type ComputerRuntime = Readonly<{
   tool: NamedTool;
 }>;
 
-/**
- * Mounts persistent storage into the bounded JS shell and installs the generic
- * Git/GitHub compatibility commands. Hosts inject all network and extra command
- * capabilities; this package owns no credentials or provider policy.
- */
+
+
+
+
+
 export async function createComputerRuntimeWithoutPdf(
   options: ComputerRuntimeOptions,
 ): Promise<ComputerRuntime> {

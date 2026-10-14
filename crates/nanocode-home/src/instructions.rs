@@ -7,25 +7,22 @@ use crate::{
     fs_util::{PathState, path_state, read_bounded, sorted_visible_entries},
 };
 
-/// Per-file read bound, matching Codex's AGENTS.md and Claude's context limits.
 pub const MAX_INSTRUCTION_FILE_BYTES: usize = 32 * 1024;
 const MAX_RULE_FILES: usize = 256;
 
-/// Which conventional file an instruction source came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InstructionKind {
-    /// `AGENTS.override.md`: replaces `AGENTS.md` in the same directory.
     AgentsOverride,
-    /// `AGENTS.md`.
+
     Agents,
-    /// `CLAUDE.md`.
+
     Claude,
-    /// `CLAUDE.local.md` (personal, normally gitignored).
+
     ClaudeLocal,
-    /// `.claude/CLAUDE.md`.
+
     ClaudeDir,
-    /// `.claude/rules/**/*.md` (may be path-scoped via `paths` frontmatter).
+
     Rule,
 }
 
@@ -38,7 +35,6 @@ impl InstructionKind {
     }
 }
 
-/// One loaded instruction document and its provenance.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct InstructionSource {
     pub path: PathBuf,
@@ -46,28 +42,20 @@ pub struct InstructionSource {
     pub scope: Scope,
     pub convention: Convention,
     pub kind: InstructionKind,
-    /// Trimmed document text (frontmatter and `@imports` are not interpreted).
+
     pub text: String,
     pub truncated: bool,
 }
 
-/// Union of user-level instructions from both homes.
-///
-/// Deterministic order: the Codex home's effective file first (`AGENTS.override.md`
-/// when non-empty, otherwise `AGENTS.md`, exactly as Codex resolves it), then
-/// the Claude home's `CLAUDE.md`. A source that is the same file (by canonical
-/// path, e.g. a natural-path symlink) or has identical text is included once.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct GlobalInstructions {
     pub sources: Vec<InstructionSource>,
-    /// User-level `~/.claude/rules/**/*.md`, sorted. Not read: rules can be
-    /// path-scoped, so consumers match frontmatter themselves.
+
     pub rule_files: Vec<PathBuf>,
     pub diagnostics: Vec<Diagnostic>,
 }
 
 impl GlobalInstructions {
-    /// Source texts joined by a blank line, or `None` when there are none.
     pub fn combined(&self) -> Option<String> {
         combine(&self.sources)
     }
@@ -85,12 +73,11 @@ pub(crate) fn combine(sources: &[InstructionSource]) -> Option<String> {
 
 pub(crate) enum Loaded {
     Source(InstructionSource),
-    /// Present but empty after trimming.
+
     Empty,
     Missing,
 }
 
-/// Loads one candidate file with symlinks followed (user homes are trusted).
 pub(crate) fn load_candidate(
     path: &Path,
     scope: Scope,
@@ -143,7 +130,6 @@ pub(crate) fn load_candidate(
     }
 }
 
-/// Appends unless an equal file or identical text was already included.
 pub(crate) fn push_unique(
     sources: &mut Vec<InstructionSource>,
     source: InstructionSource,
@@ -214,7 +200,6 @@ pub(crate) fn collect_rules(
 }
 
 impl AgentHome {
-    /// Union of global instructions across both homes (see [`GlobalInstructions`]).
     pub fn global_instructions(&self) -> GlobalInstructions {
         let mut result = GlobalInstructions::default();
         let diagnostics = &mut result.diagnostics;

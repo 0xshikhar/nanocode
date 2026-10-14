@@ -24,7 +24,7 @@ use tokio::sync::mpsc;
 use super::RuntimeEvent;
 
 const BOOTSTRAP: &str = include_str!("bootstrap.js");
-// Generated from js/packages/nanocode-code-mode/runtime/code-tools.mjs for crate packaging.
+
 const CODE_TOOLS: &str = include_str!("code-tools.mjs");
 const CODE_VALUES: &str = include_str!("code-values.mjs");
 
@@ -259,8 +259,7 @@ fn run_execution_in_context<'js>(
         next_timeout_id: 1,
     }));
     install_native_functions(ctx, &state)?;
-    // Reuse exactly the same tool facade as the JS runtimes. Strip only the
-    // module export so QuickJS can evaluate the factory as an expression.
+
     let factory_source = format!(
         "({})",
         CODE_TOOLS.replacen("export function", "function", 1)
@@ -385,8 +384,7 @@ fn install_native_functions<'js>(
                     let content: crate::ToolOutputContent = serde_json::from_str(&content_json).map_err(|error| {
                         Exception::throw_type(&ctx, &format!("invalid output content: {error}"))
                     })?;
-                    // Shared guest helpers normalize values and omit short PCM WAV.
-                    // Retain native audio validation at this host boundary too.
+
                     let content = match content {
                         crate::ToolOutputContent::InputAudio { ref audio_url }
                             if super::audio::wav_duration_seconds(audio_url)

@@ -129,7 +129,7 @@ export type BrowserOptions = Readonly<{
   fetch?: typeof globalThis.fetch | undefined;
   headers?: HeadersInit | undefined;
   installFetch?: boolean | undefined;
-  /** Exposes a tool that returns provider authorization links for account connections. */
+
   accountConnectionRequests?: boolean | undefined;
   accountInfo?: Readonly<{
     endpoint?: string | undefined;
@@ -149,13 +149,13 @@ export type BrowserTools = Readonly<{
   tools: readonly NamedTool[];
 }>;
 
-/** Thread-scoped OPFS, Git, shell, and module state reusable across Agent starts. */
+
 export type PreparedBrowser = Readonly<{
   origin: string;
   threadId: string;
 }>;
 
-/** Opens a persistent OPFS workspace and composes its WASM-backed tools. */
+
 export function browser(options: BrowserOptions): Promise<BrowserTools>;
 export function prepareBrowser(
   options: Pick<BrowserOptions, "threadId" | "origin">,

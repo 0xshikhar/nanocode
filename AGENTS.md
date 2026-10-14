@@ -1,5 +1,6 @@
 # Development
 
+- Do not add code comments, doc comments, or comment headers.
 - Build Rust and JavaScript/WASM SDKs. Keep managed services and apps outside this repo.
 - Preserve agreed public APIs. Use upstream Claude/Codex prompts and tools; share Code Mode and CUA across both backends.
 - Preserve native and JavaScript/WASM parity for agents, subagents, durability, and shared runtime contracts, including existing spawn/events, cancellation, and checkpoint/resume behavior. Keep native-only dependencies behind platform adapters; support WASM-local futures. Validate affected SDK builds on native and WASM targets.

@@ -1,14 +1,3 @@
-//! Claude-native Messages protocol and an experimental agent-loop backend.
-//!
-//! Authentication uses an explicit Console API key, a host header provider, or
-//! the Rust subscription manager with private host storage and HTTP capabilities.
-//! The crate never reads Claude Code credentials.
-//!
-//! Agent sessions retry transient model failures before publishing text or risking
-//! repeated server effects, with five attempts per model call and three per compaction.
-//! Cancellable backoff grows through 1, 2, 4, and 8 seconds with 90–110% jitter.
-//! `Retry-After` is a minimum delay; hints over 60 seconds end the call.
-//! Direct [`ClaudeClient`] calls leave transient retry policy to their caller.
 use std::{collections::BTreeMap, future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use futures_util::{Stream, StreamExt, stream};
@@ -29,11 +18,11 @@ pub mod subscription;
 pub use auth::{ClaudeAccessToken, ClaudeTokenSource, RefreshingClaudeAuth};
 
 pub const ANTHROPIC_MESSAGES_URL: &str = "https://api.anthropic.com/v1/messages";
-/// Messages route observed in Claude Code's subscription client.
+
 pub const ANTHROPIC_SUBSCRIPTION_MESSAGES_URL: &str =
     "https://api.anthropic.com/v1/messages?beta=true";
 pub const ANTHROPIC_VERSION: &str = "2023-06-01";
-/// Research-preview beta required alongside `speed` on Messages requests.
+
 const FAST_MODE_BETA: &str = "fast-mode-2026-02-01";
 
 #[derive(Debug, Error)]
@@ -42,7 +31,7 @@ pub enum ClaudeError {
     Http {
         status: u16,
         body: String,
-        /// Provider delay from a valid `Retry-After` header.
+
         retry_after: Option<Duration>,
     },
     #[error("Messages transport: {0}")]
@@ -74,7 +63,6 @@ impl ClaudeError {
     }
 }
 
-/// Parses delta-seconds or an HTTP-date; a past date means no extra delay.
 fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
     let value = headers
         .get(reqwest::header::RETRY_AFTER)?
@@ -213,8 +201,6 @@ pub enum ContentBlock {
     },
 }
 
-/// Claude accepts a plain string or an array of nested text/image/document blocks.
-/// Blocks retain the provider JSON shape for media and future block variants.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ToolResultContent {
@@ -312,7 +298,6 @@ pub struct ToolDefinition {
     pub defer_loading: bool,
 }
 
-/// Anthropic-executed API tools do not have client handlers or tool_result replies.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ServerToolDefinition {
     #[serde(rename = "type")]
@@ -343,8 +328,7 @@ impl ServerToolDefinition {
             options: BTreeMap::from([("max_uses".into(), Value::from(max_uses))]),
         }
     }
-    /// Latest web search with response inclusion control; the provider may
-    /// automatically run code execution for dynamic filtering.
+
     pub fn web_search_current(max_uses: u32) -> Self {
         Self {
             kind: "web_search_20260318".into(),
@@ -352,7 +336,7 @@ impl ServerToolDefinition {
             options: BTreeMap::from([("max_uses".into(), Value::from(max_uses))]),
         }
     }
-    /// Latest web fetch with response inclusion control.
+
     pub fn web_fetch_current(max_uses: u32) -> Self {
         Self {
             kind: "web_fetch_20260318".into(),
@@ -360,7 +344,7 @@ impl ServerToolDefinition {
             options: BTreeMap::from([("max_uses".into(), Value::from(max_uses))]),
         }
     }
-    /// Provider-executed code sandbox, distinct from local Claude Code Bash.
+
     pub fn code_execution_current() -> Self {
         Self {
             kind: "code_execution_20260521".into(),
@@ -377,7 +361,6 @@ impl ServerToolDefinition {
     }
 }
 
-/// One entry in the Claude Messages tools array, not an OpenAI tool schema.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ClaudeToolSpec {
@@ -423,7 +406,6 @@ pub enum CacheTtl {
     OneHour,
 }
 
-/// Adaptive-thinking depth on current Claude models. No legacy thinking budget is sent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Effort {
@@ -439,9 +421,6 @@ pub struct OutputConfig {
     pub effort: Effort,
 }
 
-/// Inference speed for models that offer fast mode. Fast mode runs the same
-/// model at premium rates and does not share prompt-cache prefixes with
-/// standard-speed requests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Speed {
@@ -488,7 +467,7 @@ impl CacheControl {
 #[derive(Default)]
 struct CacheLayout {
     explicit: Vec<CacheTtl>,
-    // None means no eligible block; Some(None) means an unmarked final block.
+
     last_eligible: Option<Option<CacheTtl>>,
 }
 
@@ -550,9 +529,6 @@ impl CacheLayout {
 }
 
 impl MessagesRequest {
-    /// Validate the documented cache marker limit, TTL order, and targets.
-    /// Cache order is tools -> system -> messages, independent of JSON key order.
-    /// Does not predict cache hits, token thresholds, or model-specific eviction.
     pub fn validate_cache_control(&self) -> Result<(), ClaudeError> {
         let mut layout = CacheLayout::default();
         for tool in &self.tools {
@@ -580,11 +556,6 @@ impl MessagesRequest {
         layout.validate(self.cache_control.as_ref())
     }
 
-    /// When automatic caching is enabled, also write a stable system prefix so
-    /// it can survive replacement of message history during compaction. Existing
-    /// system breakpoints are caller policy and are never moved. This optional
-    /// optimization is skipped when it would exceed the marker budget or violate
-    /// TTL ordering. Only this request's system representation is changed.
     pub fn cache_system_prefix(&mut self) -> Result<(), ClaudeError> {
         self.validate_cache_control()?;
         let Some(control) = self.cache_control.as_ref() else {
@@ -619,12 +590,7 @@ impl MessagesRequest {
         }
         Ok(())
     }
-    /// Replace top-level automatic caching with the equivalent explicit marker
-    /// on the last cacheable block, as Claude Code does. Automatic caching is
-    /// defined as one breakpoint on that block, so validated layouts keep the
-    /// same breakpoint count, TTL order and target; an equal explicit marker
-    /// already there is the documented deduplication. Message blocks are
-    /// preferred, then the system array. Thinking and empty text are skipped.
+
     pub fn explicit_cache_tail(&mut self) -> Result<(), ClaudeError> {
         self.validate_cache_control()?;
         let Some(control) = self.cache_control.take() else {
@@ -654,13 +620,12 @@ impl MessagesRequest {
         {
             block.entry("cache_control").or_insert(marker);
         }
-        // Without any cacheable target the automatic marker had no effect.
+
         Ok(())
     }
 }
 
 impl ContentBlock {
-    /// The block's own cache marker and whether it may carry one.
     fn cache_slot(&self) -> (Option<&Value>, bool) {
         match self {
             Self::Text { text, extra } => (extra.get("cache_control"), !text.is_empty()),
@@ -793,7 +758,6 @@ pub struct ApiError {
     pub message: String,
 }
 
-/// Raw Messages SSE events, without tool execution or orchestration.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StreamEvent {
@@ -832,24 +796,17 @@ pub struct MessageChange {
     pub container: Option<Value>,
 }
 
-/// Authentication future on a native runtime.
 #[cfg(not(target_family = "wasm"))]
 pub type ClaudeAuthFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
-/// Authentication future on an isolate-local runtime, allowing browser fetch.
+
 #[cfg(target_family = "wasm")]
 pub type ClaudeAuthFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
-/// An embedding-owned, approved credential broker. It can refresh/rotate OAuth
-/// headers before each request without exposing tokens to the agent loop.
-/// This trait does not perform OAuth registration or define a subscription grant.
 pub trait ClaudeAuthProvider: Send + Sync {
     fn headers(
         &self,
     ) -> ClaudeAuthFuture<'_, Result<reqwest::header::HeaderMap, ClaudeAuthUnavailable>>;
 
-    /// Recover a rejected credential before one bounded retry. The default does
-    /// not retry. Implementations must compare the rejected headers with their
-    /// current credential so late 401 responses cannot evict a newer token.
     fn recover_unauthorized<'a>(
         &'a self,
         _rejected: &'a reqwest::header::HeaderMap,
@@ -858,7 +815,6 @@ pub trait ClaudeAuthProvider: Send + Sync {
     }
 }
 
-/// An intentionally detail-free failure; do not put access/refresh tokens in errors.
 #[derive(Debug, Error)]
 #[error("approved Claude authentication provider unavailable")]
 pub struct ClaudeAuthUnavailable;
@@ -870,15 +826,13 @@ enum ClientAuth {
     Provider(Arc<dyn ClaudeAuthProvider>),
 }
 
-/// Public protocol affinity frozen with an admitted operation, never credentials.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct FrozenWireProfile {
     enabled: bool,
     identity: SubscriptionIdentity,
     session: String,
-    /// Automatic caching is sent as an explicit final-block marker. Absent in
-    /// cursors admitted before that conversion, which keep the top-level field.
+
     #[serde(default, skip_serializing_if = "is_false")]
     cache_tail: bool,
 }
@@ -891,14 +845,11 @@ pub struct ClaudeClient {
     subscription_compatibility: bool,
     subscription_identity: SubscriptionIdentity,
     subscription_session: String,
-    // New subscription requests send automatic caching as an explicit final
-    // block marker. Legacy cursors restore `false` to keep their exact bytes.
+
     subscription_cache_tail: bool,
 }
 
 impl ClaudeClient {
-    /// `endpoint` can be the official Console API URL or an explicitly chosen
-    /// compatible endpoint, such as a loopback fixture. The key is never logged.
     pub fn new(
         http: reqwest::Client,
         endpoint: impl Into<String>,
@@ -915,10 +866,6 @@ impl ClaudeClient {
         }
     }
 
-    /// Use authentication headers supplied by the embedding application. This
-    /// transport does not infer token schemes, read local credentials, or grant
-    /// authority to use a particular endpoint. The caller must select an
-    /// approved authentication mechanism and trusted endpoint.
     pub fn with_auth_headers(
         http: reqwest::Client,
         endpoint: impl Into<String>,
@@ -935,9 +882,6 @@ impl ClaudeClient {
         }
     }
 
-    /// Resolve caller-owned, approved headers separately for every request.
-    /// The provider owns OAuth acquisition/refresh and any program-specific
-    /// authorization; no Claude Code identity or local credential is borrowed.
     pub fn with_auth_provider(
         http: reqwest::Client,
         endpoint: impl Into<String>,
@@ -958,21 +902,11 @@ impl ClaudeClient {
         Self::new(http, ANTHROPIC_MESSAGES_URL, api_key)
     }
 
-    /// Use a subscription manager on the observed subscription Messages route.
-    /// The provider supplies OAuth headers and owns login/refresh state outside
-    /// agent checkpoints. No local Claude Code login or API key is discovered.
     pub fn subscription(http: reqwest::Client, provider: Arc<dyn ClaudeAuthProvider>) -> Self {
         Self::with_auth_provider(http, ANTHROPIC_SUBSCRIPTION_MESSAGES_URL, provider)
             .subscription_compatibility()
     }
 
-    /// Enable the observed subscription compatibility profile for an explicitly
-    /// selected endpoint. Uses OMP v18.4.4's Claude Code wire fingerprint;
-    /// this supplies neither a credential nor authorization.
-    ///
-    /// Agent requests are prepared before durable request freezing. Raw transport
-    /// callers can inspect [`Self::request_body`] before `create` or `stream`.
-    /// Final bytes are attested before dispatch and before durable effect identity.
     pub fn subscription_compatibility(mut self) -> Self {
         self.subscription_compatibility = true;
         #[cfg(not(target_family = "wasm"))]
@@ -984,8 +918,6 @@ impl ClaudeClient {
         self
     }
 
-    /// Set public OMP wire identity. No OAuth credentials are accepted here.
-    /// Reuse installation identity and version when reopening durable sessions.
     pub fn with_subscription_identity(mut self, identity: SubscriptionIdentity) -> Self {
         self.subscription_identity = identity;
         self
@@ -994,8 +926,7 @@ impl ClaudeClient {
         self.subscription_session = session.to_owned();
         self
     }
-    /// Prepare subscription protocol blocks before freezing a logical request.
-    /// `request_body` performs wire-only names, metadata and CCH over final bytes.
+
     pub(crate) fn freeze_wire_profile(&self, automatic_cache: bool) -> FrozenWireProfile {
         let mut identity = self.subscription_identity.clone();
         identity.version = Some(identity.version().to_owned());
@@ -1030,8 +961,7 @@ impl ClaudeClient {
             enabled: self.subscription_compatibility,
             identity,
             session: self.subscription_session.clone(),
-            // Serialized only when it changes bytes, so cursors without
-            // automatic caching remain readable by earlier releases.
+
             cache_tail: self.subscription_compatibility
                 && self.subscription_cache_tail
                 && automatic_cache,
@@ -1039,8 +969,7 @@ impl ClaudeClient {
     }
     pub(crate) fn restore_wire_profile(&self, profile: Option<&FrozenWireProfile>) -> Self {
         let mut client = self.clone();
-        // Old cursors predate final-byte attestation: retain their legacy body and
-        // effect identity instead of silently adopting new default transformations.
+
         client.subscription_compatibility = profile.is_some_and(|p| p.enabled);
         client.subscription_cache_tail = profile.is_some_and(|p| p.cache_tail);
         if let Some(profile) = profile {
@@ -1055,7 +984,7 @@ impl ClaudeClient {
             subscription_wire::prepare(request, &self.subscription_identity);
         }
     }
-    /// Exact final request bytes used both for durable identity and HTTP.
+
     pub fn request_body(
         &self,
         request: &MessagesRequest,
@@ -1082,7 +1011,7 @@ impl ClaudeClient {
             })?)
         }
     }
-    /// Durable step identity of a request, encoded once without a [`Value`] tree.
+
     pub(crate) fn durable_request(
         &self,
         request: &MessagesRequest,
@@ -1112,16 +1041,11 @@ impl ClaudeClient {
         request: &MessagesRequest,
         streaming: bool,
     ) -> Result<(reqwest::Response, Vec<String>), ClaudeError> {
-        // Reject invalid cache policy before resolving credentials or sending HTTP.
         request.validate_cache_control()?;
-        // The body is moved into the HTTP request: a conversation-sized copy
-        // must not stay resident for the whole provider round trip of every
-        // concurrently running agent. Only an authentication retry rebuilds it.
+
         let mut wire_body = Some(self.request_body(request, streaming)?);
         let mut retried = false;
-        // Retain both attempted generations only for this request, so an error
-        // gateway cannot reflect an earlier rejected credential into a durable
-        // failure receipt. Sensitive request headers alone do not scrub bodies.
+
         let mut credentials = Vec::<String>::new();
         loop {
             let mut provider_headers = None;
@@ -1144,9 +1068,7 @@ impl ClaudeClient {
                     headers
                 }
             };
-            // Authentication and request features share this comma-separated
-            // header. RequestBuilder::headers replaces a pre-existing value,
-            // which would silently drop context management for OAuth clients.
+
             let mut betas = Vec::new();
             for value in headers.get_all("anthropic-beta") {
                 for beta in value
@@ -1202,8 +1124,7 @@ impl ClaudeClient {
             {
                 betas.push("context-management-2025-06-27");
             }
-            // Display selection needs the same feature negotiation for API-key
-            // and subscription clients; preserve and deduplicate caller betas.
+
             const THINKING_UPDATES_BETA: &str = "thinking-display-updates-2026-08-18";
             if request
                 .thinking
@@ -1291,9 +1212,7 @@ impl ClaudeClient {
                 })
                 .send()
                 .await?;
-            // Only an explicit HTTP authentication rejection is recovered here.
-            // Agent sessions own transient retries because they track published
-            // text and possible server effects.
+
             if response.status() == reqwest::StatusCode::UNAUTHORIZED
                 && !retried
                 && let (ClientAuth::Provider(provider), Some(headers)) =
@@ -1335,8 +1254,7 @@ impl ClaudeClient {
 
     pub async fn stream(&self, request: &MessagesRequest) -> Result<ClaudeStream, ClaudeError> {
         let (response, credentials) = self.post(request, true).await?;
-        // A successful non-SSE response (for example an upstream JSON gateway
-        // response) must not masquerade as a truncated Messages stream.
+
         let is_sse = response
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
@@ -1429,9 +1347,6 @@ impl ClaudeClient {
                                 }
                             }
                         } else {
-                            // SSE removes exactly one ASCII space after the colon,
-                            // not arbitrary whitespace. A field without a colon has
-                            // an empty value; comments and unknown fields are ignored.
                             let (field, value) = line.split_once(':').unwrap_or((&line, ""));
                             let value = value.strip_prefix(' ').unwrap_or(value);
                             match field {
@@ -1468,13 +1383,12 @@ pub type ClaudeStream = Pin<Box<dyn Stream<Item = Result<StreamEvent, ClaudeErro
 #[cfg(target_family = "wasm")]
 pub type ClaudeStream = Pin<Box<dyn Stream<Item = Result<StreamEvent, ClaudeError>>>>;
 
-/// Future accepted by a registered tool on the current execution target.
 #[doc(hidden)]
 #[cfg(not(target_family = "wasm"))]
 pub trait ToolFuture: Future + Send {}
 #[cfg(not(target_family = "wasm"))]
 impl<T: Future + Send> ToolFuture for T {}
-/// Future accepted by an isolate-local tool.
+
 #[doc(hidden)]
 #[cfg(target_family = "wasm")]
 pub trait ToolFuture: Future {}
@@ -1488,7 +1402,6 @@ type ResponseBytes = Pin<Box<dyn Stream<Item = Result<Vec<u8>, reqwest::Error>> 
 #[cfg(target_family = "wasm")]
 type ResponseBytes = Pin<Box<dyn Stream<Item = Result<Vec<u8>, reqwest::Error>>>>;
 
-// Scrub diagnostics only, never valid signed or opaque provider content.
 fn redact_error(error: ClaudeError, credentials: &[String]) -> ClaudeError {
     let scrub = |mut text: String| {
         for credential in credentials {
@@ -1549,9 +1462,6 @@ impl SseState {
     }
 
     fn pop_line(&mut self) -> Result<Option<String>, ClaudeError> {
-        // SSE permits LF, CRLF and bare CR. Consume a CR immediately and skip
-        // only its optional following LF, even when those bytes arrive in
-        // different HTTP chunks. Waiting for LF loses a valid CR-only terminal.
         if self.skip_lf {
             if self.bytes.is_empty() {
                 return Ok(None);
@@ -1570,7 +1480,6 @@ impl SseState {
             return Err(ClaudeError::Protocol("SSE frame exceeds 32 MiB".into()));
         }
         let Some(index) = delimiter else {
-            // Do not repeatedly scan the entire unfinished line for each chunk.
             self.scan_start = self.bytes.len();
             return Ok(None);
         };
@@ -1579,8 +1488,7 @@ impl SseState {
         self.scan_start = 0;
         let mut line = self.bytes.drain(..=index).collect::<Vec<_>>();
         line.pop();
-        // SSE is UTF-8; malformed lines must not be silently altered. Only one
-        // leading BOM is optional, at the start of the stream, not every frame.
+
         let mut line = String::from_utf8(line)
             .map_err(|_| ClaudeError::Protocol("invalid UTF-8 SSE line".into()))?;
         if self.first_line {
@@ -1638,7 +1546,6 @@ enum BlockAccumulator {
 }
 
 impl BlockAccumulator {
-    // Diagnostics must never format payloads or provider-controlled type strings.
     const fn diagnostic_kind(&self) -> &'static str {
         match self {
             Self::Text { .. } => "text",
@@ -1773,9 +1680,6 @@ impl BlockAccumulator {
     }
 }
 
-/// Assemble streaming deltas into the same typed response as `create`.
-/// A partial tool JSON object or a missing terminal event is never returned as
-/// a usable tool call.
 pub async fn collect_stream<S>(
     first: StreamEvent,
     mut events: S,
@@ -1932,8 +1836,6 @@ where
                 }
                 let truncated = message.stop_reason == Some(StopReason::MaxTokens);
                 for (index, block) in active {
-                    // Only an explicit output cutoff explains an open text/client
-                    // block. Never synthesize a signature or a server-tool receipt.
                     let block = match block {
                         BlockAccumulator::Text { .. } if truncated => block,
                         BlockAccumulator::ToolUse { id, name, .. } if truncated => {
@@ -1997,8 +1899,6 @@ pub struct CompactedHistory {
 }
 
 impl CompactedHistory {
-    /// Caller-supplied summary, appended to the normal system prompt. This
-    /// helper intentionally does not summarize via a model or guess tokens.
     pub fn system_context(&self, system: &str) -> String {
         if self.summary.is_empty() {
             return system.to_owned();
@@ -2010,10 +1910,6 @@ impl CompactedHistory {
     }
 }
 
-/// Retain recent messages without severing an assistant tool use and its user
-/// tool result. Rewind to the beginning of the containing user turn. Truncating
-/// history or supplying a summary invalidates retained thinking's prefix binding,
-/// so remove that thinking and any messages left empty by its removal.
 pub fn compact_history(
     history: &[Message],
     keep_recent: usize,
@@ -2057,6 +1953,8 @@ fn is_user_turn_start(message: &Message) -> bool {
             .any(|block| matches!(block, ContentBlock::ToolResult { .. }))
 }
 
+pub use nanocode_agent::ClaudeModel;
+
 mod agent;
 pub use agent::{
     Claude, ClaudeBuilder, ClaudeCheckpointView, ClaudeNestedToolUpdate, ClaudeToolInvocation,
@@ -2064,7 +1962,6 @@ pub use agent::{
     rewind_checkpoint, session_checkpoint,
 };
 
-/// Portable durability integration with provider-native state.
 pub mod execution;
 
 #[cfg(all(feature = "tools", not(target_family = "wasm")))]

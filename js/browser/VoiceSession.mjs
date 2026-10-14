@@ -14,7 +14,7 @@ export class VoiceError extends Error {
   }
 }
 
-/** Owns browser speaker playback and retries it from the next user gesture when autoplay is blocked. */
+
 export class SpeakerPlayback {
   #speaker;
   #gestures;
@@ -71,7 +71,7 @@ export class SpeakerPlayback {
   }
 }
 
-/** Executes browser-only media and network effects for the Rust-owned voice controller. */
+
 export class BrowserVoiceSession {
   #options;
   #core;
@@ -126,7 +126,7 @@ export class BrowserVoiceSession {
       throw new Error("this browser does not expose microphone capture");
     }
 
-    // This call intentionally precedes every await so mobile user activation is retained.
+
     const capture = this.#options.captureMicrophone?.() ?? capturePreferredMicrophone(
       async (current, labels) => {
         const core = await this.#options.core;
@@ -147,8 +147,8 @@ export class BrowserVoiceSession {
       if (this.#closed || this.#closing.signal.aborted) return;
       return core;
     });
-    // Media and live conversation do not depend on durable task admission.
-    // Only delegated work waits for admission on the direct control path.
+
+
     const coreStartup = coreReady.then(async (core) => {
       if (this.#directControl) await this.#options.beforeAgentTurn?.();
       const effects = await core?.start();
@@ -163,7 +163,7 @@ export class BrowserVoiceSession {
       this.#closing.abort();
       if (cause?.code === "peer_connection_timeout") this.#stopBrowserMedia();
       else this.#stopBrowserIo();
-      // Neither late admission nor negotiation can revive disposed resources.
+
       await Promise.allSettled([coreStartup, connection]);
       if (this.#closed) return;
       throw cause;
@@ -297,8 +297,8 @@ export class BrowserVoiceSession {
     if (this.#closed || this.#closing.signal.aborted) return;
     await peer.setLocalDescription(offer);
     if (this.#closed || peer.signalingState === "closed") return;
-    // The server supplies candidates in its answer; gather local candidates
-    // while that request is in flight instead of waiting for every interface.
+
+
     const sdp = offer.sdp;
     if (!sdp) throw new Error("the browser did not produce a Realtime WebRTC offer");
 
@@ -351,7 +351,7 @@ export class BrowserVoiceSession {
       if (this.#closed || !this.#core) throw new Error("voice is not active");
       return this.#core[method](...args);
     }).then((effects) => this.#apply(effects));
-    // Invalid app input rejects the command without ending an otherwise healthy call.
+
     this.#inbound = next.catch(() => {});
     return next;
   }
@@ -365,8 +365,8 @@ export class BrowserVoiceSession {
     if (this.#closePromise) return this.#closePromise;
     this.#closed = true;
     this.#closing.abort();
-    // Microphone and speaker ownership ends synchronously. Protocol tail/lifecycle
-    // cleanup may legitimately wait behind an independent coding turn.
+
+
     this.#stopBrowserMedia();
     this.#closePromise = this.#finishClose();
     return this.#closePromise;
@@ -389,7 +389,7 @@ export class BrowserVoiceSession {
 
   async #finishClose() {
     try {
-      // Recover accepted answers before remote lifecycle cleanup can fail.
+
       if (this.#core) await this.#apply(await this.#core.noteTypedInput());
       await this.#starting?.catch(() => {});
       await Promise.all(this.#liveUpdates);
@@ -455,8 +455,8 @@ export class BrowserVoiceSession {
       }
     }
     if (effects.acknowledge_frames && sent > 0) await this.#core?.framesSent(sent);
-    // A live interruption can overtake asynchronous frame acknowledgement.
-    // Keep its speaker gate authoritative while retaining accepted captions.
+
+
     const currentPlayback = playbackRevision === this.#playbackRevision;
     if (currentPlayback && !this.#closed && effects.playback_enabled === true && sent === (effects.frames?.length ?? 0)) {
       this.#playbackEnabled = true;
@@ -527,12 +527,12 @@ export class BrowserVoiceSession {
       if (!this.#directControl) await this.#admission;
       if (this.#closed || !isCurrent()) return;
       const requiresAdmission = await this.#core.requiresAgentAdmission(payload);
-      // Classification can yield while this transport closes or is replaced.
-      // Only requests accepted on the current connection may enter the queue.
+
+
       if (this.#closed || !isCurrent()) return;
       if (requiresAdmission) {
-        // Retain accepted requests on close, but keep captions and interruptions
-        // independent of the durable route and its ordered task queue.
+
+
         void this.#enqueue(async () => {
           await this.#admission;
           await this.#options.beforeAgentTurn?.();
@@ -587,7 +587,7 @@ export class BrowserVoiceSession {
     this.#flushTimer = undefined;
     if (this.#reconnectTimer !== undefined) window.clearTimeout(this.#reconnectTimer);
     this.#reconnectTimer = undefined;
-    // Match native close: release provider media before durable tail cleanup.
+
     if (this.#directControl && this.#channel?.readyState === "open") {
       try { this.#channel.send('{"type":"session.close"}'); } catch {}
     }
@@ -630,7 +630,7 @@ export async function capturePreferredMicrophone(selectPhysicalInput) {
         stopStream(microphone);
         microphone = replacement;
       } catch {
-        // Exact-device reselection is only a desktop convenience; retain the usable capture.
+
       }
     }
   } catch (cause) {

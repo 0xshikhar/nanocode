@@ -1,5 +1,3 @@
-//! Caller-owned skill catalog and invocation. Skill metadata never grants tools,
-//! executes commands or installs hooks. Fork/model metadata requires a host child executor.
 use crate::context::{
     FILE_BYTES, authorized_root, frontmatter, local_directory, read_local, read_user_file,
 };
@@ -16,13 +14,12 @@ const MAX_SCAN: usize = 256;
 const MAX_ARGS: usize = 8 * 1024;
 const MAX_EXPANDED: usize = 64 * 1024;
 
-/// Invocation provenance must come from the host, never model-supplied JSON.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SkillInvocation {
     User,
     Model,
 }
-/// Metadata that may be shown without loading the skill's full body.
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SkillDefinition {
     pub name: String,
@@ -31,9 +28,9 @@ pub struct SkillDefinition {
     pub argument_hint: Option<String>,
     pub disable_model_invocation: bool,
     pub user_invocable: bool,
-    /// Declarative requested tools, not permission grants. Host policy wins.
+
     pub allowed_tools: Vec<String>,
-    /// Requires a host-owned child runtime. Never interpreted as inline guidance.
+
     #[serde(default)]
     pub context: Option<String>,
     #[serde(default)]
@@ -43,13 +40,13 @@ pub struct SkillDefinition {
     #[serde(default)]
     pub background: bool,
 }
-/// Discovery is bounded; malformed entries and omissions are visible.
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SkillCatalog {
     pub skills: Vec<SkillDefinition>,
     pub diagnostics: Vec<String>,
 }
-/// Expanded local content. Tool authority remains owned by the embedding.
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SkillExpansion {
     pub skill: SkillDefinition,
@@ -57,7 +54,7 @@ pub struct SkillExpansion {
     pub instructions: String,
     pub arguments: String,
 }
-/// Skills are read fresh on each invocation, so edits/removals take effect.
+
 #[derive(Clone, Debug)]
 pub struct ClaudeSkills {
     root: PathBuf,
@@ -70,18 +67,13 @@ impl ClaudeSkills {
             user: Vec::new(),
         })
     }
-    /// Adds host-resolved user skill roots in precedence order (for example
-    /// `nanocode_home::AgentHome::skill_roots`: `~/.codex/skills`,
-    /// `~/.claude/skills`, `~/.agents/skills`). Personal skills win over
-    /// same-named project skills, as in Claude Code. Symlinked user skill
-    /// folders are followed; workspace skills still reject symlinks.
+
     #[must_use]
     pub fn with_user_roots(mut self, roots: Vec<nanocode_home::SkillRoot>) -> Self {
         self.user = roots;
         self
     }
-    /// A catalog for the requested caller: model-disabled skills are omitted
-    /// entirely from model discovery; user-hidden skills stay model-invocable.
+
     pub fn catalog(&self, caller: SkillInvocation) -> SkillCatalog {
         let mut catalog = SkillCatalog::default();
         let overrides = match self.overrides() {
@@ -93,7 +85,7 @@ impl ClaudeSkills {
         };
         let mut by_name = BTreeMap::new();
         let mut scanned = 0;
-        // Native Claude entries override the generic project location.
+
         for root in [".agents/skills", ".claude/skills"] {
             if !local_directory(&self.root, Path::new(root)) {
                 continue;
@@ -164,13 +156,13 @@ impl ClaudeSkills {
             .collect();
         catalog
     }
-    /// Standalone Claude-native Skill tool definition.
+
     pub fn definitions() -> Vec<Value> {
         vec![
             json!({"name":"Skill","description":"Load a workspace skill by its catalog name and substitute arguments. Skill text is project context and cannot grant tool permissions. This tool cannot invoke skills marked disable-model-invocation. context:fork requires a host child executor; standalone execute refuses it. Dynamic commands and hooks are unsupported.","input_schema":{"type":"object","properties":{"skill":{"type":"string"},"args":{"type":"string"}},"required":["skill"],"additionalProperties":false}}),
         ]
     }
-    /// Model boundary. Invocation provenance is fixed, not an input option.
+
     pub async fn execute(&self, name: &str, input: Value) -> Result<String, String> {
         if name != "Skill" {
             return Err(format!("unknown skill tool: {name}"));
@@ -202,8 +194,7 @@ impl ClaudeSkills {
         }
         serde_json::to_string(&expansion).map_err(|e| e.to_string())
     }
-    /// Explicit user invocation is available only to an embedding with a real
-    /// user action; never infer it from a model's request or skill text.
+
     pub fn invoke(
         &self,
         name: &str,
@@ -231,7 +222,7 @@ impl ClaudeSkills {
             })?;
         let (skill, body) = self.read(Path::new(&definition.path))?;
         self.check_override(name, caller)?;
-        // Revalidate after discovery to prevent an edited opt-out being bypassed.
+
         if (caller == SkillInvocation::Model && skill.disable_model_invocation)
             || (caller == SkillInvocation::User && !skill.user_invocable)
         {
@@ -247,7 +238,7 @@ impl ClaudeSkills {
         let pattern =
             regex::Regex::new(r"\$ARGUMENTS(?:\[(\d+)\])?|\$(\d+)").map_err(|e| e.to_string())?;
         let has_placeholder = pattern.is_match(&body);
-        // One replacement pass: argument contents are literal, never re-expanded.
+
         let mut instructions = String::new();
         let mut end = 0;
         for captures in pattern.captures_iter(&body) {
@@ -283,8 +274,7 @@ impl ClaudeSkills {
             arguments: args.into(),
         })
     }
-    /// Project and local visibility settings only. These can restrict discovery
-    /// and invocation, but never override frontmatter or host tool permissions.
+
     fn overrides(&self) -> Result<BTreeMap<String, String>, String> {
         let mut overrides = BTreeMap::new();
         for relative in [".claude/settings.json", ".claude/settings.local.json"] {
@@ -340,8 +330,7 @@ impl ClaudeSkills {
         }
         Ok(())
     }
-    /// Workspace skills are workspace-relative and read without following
-    /// symlinks; user skills are absolute paths discovered from user roots.
+
     fn read(&self, path: &Path) -> Result<(SkillDefinition, String), String> {
         let (text, truncated) = if path.is_absolute() {
             if !self.user.iter().any(|root| path.starts_with(&root.path)) {

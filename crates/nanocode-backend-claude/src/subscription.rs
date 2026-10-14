@@ -1,6 +1,3 @@
-//! Rust-owned Claude subscription OAuth. The host supplies only a private durable
-//! CAS store and bounded HTTP; neither pending login nor credentials belong in an
-//! agent session, trace, model context, or plaintext file default.
 use std::{fmt, sync::Arc};
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -19,7 +16,6 @@ const MAX_BYTES: usize = 64 * 1024;
 const LOGIN_TTL: u64 = 15 * 60 * 1000;
 const RETRIES: usize = 8;
 
-/// Errors are intentionally closed and never retain host/provider response text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ClaudeSubscriptionError {
     #[error("Claude subscription host capability failed")]
@@ -42,13 +38,10 @@ pub enum ClaudeSubscriptionError {
 
 type Result<T> = std::result::Result<T, ClaudeSubscriptionError>;
 
-/// Detail-free host error: never include URLs with codes, bodies, or credentials.
 #[derive(Clone, Copy, Debug, thiserror::Error)]
 #[error("Claude subscription host failed")]
 pub struct ClaudeSubscriptionHostError;
 
-/// Opaque secret state. Persist outside agent durable sessions, encrypted at rest.
-/// Revisions must increase monotonically even across logout (never delete/reset).
 #[derive(Clone, Default)]
 pub struct ClaudeSubscriptionStoreValue {
     pub revision: u64,
@@ -61,8 +54,6 @@ pub enum ClaudeSubscriptionCommit {
     Conflict(u64),
 }
 
-/// Hosts must disable redirects and retries, enforce the timeout and streaming
-/// response bound, and must never log this request or its credential headers.
 pub struct ClaudeSubscriptionHttpRequest {
     method: &'static str,
     url: String,
@@ -120,8 +111,7 @@ pub trait ClaudeSubscriptionHost: Send + Sync + 'static {
         'a,
         std::result::Result<ClaudeSubscriptionStoreValue, ClaudeSubscriptionHostError>,
     >;
-    /// Atomic and durable before acknowledging. An uncertain commit may have
-    /// happened; callers will reload rather than assume it was rolled back.
+
     fn compare_and_swap<'a>(
         &'a self,
         key: &'a str,
@@ -140,9 +130,6 @@ pub trait ClaudeSubscriptionHost: Send + Sync + 'static {
     >;
 }
 
-/// Defaults observed in Claude Code 2.1.283; alternative registrations can supply
-/// their own endpoints, client ID, and scopes. Only explicit loopback fixtures
-/// may use HTTP. Exact endpoint URLs are pinned throughout a stored login.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ClaudeSubscriptionConfig {
@@ -175,13 +162,10 @@ impl Default for ClaudeSubscriptionConfig {
 #[derive(Clone, Debug)]
 pub enum ClaudeLoginMode {
     Manual,
-    /// Host listens on this exact callback. HTTP is allowed only on loopback.
-    Callback {
-        redirect_uri: String,
-    },
+
+    Callback { redirect_uri: String },
 }
 
-/// The URL is intended only for the account owner/browser, never agent history.
 #[derive(Clone, Serialize)]
 pub struct ClaudeLogin {
     pub authorization_url: String,
@@ -423,8 +407,6 @@ impl ClaudeSubscription {
         Err(ClaudeSubscriptionError::Conflict)
     }
 
-    /// Accept an exact callback URL or manual `code#state`. State is always
-    /// verified, including manual pastes. Codes are never retained in storage.
     pub async fn complete_login(&self, callback_or_code: &str) -> Result<ClaudeSubscriptionStatus> {
         let _guard = self.inner.gate.lock().await;
         let (revision, state) = self.load().await?;
@@ -472,12 +454,8 @@ impl ClaudeSubscription {
         })
     }
 
-    /// Local durable logout fences every in-flight exchange, then makes one
-    /// best-effort refresh-token revocation. Provider failure cannot undo logout.
     pub async fn logout(&self) -> Result<()> {
         for _ in 0..RETRIES {
-            // Logout also recovers corrupt/mismatched configurations without
-            // parsing the secret payload; the revision alone is authoritative.
             let value = self
                 .inner
                 .host
@@ -554,8 +532,7 @@ impl ClaudeSubscription {
     ) -> Result<()> {
         let mut headers = HeaderMap::new();
         headers.insert("content-type", HeaderValue::from_static("application/json"));
-        // Never retry this POST. The durable Exchanging state survives network
-        // ambiguity, cancellation and failure to persist a rotated credential.
+
         let mut response = self
             .request(
                 "POST",
@@ -565,9 +542,7 @@ impl ClaudeSubscription {
                 30_000,
             )
             .await?;
-        // A definitive invalid_scope rejection did not consume the refresh
-        // credential. Claude Code retries exactly once with prior granted scopes.
-        // Fence that separate POST with another durable CAS first.
+
         if response.status == 400
             && let Some(old_token) = &old_token
             && provider_error(&response.body).as_deref() == Some("invalid_scope")
@@ -672,7 +647,7 @@ impl ClaudeSubscription {
             expected_account,
             expected_organization,
         };
-        // Stage rotated credentials durably before the replayable profile GET.
+
         let next = self.save(claim, State::Validating { token, prior }).await?;
         let (revision, state) = self.load().await?;
         if revision != next {
@@ -706,8 +681,6 @@ impl ClaudeSubscription {
             .await?;
         if response.status != 200 {
             if response.status == 401 {
-                // The rotated refresh token is already durable. A rejected
-                // access token must not discard that recovery capability.
                 token.expires_at = 0;
                 self.save(revision, State::Validating { token, prior })
                     .await?;
@@ -775,8 +748,6 @@ impl ClaudeSubscription {
                 .cloned()
                 .collect::<Vec<_>>()
         } else {
-            // An independently registered client refreshes its actual grant,
-            // without assuming Claude Code's baseline scope contract.
             token.scopes.clone()
         };
         for scope in &token.scopes {
@@ -832,8 +803,7 @@ impl ClaudeSubscription {
             if rejected.get(AUTHORIZATION) != Some(&bearer(&token.access)?) {
                 return Ok(true);
             }
-            // Concurrent 401s for the already invalidated generation share its
-            // pending refresh; they must not treat it as a rejected replacement.
+
             if token.expires_at == 0 {
                 return Ok(true);
             }

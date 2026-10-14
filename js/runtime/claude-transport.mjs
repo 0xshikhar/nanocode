@@ -1,18 +1,18 @@
-// Explicit Claude Messages authentication for Nanocodex.create backends.
-// Credentials stay in this module's WeakMap; the token itself is an empty frozen object.
+
+
 import { isClaudeSubscription } from "./claude-subscription.mjs";
 
 const claudeTransports = new WeakMap();
 
-/** Measured public subscription Messages endpoint (docs/claude-authentication.md). */
+
 export const CLAUDE_SUBSCRIPTION_MESSAGES_URL = "https://api.anthropic.com/v1/messages?beta=true";
 
 const KEYS = new Set(["apiKey", "headers", "subscription", "endpoint", "fetch", "subscriptionIdentity"]);
 
-/**
- * Exactly one of an Anthropic Console apiKey, a caller-owned headers()
- * provider, or an open Rust-managed ClaudeSubscription handle.
- */
+
+
+
+
 export function anthropic(options) {
   if (!options || typeof options !== "object" || Array.isArray(options)) {
     throw new TypeError("Transport.anthropic requires options");
@@ -52,7 +52,7 @@ export function anthropic(options) {
     if (identity !== undefined && (!identity || typeof identity !== "object" || Array.isArray(identity))) {
       throw new TypeError("subscriptionIdentity must be an object");
     }
-    // The Rust lifecycle owns rotation; each outbound request reads its current private headers.
+
     setup.auth = Object.freeze({
       headers: async () => {
         const credential = await subscription.credential();
@@ -76,7 +76,7 @@ export function isClaudeTransport(transport) {
   return claudeTransports.has(transport);
 }
 
-/** Claude Agent.create options for this transport; never serialized. */
+
 export function claudeTransportOptions(transport) {
   const setup = claudeTransports.get(transport);
   if (setup === undefined) throw new TypeError("the claude backend requires Transport.anthropic()");

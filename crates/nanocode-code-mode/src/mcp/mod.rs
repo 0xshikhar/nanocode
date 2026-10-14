@@ -1,5 +1,3 @@
-//! Background-handshaken MCP tools for Nanocodex Code Mode.
-
 mod catalog;
 mod client;
 mod config;
@@ -66,18 +64,16 @@ fn same_origin_redirect_policy(
     })
 }
 
-/// A configured family of MCP servers installed into [`crate::Tools`].
 pub struct Mcp {
     servers: Arc<[NamedServer]>,
     state: Arc<ProviderState>,
     search: Arc<McpSearch>,
     oauth_store: Option<Arc<dyn McpOAuthStore>>,
     oauth_metadata: Arc<oauth::OAuthMetadataCache>,
-    // Identity exported to stdio servers; the first bound session wins.
+
     session: Arc<OnceLock<SessionEnvironment>>,
     started: AtomicBool,
-    // Discovery belongs to the provider, not its shared catalog or control handles.
-    // Dropping this JoinSet cancels unfinished handshakes instead of detaching them.
+
     startup_tasks: Mutex<tokio::task::JoinSet<()>>,
 }
 
@@ -92,7 +88,6 @@ struct NamedServer {
     config: McpServer,
 }
 
-/// Builder for an MCP provider.
 #[derive(Default)]
 pub struct McpBuilder {
     servers: BTreeMap<String, McpServer>,
@@ -100,7 +95,6 @@ pub struct McpBuilder {
     duplicate: Option<String>,
 }
 
-/// Cheap control handle for reconnecting and authorizing a running MCP provider.
 #[derive(Clone)]
 pub struct McpHandle {
     servers: Arc<[NamedServer]>,
@@ -110,89 +104,66 @@ pub struct McpHandle {
     session: Arc<OnceLock<SessionEnvironment>>,
 }
 
-/// An in-progress browser OAuth login.
 pub struct McpLogin {
     authorization_url: String,
     completion: tokio::task::JoinHandle<Result<usize, McpControlError>>,
 }
 
-/// Failure while controlling an already configured MCP provider.
 #[derive(Debug, thiserror::Error)]
 pub enum McpControlError {
-    /// No configured server has the requested name.
     #[error("unknown MCP server `{0}`")]
     UnknownServer(String),
-    /// OAuth login was requested for a stdio server.
+
     #[error("MCP server `{0}` does not use Streamable HTTP")]
     NotHttp(String),
-    /// OAuth login cannot replace an explicit bearer token.
+
     #[error("MCP server `{0}` has explicit bearer authentication")]
     ExplicitBearer(String),
-    /// OAuth login requires caller-owned credential persistence.
+
     #[error("no MCP OAuth credential store is configured")]
     NoOAuthStore,
-    /// OAuth discovery, authorization, callback, or persistence failed.
+
     #[error("MCP OAuth login failed: {0}")]
     OAuth(String),
-    /// A server replacement connection failed.
+
     #[error("MCP server `{server}` failed to reload: {error}")]
-    Reload {
-        /// Configured server name.
-        server: String,
-        /// Complete connection or discovery error.
-        error: String,
-    },
-    /// The spawned login task stopped before returning its result.
+    Reload { server: String, error: String },
+
     #[error("MCP OAuth login task stopped: {0}")]
     LoginTask(String),
 }
 
-/// Invalid MCP provider configuration.
 #[derive(Debug, thiserror::Error)]
 pub enum McpBuildError {
-    /// No servers were configured.
     #[error("at least one MCP server is required")]
     Empty,
-    /// A configured server name was empty.
+
     #[error("MCP server name must not be empty")]
     EmptyName,
-    /// The same server name was added more than once.
+
     #[error("MCP server `{0}` is configured more than once")]
     DuplicateServer(String),
-    /// A required transport field was empty.
+
     #[error("MCP server `{server}` has an empty {field}")]
-    EmptyField {
-        /// Configured server name.
-        server: String,
-        /// Invalid field name.
-        field: &'static str,
-    },
-    /// A lifecycle timeout was zero.
+    EmptyField { server: String, field: &'static str },
+
     #[error("MCP server `{server}` has a zero {field}")]
-    ZeroTimeout {
-        /// Configured server name.
-        server: String,
-        /// Invalid timeout field.
-        field: &'static str,
-    },
-    /// An option was applied to the wrong transport kind.
+    ZeroTimeout { server: String, field: &'static str },
+
     #[error("MCP server `{server}` does not support option `{option}` for its transport")]
     UnsupportedOption {
-        /// Configured server name.
         server: String,
-        /// Unsupported builder option.
+
         option: &'static str,
     },
 }
 
 impl Mcp {
-    /// Starts an empty MCP provider builder.
     #[must_use]
     pub fn builder() -> McpBuilder {
         McpBuilder::default()
     }
 
-    /// Returns a cheap cloneable handle for reload and OAuth operations.
     #[must_use]
     pub fn handle(&self) -> McpHandle {
         McpHandle {
@@ -248,14 +219,12 @@ impl PreparedMcpTool {
 }
 
 impl McpBuilder {
-    /// Installs caller-owned persistence for OAuth-capable Streamable HTTP servers.
     #[must_use]
     pub fn oauth_store(mut self, store: Arc<dyn McpOAuthStore>) -> Self {
         self.oauth_store = Some(store);
         self
     }
 
-    /// Adds a named stdio or Streamable HTTP MCP server.
     #[must_use]
     pub fn server(mut self, name: impl Into<String>, server: McpServer) -> Self {
         let name = name.into();
@@ -270,12 +239,6 @@ impl McpBuilder {
         self
     }
 
-    /// Validates configuration without connecting; handshakes begin with the agent driver.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when no servers are configured, a name is empty or
-    /// duplicated, a required transport field is empty, or a timeout is zero.
     pub fn build(self) -> Result<Mcp, McpBuildError> {
         if self.servers.is_empty() {
             return Err(McpBuildError::Empty);
@@ -323,12 +286,6 @@ impl McpBuilder {
 }
 
 impl McpHandle {
-    /// Reconnects one configured server and atomically replaces its discovered tools.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the server name is unknown or the replacement connection cannot
-    /// initialize and list its tools.
     pub async fn reload(&self, server_name: &str) -> Result<usize, McpControlError> {
         let span = info_span!(
             target: "nanocode_code_mode",
@@ -340,8 +297,7 @@ impl McpHandle {
             status = tracing::field::Empty,
             tool.count = tracing::field::Empty,
         );
-        // Do not enter this span while connecting. RMCP's transport task inherits the current
-        // tracing context and outlives the reload operation; children use explicit parents.
+
         let result = self.reload_inner(server_name, &span).await;
         span.record(
             "status",
@@ -412,15 +368,6 @@ impl McpHandle {
         }
     }
 
-    /// Starts an OAuth browser login for one server.
-    ///
-    /// Await [`McpLogin::wait`] after opening [`McpLogin::authorization_url`]. A successful login
-    /// persists the credentials and hot-reloads the server before completing.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for an unknown or unsupported server, a missing OAuth store, or when the
-    /// authorization flow cannot be initialized.
     pub async fn login(&self, server_name: &str) -> Result<McpLogin, McpControlError> {
         let span = info_span!(
             target: "nanocode_code_mode",
@@ -510,18 +457,11 @@ impl McpHandle {
 }
 
 impl McpLogin {
-    /// Returns the URL the embedding application should open in a browser.
     #[must_use]
     pub fn authorization_url(&self) -> &str {
         &self.authorization_url
     }
 
-    /// Waits for the browser callback and the automatic server reload.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when authorization, credential persistence, or the subsequent hot reload
-    /// fails.
     pub async fn wait(self) -> Result<usize, McpControlError> {
         self.completion
             .await
@@ -531,9 +471,6 @@ impl McpLogin {
 
 #[async_trait]
 impl DynamicToolProvider for Mcp {
-    /// Stdio servers are shared by every session using this provider, so the
-    /// first bound identity wins; each call still carries its caller's session
-    /// in MCP request metadata. Unbound servers get no inherited session variables.
     fn bind_session(&self, session: &SessionEnvironment) {
         let _ = self.session.set(session.clone());
     }

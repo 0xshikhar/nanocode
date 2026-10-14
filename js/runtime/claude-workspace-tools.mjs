@@ -6,17 +6,17 @@ const MAX_VISITS = 10_000;
 const MAX_SCAN = 128 * MAX_FILE;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8', { fatal: true });
-// Shared by every adapter for a given Workspace. The Workspace contract has no
-// CAS primitive: writers outside these adapters still require host coordination.
+
+
 const mutations = new WeakMap();
 const string = { type: 'string' };
 const natural = { type: 'integer', minimum: 0 };
 const positive = { type: 'integer', minimum: 1 };
 
-/** Narrow, browser-safe counterparts of ClaudeWorkspaceFiles' text tools.
- * Workspace backends own path isolation, parent creation and atomic writes.
- * No native processes, media decoders, or implicit permission interactions.
- */
+
+
+
+
 export function claudeWorkspaceTools(workspace) {
   if (!workspace || typeof workspace.root !== 'string') throw new TypeError('workspace is required');
   for (const method of ['list', 'readFile', 'writeFile']) {
@@ -50,8 +50,8 @@ export function claudeWorkspaceTools(workspace) {
       for (const entry of entries) {
         const relative = path(entry.path);
         const name = relative.split('/').at(-1);
-        // Prune descendants only: callers may explicitly choose one of these
-        // directories as their search root. Also omit git worktree link files.
+
+
         if (name === '.git' || name === 'node_modules') continue;
         if (entry.kind === 'directory') pending.push(relative);
         else if (entry.kind === 'file') output.push({ ...entry, path: relative });
@@ -93,8 +93,8 @@ export function claudeWorkspaceTools(workspace) {
         const outputBytes = encoder.encode(before).length + count * (encoder.encode(input.new_string).length - encoder.encode(input.old_string).length);
         if (outputBytes > MAX_FILE) throw new Error('file exceeds 1 MiB text limit');
         const after = parts.join(input.new_string);
-        // Catch changes made while awaiting a custom backend. This is detection,
-        // not an atomic compare-and-swap against unrelated external writers.
+
+
         if (await read(file) !== before) throw new Error('file changed during Edit; read it again');
         await write(file, after);
         return `Updated ${file} (${count} replacements)\n`;
@@ -185,9 +185,9 @@ function validate(input, properties, required, name) {
 }
 function boundedRegex(pattern, insensitive) {
   if (!pattern || encoder.encode(pattern).length > 4096) throw new Error('pattern must be 1 to 4096 bytes');
-  // Admit counted repetition before RE2 allocates its expanded program. This
-  // conservative budget follows the existing shell-search admission approach;
-  // RE2 itself prevents exponential backtracking during matching.
+
+
+
   let expansion = 1;
   for (const match of pattern.matchAll(/\{(\d+)(?:,(\d*))?\}/g)) {
     expansion *= Math.max(1, Number(match[2] || match[1]));
@@ -201,7 +201,7 @@ function boundedRegex(pattern, insensitive) {
   if (regex.programSize() > 16_384) throw new Error('regex exceeds compiled program limit');
   return regex;
 }
-// Component-level DP keeps glob matching polynomial even with many stars.
+
 function globMatcher(pattern) {
   if (pattern.startsWith('./')) pattern = pattern.slice(2);
   if (!pattern || pattern.length > 512 || pattern.startsWith('/') || /[\[\]{}\\]/.test(pattern)) throw new Error('unsupported glob pattern');

@@ -333,7 +333,7 @@ const ENVIRONMENT_SCHEMA = {
     ...Object.fromEntries(Object.entries(ACCOUNT_INFO_SCHEMA.properties).filter(([key]) => !["authenticated", "accounts", "connectorAccounts"].includes(key))),
     runtime: { type: "string", const: "browser-worker" },
     default_cwd: { type: "string" },
-    // This browser harness has no execution routing to remote Hands.
+
     hands: { type: "object", additionalProperties: false },
     accounts: {
       type: "object",
@@ -541,7 +541,7 @@ export async function browserAccountInfo(options, signal) {
         if (connections.length === 1) accounts[id] = connections[0].label;
         return connections.length > 0;
       }
-      // Backward-compatible legacy singleton status.
+
       const legacyLabel = boundedString(connector.label, 256)
         ?? boundedString(connector.account_id, 256);
       if (legacyLabel) accounts[id] = legacyLabel;

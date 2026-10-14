@@ -5,7 +5,7 @@ import { spawn } from "node:child_process";
 import { namedTool } from "nanocodex-tools/named-tool";
 import { toolResult } from "nanocodex-tools/runtime/code-runtime";
 const interruptedGuidance = "Upstream/native input may still be running and effects are uncertain; do not replay uncertain input. Call cua_repl.js_reset, then inspect the surface before continuing. Reset does not prove earlier input stopped.";
-/** Discover the provider's actual MCP declarations before publishing tools. */
+
 export function installedConfig() {
   if (process.platform !== "darwin") throw new Error("Default Sky CUA requires macOS; supply an explicit cua connection");
   const base = "/Applications/ChatGPT.app/Contents/Resources/cua_node";
@@ -31,7 +31,7 @@ export async function connectComputerTools(options = installedConfig()) {
   } finally { providerProcess.close(); }
 }
 
-/** A native attachment owns the executable/configuration, each conversation a JS scope. */
+
 export function createComputerTools(options) {
   const { executable, args = [], environment = {}, definitions } = options;
   if (!executable) throw new TypeError("A trusted CUA executable is required");
@@ -57,8 +57,8 @@ export function createComputerTools(options) {
       });
     }
     const session = sessions.get(id);
-    // Tool arguments (including timeout_ms) belong exclusively to the provider.
-    // Queueing and transport must not consume or duplicate its execution budget.
+
+
     const signal = AbortSignal.any([session.lifetime.signal, ...(context.signal ? [context.signal] : [])]);
     let dispatched = false;
     const cancellationReason = () => dispatched
@@ -106,21 +106,21 @@ export function createComputerTools(options) {
         signal.removeEventListener("abort", abort);
       }
     };
-    // Provider calls are ordered, but every conversation owns an independent
-    // chain and process. Long work in one conversation never blocks another.
+
+
     const result = session.tail.then(run);
     session.tail = result.catch(() => {});
-    // A queued cancellation reaches the caller immediately. The queued run
-    // still checks the signal and session identity before touching its process.
+
+
     return interruptible(result, signal, cancellationReason);
   };
-  // Trusted lifecycle only: finish a retained turn without starting a provider.
+
   const endTurn = (sessionId, turnId, hookEventName = "Stop") => {
     const session = sessions.get(sessionId);
     if (!session || disposed) return Promise.resolve();
     const run = async () => {
       const previous = session.turns.get(turnId);
-      session.turns.delete(turnId); // An uncertain cleanup is never replayed.
+      session.turns.delete(turnId);
       if (!previous || !session.process || session.interrupted || sessions.get(sessionId) !== session) return;
       const hook = catalog.find(tool => tool.name === "turn_ended");
       if (!hook) return;
@@ -198,7 +198,7 @@ class ComputerProcess {
     await this.send({ jsonrpc: "2.0", id: request.id, error: { code: -32601, message: "Method not found" } });
   }
   async start() {
-    // Bound only provider startup/catalog discovery, never tools/call or queue wait.
+
     const timer = setTimeout(() => this.close(new Error("CUA provider startup/discovery timed out after 120000 ms")), 120_000);
     timer.unref();
     try {
@@ -250,9 +250,9 @@ class ComputerProcess {
   }
 }
 
-// stdout can carry multi-megabyte screenshots or text in one JSONL record.
-// Keep incoming chunks as a queue and copy each completed record exactly once;
-// repeatedly concatenating the full prefix makes fragmented large results O(n²).
+
+
+
 class LineBuffer {
   chunks = [];
   push(chunk) { if (chunk.length) this.chunks.push(chunk); }
@@ -290,8 +290,8 @@ export function outputContent(result) {
     if (item.type === "audio" && typeof item.mimeType === "string" && typeof item.data === "string") {
       return { type: "input_audio", audio_url: `data:${item.mimeType};base64,${item.data}` };
     }
-    // The model transport has no native MCP resource block. Preserve its full
-    // JSON as text; the untouched provider result is also available as value.
+
+
     return { type: "input_text", text: JSON.stringify(item) };
   });
 }

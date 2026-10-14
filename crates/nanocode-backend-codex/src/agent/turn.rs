@@ -52,8 +52,7 @@ pub(super) enum Command {
         policy: Option<Arc<dyn execution::ExecutionPolicy>>,
         result: oneshot::Sender<Result<(Nanocodex, AgentEvents)>>,
     },
-    /// Captures this driver's identity and latest committed boundary without
-    /// waiting for an active turn.
+
     ChildSnapshot {
         result: oneshot::Sender<Result<ChildState>>,
     },
@@ -95,14 +94,12 @@ pub(super) enum Command {
     Shutdown,
 }
 
-/// Driver-resolved boundary a fork starts from.
 #[cfg(feature = "openai")]
 pub(super) enum ForkFrom {
-    /// The latest committed boundary held by the driver.
     Latest,
-    /// A live boundary retained by a completed turn of this conversation.
+
     Live(Arc<CommittedSession>),
-    /// A decoded portable checkpoint of this conversation tree.
+
     Snapshot(Box<SessionSnapshot>),
 }
 

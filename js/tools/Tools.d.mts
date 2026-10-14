@@ -37,18 +37,18 @@ export type Tools = Readonly<{
   close(): Promise<void>;
 }>;
 
-/**
- * Creates one owned tool runtime. Caller-supplied tool ownership transfers only
- * after this promise resolves; a rejected construction leaves those tools with
- * the caller. The returned runtime joins all owned cleanup through close().
- */
+
+
+
+
+
 export function createTools(options?: {
   tools?: ToolMap | readonly NamedTool[];
-  /** Stable safe ASCII identifier (at most 123 bytes) for this independent attachment. */
+
   attachmentId?: string;
-  /** Sole non-secret machine published by this host; its id must equal attachmentId. */
+
   machines?: readonly HostedMachine[];
-  /** Portable workspace handle; React Native supplies one via createWorkspace({ backend }). */
+
   workspace?: Workspace;
   workspaceOptions?: { maxEntries?: number; maxReadBytes?: number; maxWriteBytes?: number };
   mcp?: McpServers | false;

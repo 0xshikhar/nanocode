@@ -55,7 +55,6 @@ pub(super) fn api_error_has_code(event: &str, expected: &str) -> bool {
     event.code() == Some(expected)
 }
 
-/// Resolves only structured paths into discovered function parameters.
 pub(super) fn invalid_tool_schema_path(event: &str) -> Option<Vec<usize>> {
     let event: ApiErrorEnvelope = serde_json::from_str(event).ok()?;
     let (code, param) = if event.code.is_some() {
@@ -156,8 +155,6 @@ struct ApiErrorEnvelope {
 }
 
 impl ApiErrorEnvelope {
-    // Any terminal discriminator vetoes recovery: a transient top-level code
-    // must not hide a nested quota or policy stop (or vice versa).
     fn is_terminal(&self) -> bool {
         [self.code.as_deref(), self.event_type.as_deref()]
             .into_iter()

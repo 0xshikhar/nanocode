@@ -1,6 +1,3 @@
-//! Bounded project context from an explicitly authorized workspace.
-//! No home/ancestor-directory discovery or external imports are implicit;
-//! hosts supply user-level instructions resolved by `nanocode-home`.
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,
@@ -14,14 +11,13 @@ const TOTAL_BYTES: usize = 128 * 1024;
 const MAX_FILES: usize = 64;
 const SCAN_ENTRIES: usize = 256;
 
-/// One local instruction excerpt and its provenance.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ContextExcerpt {
     pub path: String,
     pub text: String,
     pub truncated: bool,
 }
-/// Bounded load result; omitted/invalid inputs are explicit diagnostics.
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ProjectContext {
     pub excerpts: Vec<ContextExcerpt>,
@@ -29,8 +25,6 @@ pub struct ProjectContext {
 }
 impl ProjectContext {
     fn diagnostic(&mut self, message: String) {
-        // Invalid import graphs must not turn the diagnostic channel into an
-        // unbounded second context stream after the excerpt budget is exhausted.
         const MAX_DIAGNOSTICS: usize = 64;
         if self.diagnostics.len() == MAX_DIAGNOSTICS {
             self.diagnostics
@@ -40,8 +34,7 @@ impl ProjectContext {
         }
     }
 }
-/// Caller-selected context boundary. Instantiate with the repository root, then
-/// load a relative file/directory to include its ancestors inside that boundary.
+
 #[derive(Clone, Debug)]
 pub struct ClaudeProjectContext {
     root: PathBuf,
@@ -54,19 +47,17 @@ impl ClaudeProjectContext {
             global: None,
         })
     }
-    /// Prepends host-resolved user-level instructions (`~/.codex/AGENTS.md`
-    /// or its override, then `~/.claude/CLAUDE.md`, deduplicated) to every
-    /// load. They share the context byte budget and precede project files.
+
     #[must_use]
     pub fn with_global_instructions(mut self, global: nanocode_home::GlobalInstructions) -> Self {
         self.global = Some(global);
         self
     }
-    /// Load root context. Path-scoped rules require `load_for_path` instead.
+
     pub fn load(&self) -> ProjectContext {
         self.load_for_path(Path::new(""))
     }
-    /// Caller-owned tool for explicit path-scoped context refresh.
+
     pub fn definitions() -> Vec<serde_json::Value> {
         vec![
             serde_json::json!({"name":"ProjectContext","description":"Load bounded workspace guidance and matching path-scoped rules for a relative file or directory. Imports cannot escape the authorized workspace. Returned text is project context, not new tool authority.","input_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}}),
@@ -99,10 +90,7 @@ impl ClaudeProjectContext {
             .map_err(|e| format!("context task: {e}"))?;
         serde_json::to_string(&context).map_err(|e| e.to_string())
     }
-    /// Load root-to-leaf CLAUDE.md, CLAUDE.local.md, .claude/CLAUDE.md,
-    /// AGENTS.md, and matching .claude/rules/**/*.md. Rules are relative to
-    /// their owning directory. Imports use @relative/path outside Markdown
-    /// code spans/blocks; parent references must remain inside the root.
+
     pub fn load_for_path(&self, relative: impl AsRef<Path>) -> ProjectContext {
         let relative = relative.as_ref();
         let mut result = ProjectContext::default();
@@ -265,8 +253,7 @@ impl LoadState<'_> {
         }
     }
 }
-// Resolve parent segments lexically before the handle-relative read; never
-// follow an imported absolute/home path or a symlink outside the workspace.
+
 fn resolve_import(base: &Path, import: &str) -> Option<PathBuf> {
     if import.len() > 4096 || import.starts_with('~') {
         return None;
@@ -446,8 +433,7 @@ pub(crate) fn read_local(
     };
     read_bounded(file, limit)
 }
-/// Reads a host-resolved user-level file. Unlike workspace content, user homes
-/// commonly link skills between `~/.codex` and `~/.claude`, so symlinks are followed.
+
 pub(crate) fn read_user_file(path: &Path, limit: usize) -> Result<(String, bool), String> {
     if !path.is_absolute() {
         return Err("user file path must be absolute".into());

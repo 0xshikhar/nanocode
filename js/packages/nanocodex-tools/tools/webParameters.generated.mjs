@@ -1,4 +1,4 @@
-// Generated from pinned codex-rs by scripts/codex-parity/web.py.
+
 export default {
   "properties": {
     "click": {

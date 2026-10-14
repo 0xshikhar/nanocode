@@ -1,6 +1,3 @@
-//! Audio handling ported from openai/codex 1427825c40 `code-mode-runtime/src/runtime/audio.rs`.
-//! Output budgets use the shared estimator in `nanocode_types::audio`.
-
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 const MAX_PROMPT_AUDIO_INPUT_BYTES: usize = 50 * 1024 * 1024;
@@ -26,13 +23,12 @@ pub(super) fn wav_duration_seconds(audio_url: &str) -> Option<f64> {
         let chunk_id = &chunks[..4];
         let size = u32::from_le_bytes(chunks[4..8].try_into().ok()?) as usize;
         let remaining = &chunks[8..];
-        // Streaming WAV headers can declare more data than the file contains.
+
         let chunk = &remaining[..size.min(remaining.len())];
         match chunk_id {
             b"fmt " => {
                 let mut encoding = u16::from_le_bytes(chunk.get(..2)?.try_into().ok()?);
                 if encoding == 0xfffe {
-                    // WAVE_FORMAT_EXTENSIBLE stores the encoding in a subtype GUID.
                     if chunk.get(26..40)?
                         != [0, 0, 0, 0, 0x10, 0, 0x80, 0, 0, 0xaa, 0, 0x38, 0x9b, 0x71]
                     {

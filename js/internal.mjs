@@ -59,15 +59,15 @@ export async function createAgentClient(runtime, options = {}, requestedReservat
   return createAgent(raw, runtime, reservation, reserveSession);
 }
 
-/**
- * Internal owner seam (Nanocodex.create): caller dispose() then only detaches
- * the public handle; the session and its accepted work stay owned until
- * shutdownOwnedAgent joins them.
- */
+
+
+
+
+
 export function retainAgentForOwner(agent, owner) {
   const state = knownAgentState(agent);
   state.ownerRetained = true;
-  // Forks and session siblings created through any path are admitted by the same owner.
+
   if (owner !== undefined) state.owner = owner;
 }
 
@@ -75,7 +75,7 @@ function ownerAdmission(state, start) {
   return state.owner === undefined ? start() : state.owner.admit(start);
 }
 
-/** Internal owner seam: cancels and joins a retained Agent even after caller dispose(). */
+
 export function shutdownOwnedAgent(agent) {
   const state = knownAgentState(agent);
   if (state.shutdownPromise) return state.shutdownPromise;
@@ -88,7 +88,7 @@ export function shutdownOwnedAgent(agent) {
   return state.shutdownPromise;
 }
 
-/** Internal adapter seam: observes completion of the owned Agent release path. */
+
 export function observeAgentRelease(agent, listener) {
   if (typeof listener !== "function") throw new TypeError("Agent release observer must be a function");
   const state = knownAgentState(agent);
@@ -100,7 +100,7 @@ export function observeAgentRelease(agent, listener) {
   return () => state.releaseObservers.delete(listener);
 }
 
-/** Creates the stable UUIDv7 identity reserved before a WASM Agent is constructed. */
+
 export function createSessionId() {
   if (typeof globalThis.crypto?.getRandomValues !== "function") {
     throw new Error("Nanocodex Agent creation requires crypto.getRandomValues()");
@@ -117,15 +117,15 @@ export function createSessionId() {
   return `${encoded.slice(0, 4).join("")}-${encoded.slice(4, 6).join("")}-${encoded.slice(6, 8).join("")}-${encoded.slice(8, 10).join("")}-${encoded.slice(10).join("")}`;
 }
 
-// Canonical runtime session IDs as Rust prints them: lowercase UUIDv7.
+
 const CANONICAL_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
-/**
- * Internal host seam: the runtime identity for a session the host did not name.
- * A durable session whose state ID is itself a canonical runtime session ID is
- * identified by that state, exactly as Rust reports it; any other session gets
- * a fresh UUIDv7. A host-named session ID always wins over the state ID.
- */
+
+
+
+
+
+
 export function defaultSessionId(durabilityId) {
   return typeof durabilityId === "string" && CANONICAL_SESSION_ID.test(durabilityId)
     ? durabilityId
@@ -143,11 +143,11 @@ export function prompt(agent, options) {
   return createTurn(raw, agent);
 }
 
-/**
- * Internal host seam: atomically steers the active turn or starts one, for
- * live frontends (realtime voice) that cannot race steer() against prompt().
- * A started turn passes through the runtime's turn owner, if registered.
- */
+
+
+
+
+
 export async function routePrompt(agent, options) {
   const state = agentState(agent);
   const input = actionInput(options);
@@ -160,12 +160,12 @@ export async function routePrompt(agent, options) {
   return state.ownRoutedTurn ? state.ownRoutedTurn(turn) : turn;
 }
 
-/** Internal runtime seam: lets a harness runtime own turns started by routePrompt. */
+
 export function ownRoutedTurns(agent, own) {
   agentState(agent).ownRoutedTurn = own;
 }
 
-/** Internal host lifecycle identity; accepted() retains its public durable-only contract. */
+
 export function getTurnHostId(turn) {
   const state = turnState(turn);
   return typeof state.raw.hostTurnId === "function"
@@ -207,17 +207,17 @@ export function getTurnUsage(result) {
   return resultState(result).usage();
 }
 
-/** Internal Worker seam: preserves the Rust-owned encoding until it reaches its consumer. */
+
 export function getEncodedTurnCheckpoint(result) {
   return encodedTurnResultValue(resultState(result), "checkpoint");
 }
 
-/** Whether a value is a completed turn result issued by this package. */
+
 export function isTurnResult(value) {
   return resultStates.has(value);
 }
 
-/** Internal Worker seam: preserves the Rust-owned encoding until it reaches its consumer. */
+
 export function getEncodedTurnUsage(result) {
   return encodedTurnResultValue(resultState(result), "usage");
 }
@@ -257,21 +257,21 @@ function forkOrigin(origin) {
   throw new TypeError('fork origin must be "fork" or "side_conversation"');
 }
 
-/**
- * Internal host default: the workspace a resumed Codex conversation committed,
- * so host-owned tools start where the model believes it is. Rust remains the
- * only decoder of the checkpoint itself.
- */
+
+
+
+
+
 export function checkpointWorkspace(checkpoint) {
   const workspace = checkpoint?.payload?.conversation?.workspace;
   return typeof workspace === "string" ? workspace : undefined;
 }
 
-/**
- * Encodes a caller-held checkpoint for the Rust runtime, which alone validates
- * and decodes it. Only its versioned format tag is checked here so a forged or
- * disposed result handle fails before crossing into the runtime.
- */
+
+
+
+
+
 export function encodeCheckpoint(checkpoint) {
   if (!checkpoint || typeof checkpoint !== "object" || Array.isArray(checkpoint)
     || typeof checkpoint.format !== "string") {
@@ -280,23 +280,23 @@ export function encodeCheckpoint(checkpoint) {
   return JSON.stringify(checkpoint);
 }
 
-/** Returns this session's identity, harness family, and lineage. */
+
 export function sessionInfo(agent) {
   return freezeJson(JSON.parse(agentState(agent).raw.session()));
 }
 
-/** Returns the lifecycle operations this session's backend supports. */
+
 export function capabilities(agent) {
   return freezeJson(JSON.parse(agentState(agent).raw.capabilities()));
 }
 
-/** Returns where this session is persisted, or null when it lives only in memory. */
+
 export function persistence(agent) {
   const encoded = agentState(agent).raw.persistence();
   return encoded === undefined || encoded === null ? null : freezeJson(JSON.parse(encoded));
 }
 
-/** Cancels every nonterminal turn issued through this Agent. */
+
 export function cancelAll(agent) {
   return agentState(agent).raw.cancel();
 }
@@ -354,7 +354,7 @@ export function compact(agent) {
   return agentState(agent).raw.compact();
 }
 
-/** Copies the live agent's latest committed, portable session checkpoint. */
+
 export async function checkpoint(agent) {
   return freezeJson(JSON.parse(await agentState(agent).raw.checkpoint()));
 }
@@ -386,7 +386,7 @@ export async function realtimeTailDelegation(agent, transcript) {
   return agentState(agent).raw.realtimeTailDelegation(JSON.stringify(transcript));
 }
 
-/** Internal browser seam over the Rust-owned voice controller. */
+
 export function createBrowserVoice(agent, voice) {
   return agentState(agent).raw.browserVoice(voice);
 }
@@ -565,7 +565,7 @@ export function releaseHostSession(host, sessionId) {
   hostSessions.delete(sessionId);
 }
 
-/** Drops only this host's in-memory registrations. */
+
 export function releaseHostSessions(host) {
   for (const [sessionId, owner] of hostSessions) {
     if (owner === host) releaseHostSession(host, sessionId);
@@ -599,7 +599,7 @@ const hostBridge = Object.freeze({
   },
   nextClaudeCodeUpdate(hostDefinitionId, sessionId, callId) {
     const host = requiredDefinitionHost(hostDefinitionId);
-    // Hosts without live nested updates end the observation immediately.
+
     return typeof host.nextClaudeCodeUpdate === "function"
       ? host.nextClaudeCodeUpdate(sessionId, callId) : Promise.resolve(null);
   },
@@ -715,9 +715,9 @@ const hostBridge = Object.freeze({
       const current = cloudflareHostReservations.get(host);
       const previous = cloudflareHostReservations.get(existing);
       const head = pendingCloudflareAgentSessions.get(rootSessionId) ?? activeAgentSessions.get(rootSessionId);
-      // DO eviction can leave the predecessor's JavaScript registrations in
-      // the Worker isolate. Only reconstruction of that exact owner and root
-      // may take over its durable children, just as it takes over the root.
+
+
+
       if (!current || !previous || current === previous || current !== head
         || current.ownerId !== previous.ownerId
         || current.sessionId !== rootSessionId || previous.sessionId !== rootSessionId) {
@@ -732,8 +732,8 @@ const hostBridge = Object.freeze({
     }
     hostSessions.set(sessionId, host);
   },
-  // `detach` marks a runtime teardown: the child stays restorable from its
-  // durable task-tree journal, so hosts keep its durable bindings.
+
+
   releaseSubagentSession(hostDefinitionId, rootSessionId, sessionId, detach) {
     let host;
     if (sessionId !== undefined) {
@@ -814,9 +814,9 @@ const hostBridge = Object.freeze({
     return requiredDefinitionHost(definitionHostId).toolMode(sessionId);
   },
   toolDefinitions(definitionHostId, sessionId) {
-    // ModelRun builds its stable tool prefix inside the WASM constructor,
-    // before the returned session can be adopted. The private definition host
-    // keeps that lookup instance-scoped for roots and Rust-spawned children.
+
+
+
     return requiredDefinitionHost(definitionHostId).toolDefinitions(sessionId);
   },
   async durabilityReadRecords(routeId, stateId, keys) {
@@ -824,6 +824,9 @@ const hostBridge = Object.freeze({
   },
   async durabilityReadRecord(routeId, stateId, key) {
     return (await loadDurabilityRuntime()).readRecord(routeId, stateId, key);
+  },
+  async durabilityLoad(routeId, stateId) {
+    return (await loadDurabilityRuntime()).load(routeId, stateId);
   },
   async durabilityAcquire(routeId, stateId, ownerId) {
     return (await loadDurabilityRuntime()).acquire(routeId, stateId, ownerId);
@@ -859,7 +862,7 @@ const hostBridge = Object.freeze({
   },
 });
 
-/** Decodes the string ABI without changing JavaScript's numeric AgentId contract. */
+
 export function parseSubagentAgentId(encoded) {
   if (encoded === undefined) return undefined;
   if (typeof encoded !== "string" || !/^[1-9][0-9]*$/.test(encoded)) {
@@ -951,10 +954,10 @@ function agentView(state, extensions) {
     },
     dispose() {
       if (state.shutdownPromise) return;
-      // A runtime-owned handle detaches here; its owner joins the actual shutdown.
+
       if (state.ownerRetained) {
         state.disposed = true;
-        // Detached handles stop buffering events; the owner still joins the session.
+
         const errors = [];
         for (const subscription of [...state.subscriptions]) runCleanup(errors, () => subscription.close(true));
         throwCleanupErrors(errors);
@@ -1001,7 +1004,7 @@ function releaseAgentState(state) {
   throwCleanupErrors(errors);
 }
 
-/** Internal adapter seam: reserves a stable identity before starting its runtime. */
+
 export function reserveAgentSession(sessionId) {
   if (typeof sessionId !== "string" || !sessionId) {
     throw new TypeError("sessionId must be a non-empty string");
@@ -1014,7 +1017,7 @@ export function reserveAgentSession(sessionId) {
   return reservation;
 }
 
-/** Internal Cloudflare seam: prepares, but does not activate, a reconstructed DO owner. */
+
 export function prepareCloudflareAgentSession(sessionId, ownerId) {
   if (typeof sessionId !== "string" || !sessionId) {
     throw new TypeError("sessionId must be a non-empty string");
@@ -1046,7 +1049,7 @@ export function prepareCloudflareAgentSession(sessionId, ownerId) {
   return reservation;
 }
 
-/** @internal Whether this exact Cloudflare generation may bind live children. */
+
 export function mayBindCloudflareSubagentSession(reservation) {
   return cloudflareAgentSessions.has(reservation)
     && !reservation.released
@@ -1054,7 +1057,7 @@ export function mayBindCloudflareSubagentSession(reservation) {
       || activeAgentSessions.get(reservation.sessionId) === reservation);
 }
 
-/** @internal Whether this committed current generation may release live children. */
+
 export function mayReleaseCloudflareSubagentSession(reservation) {
   return cloudflareAgentSessions.has(reservation)
     && !reservation.released
@@ -1067,7 +1070,7 @@ function cloudflareHostMayBindSubagent(host) {
   return reservation === undefined || mayBindCloudflareSubagentSession(reservation);
 }
 
-/** Internal Cloudflare seam: activates a prepared owner after raw construction acquires its durable fence. */
+
 export function activateCloudflareAgentSession(reservation) {
   if (!cloudflareAgentSessions.has(reservation) || reservation.released) {
     throw new Error("Cloudflare Agent session reservation is no longer active");
@@ -1089,7 +1092,7 @@ export function activateCloudflareAgentSession(reservation) {
   pendingCloudflareAgentSessions.delete(reservation.sessionId);
 }
 
-/** Internal Cloudflare seam: publishes a reconstructed owner after adapter setup succeeds. */
+
 export function commitCloudflareAgentSession(reservation, beforeCommit) {
   if (!cloudflareAgentSessions.has(reservation)
     || reservation.released
@@ -1097,8 +1100,8 @@ export function commitCloudflareAgentSession(reservation, beforeCommit) {
     || activeAgentSessions.get(reservation.sessionId) !== reservation) {
     throw new Error("Cloudflare Agent session reservation is not ready to commit");
   }
-  // A synchronous durable transition must succeed before rollback authority is
-  // relinquished. No other generation can interleave validation and publication.
+
+
   beforeCommit?.();
   reservation.committed = true;
   reservation.predecessor = undefined;
@@ -1121,7 +1124,7 @@ function adoptAgentSession(reservation, sessionId) {
   reservation.adopted = true;
 }
 
-/** Internal adapter seam: rolls back a runtime reservation that was not adopted. */
+
 export function releaseAgentSession(reservation) {
   if (!reservation || reservation.released) return;
   reservation.released = true;
@@ -1144,8 +1147,8 @@ export function releaseAgentSession(reservation) {
       }
     }
   }
-  // Failed reconstruction restores registrations only while the predecessor
-  // still owns the root. Never overwrite a newer generation's child binding.
+
+
   for (const [sessionId, { host, previous }] of reservation.predecessorChildHosts ?? []) {
     const current = hostSessions.get(sessionId);
     if ((current === undefined || current === host) && cloudflareHostMayBindSubagent(previous)) {

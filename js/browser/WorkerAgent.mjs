@@ -29,7 +29,7 @@ const eventDecoder = new TextDecoder("utf-8", { fatal: true });
 const recentImages = new Map();
 let prewarmedWorker;
 
-/** Creates a DefaultAgent whose owned driver and browser host live in one module Worker. */
+
 export async function createWorkerAgent(options = {}, workerOptions = {}) {
   workerOptions.signal?.throwIfAborted();
   const config = serializeConfig(options);
@@ -72,7 +72,7 @@ export async function createWorkerAgent(options = {}, workerOptions = {}) {
   }
 }
 
-/** Starts the exact module Worker and browser harness consumed by the next Agent.create. */
+
 export function prepareWorkerAgent(options = {}, workerOptions = {}) {
   workerOptions.signal?.throwIfAborted();
   const harness = options.harness === false ? false : harnessDescriptor(options, true);
@@ -174,10 +174,10 @@ export function prepareWorkerAgent(options = {}, workerOptions = {}) {
   return entry.prepare(workerOptions.signal);
 }
 
-/**
- * Installs the reusable package RPC runtime in a Worker-like global scope.
- * Tests and advanced integrations may inject the explicitly local Agent creator.
- */
+
+
+
+
 export function installWorkerAgentRuntime(scope = globalThis, options = {}) {
   if (!scope || typeof scope.postMessage !== "function") {
     throw new TypeError("the Worker Agent runtime requires a Worker-like scope");
@@ -656,7 +656,7 @@ function releaseWorkerResult(results, resultId) {
 }
 
 function describeAgent(agentId, agent) {
-  // Identity, lineage, capabilities, and persistence are fixed per session.
+
   return {
     handleId: agentId,
     agentId: agent.agentId,
@@ -1435,7 +1435,7 @@ async function loadAgent(options) {
   return Agent.create(options);
 }
 
-/** @internal Starts independent Worker resources on the same critical path. */
+
 export async function prewarmWorkerRuntime(
   harness,
   {

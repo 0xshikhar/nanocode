@@ -20,7 +20,7 @@ type ComputerStat = Readonly<{
   isSymbolicLink: boolean;
 }>;
 
-/** Minimal storage interface needed to expose a persistent Nanocodex workspace. */
+
 export type WorkspaceStorageClient = Readonly<{
   fs: {
     lstat(path: string): Promise<ComputerStat>;
@@ -41,10 +41,10 @@ export type WorkspaceStorageClient = Readonly<{
   };
 }>;
 
-/**
- * Adapts a persistent filesystem client to Nanocodex's host-generic workspace
- * contract. Callers mount the returned handle into a bounded tool runtime.
- */
+
+
+
+
 export async function createWorkspaceFilesystem(
   workspace: WorkspaceStorageClient,
   options: { maxFileBytes?: number | undefined } = {},

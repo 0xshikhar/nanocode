@@ -27,9 +27,9 @@ export class BrowserPythonRuntime {
                 if (event.data.id !== id)
                     return;
                 cleanup();
-                // NativeFS can push changes back to OPFS but cannot refresh an existing
-                // mount after bash edits. A process-like fresh worker per invocation
-                // guarantees each Python command begins from the latest workspace.
+
+
+
                 this.#discardWorker(worker);
                 if (event.data.result)
                     resolve(event.data.result);

@@ -100,7 +100,7 @@ impl Tool for ViewImageHandler {
                 }
             }
         };
-        // The model-history boundary owns image validation, resizing, and caching.
+
         let image_url = format!(
             "data:application/octet-stream;base64,{}",
             STANDARD.encode(bytes)

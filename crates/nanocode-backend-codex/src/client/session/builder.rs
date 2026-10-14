@@ -21,7 +21,6 @@ use super::{
 
 const RESPONSE_EVENT_CAPACITY: usize = 64;
 
-/// Builder for one instruction-bound managed Responses session.
 #[derive(Clone)]
 pub struct SessionBuilder<F = StandardServiceFactory> {
     openai: OpenAi<F>,
@@ -45,69 +44,24 @@ where
         }
     }
 
-    /// Sets the client-side session identity used for tracing and cache
-    /// lineage.
     #[must_use]
     pub const fn session_id(mut self, session_id: SessionId) -> Self {
         self.session_id = Some(session_id);
         self
     }
 
-    /// Sets the stable cache key for the immutable instructions and tools.
     #[must_use]
     pub fn prompt_cache_key(mut self, prompt_cache_key: impl Into<String>) -> Self {
         self.prompt_cache_key = Some(prompt_cache_key.into());
         self
     }
 
-    /// Installs the complete tool definitions sent to the model.
-    ///
-    /// This is the protocol-level API for callers that execute tool calls
-    /// themselves. [`nanocode-code-mode`](https://docs.rs/nanocode-code-mode)
-    /// provides a registry and concrete runtimes for applications that want
-    /// Nanocodex to dispatch the calls.
-    ///
-    /// ```
-    /// use crate::client::{
-    ///     OpenAi,
-    ///     responses::JsonSchema,
-    ///     tools::ToolDefinition,
-    /// };
-    /// use serde_json::json;
-    ///
-    /// let openai = OpenAi::new("test-api-key")?;
-    /// let session = openai
-    ///     .instructions(
-    ///         "Use lookup_region for deployment questions. Preserve exact identifiers.",
-    ///     )
-    ///     .tool_definitions([ToolDefinition::function(
-    ///         "lookup_region",
-    ///         "Return deployment metadata for one exact region identifier.",
-    ///         JsonSchema::from(json!({
-    ///             "type": "object",
-    ///             "properties": {
-    ///                 "region": { "type": "string" }
-    ///             },
-    ///             "required": ["region"],
-    ///             "additionalProperties": false
-    ///         })),
-    ///     )])
-    ///     .build()?;
-    ///
-    /// assert_eq!(session.history_len(), 0);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
     #[must_use]
     pub fn tool_definitions(mut self, tools: impl IntoIterator<Item = ToolDefinition>) -> Self {
         self.tools = tools.into_iter().collect();
         self
     }
 
-    /// Creates fresh service, context, and continuation state.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when instructions or the cache identity are empty.
     pub fn build(self) -> Result<Session<F::Service>, SessionBuildError> {
         if self.instructions.trim().is_empty() {
             return Err(SessionBuildError::EmptyInstructions);
@@ -146,24 +100,18 @@ where
     }
 }
 
-/// Invalid managed-session construction.
 #[derive(Debug, thiserror::Error)]
 pub enum SessionBuildError {
-    /// Stable developer instructions were empty.
     #[error("OpenAI session instructions must not be empty")]
     EmptyInstructions,
-    /// The explicit prompt-cache identity was empty.
+
     #[error("OpenAI prompt cache key must not be empty")]
     EmptyPromptCacheKey,
-    /// The immutable Responses Lite prefix could not be serialized.
+
     #[error("failed to fingerprint the immutable prompt prefix: {0}")]
     SerializePromptPrefix(#[source] serde_json::Error),
 }
 
-/// One managed `OpenAI` Responses conversation.
-///
-/// The session owns its concrete Tower service, persistent transport,
-/// authoritative typed history, usage, and private continuation state.
 pub struct Session<S> {
     pub(super) id: SessionId,
     pub(super) client: ResponsesClient<S>,
@@ -181,18 +129,11 @@ pub struct Session<S> {
 }
 
 impl<S> Session<S> {
-    /// Returns the client-side session identity.
     #[must_use]
     pub const fn id(&self) -> SessionId {
         self.id
     }
 
-    /// Starts one logical agent turn.
-    ///
-    /// Every `create` and `compact` call made through the returned value shares
-    /// turn-scoped protocol state. A compaction before the first completed
-    /// `create` is pre-turn; a compaction after one is mid-turn. Dropping the
-    /// value ends the boundary.
     pub const fn turn(&mut self) -> ResponseTurn<'_, S> {
         let logical_turn = self.next_logical_turn;
         self.next_logical_turn = self.next_logical_turn.saturating_add(1);
@@ -203,32 +144,21 @@ impl<S> Session<S> {
         }
     }
 
-    /// Returns the number of committed typed history items.
     #[must_use]
     pub fn history_len(&self) -> usize {
         self.state.history_len()
     }
 
-    /// Iterates over committed authoritative history without exposing mutable
-    /// access.
     pub fn history(&self) -> impl ExactSizeIterator<Item = &ResponseItem> {
         self.state.history()
     }
 
-    /// Returns the best available estimate of tokens in the active provider
-    /// context.
-    ///
-    /// The session combines completed provider usage with locally appended
-    /// items and retained reasoning according to the transport metadata it has
-    /// observed. Higher-level agents use this summary to decide *when* to call
-    /// [`ResponseTurn::compact`].
     #[must_use]
     pub fn active_context_tokens(&self) -> u64 {
         self.state.active_context_tokens()
     }
 }
 
-/// Turn-scoped Responses operations borrowing one managed session.
 pub struct ResponseTurn<'session, S> {
     pub(super) session: &'session mut Session<S>,
     pub(super) logical_turn: u64,
@@ -236,7 +166,6 @@ pub struct ResponseTurn<'session, S> {
 }
 
 impl<S> ResponseTurn<'_, S> {
-    /// Returns the session's best available active-context token estimate.
     #[must_use]
     pub fn active_context_tokens(&self) -> u64 {
         self.session.active_context_tokens()
@@ -250,7 +179,6 @@ where
     S::Error: Into<ResponseError> + Send,
     S::Future: Send,
 {
-    /// Starts one streamed `response.create` operation.
     pub fn create(&mut self, input: impl Into<ResponseInput>) -> Response<'_> {
         let (sink, raw_events) = EventSink::channel(self.session.profile.session_id().to_owned());
         drop(raw_events);
@@ -259,19 +187,6 @@ where
         Response::new(events, run)
     }
 
-    /// Executes `response.compact` and atomically installs its completed
-    /// history replacement.
-    ///
-    /// Pre-turn compaction defers the session's last caller-supplied developer,
-    /// `AGENTS.md`, and environment-context snapshot until the next normal
-    /// `create`. Mid-turn compaction installs that snapshot immediately at the
-    /// model-trained boundary before the last real user message. The standalone
-    /// session never reads the filesystem to refresh this fallback.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed transport, protocol, or context error. Failed
-    /// compaction leaves the prior history untouched.
     pub async fn compact(&mut self) -> Result<CompletedCompaction, ResponseError> {
         run_compact(self).await
     }
@@ -283,7 +198,6 @@ where
     S: Service<ResponsesAttempt, Response = ResponsesServiceResponse>,
     S::Error: Into<ResponseError>,
 {
-    /// Starts one streamed `response.create` operation.
     pub fn create(&mut self, input: impl Into<ResponseInput>) -> Response<'_> {
         let (sink, raw_events) = EventSink::channel(self.session.profile.session_id().to_owned());
         drop(raw_events);
@@ -292,19 +206,6 @@ where
         Response::new(events, run)
     }
 
-    /// Executes `response.compact` and atomically installs its completed
-    /// history replacement.
-    ///
-    /// Pre-turn compaction defers the session's last caller-supplied developer,
-    /// `AGENTS.md`, and environment-context snapshot until the next normal
-    /// `create`. Mid-turn compaction installs that snapshot immediately at the
-    /// model-trained boundary before the last real user message. The standalone
-    /// session never reads the filesystem to refresh this fallback.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed transport, protocol, or context error. Failed
-    /// compaction leaves the prior history untouched.
     pub async fn compact(&mut self) -> Result<CompletedCompaction, ResponseError> {
         run_compact(self).await
     }

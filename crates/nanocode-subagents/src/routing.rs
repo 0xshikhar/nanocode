@@ -1,15 +1,12 @@
-//! Host-owned, task-aware routing before a clean child is constructed.
 use async_trait::async_trait;
 use nanocode_agent::SpawnOptions;
 
-/// A prepared choice. The opaque reference carries no provider credentials.
 pub struct SpawnRoute {
     pub options: SpawnOptions,
     pub reference: String,
 }
 
 impl SpawnRoute {
-    /// Reject incomplete or conflicting routes before constructing a child.
     pub(crate) fn validate(&self, requested: SpawnOptions) -> std::io::Result<()> {
         let model = self
             .options
@@ -53,8 +50,6 @@ impl SpawnRoute {
     }
 }
 
-/// A host may explicitly keep registered-backend spawning, including live parent defaults.
-/// The reference is still bound before inference, just like a routed choice.
 pub enum SpawnDecision {
     Routed(SpawnRoute),
     Native { reference: String },
@@ -65,8 +60,7 @@ impl SpawnDecision {
         match self {
             Self::Routed(route) => route.validate(requested),
             Self::Native { reference } => {
-                if reference.trim().is_empty()
-                {
+                if reference.trim().is_empty() {
                     return Err(std::io::Error::other("invalid native subagent choice"));
                 }
                 Ok(())
@@ -89,9 +83,6 @@ impl SpawnDecision {
     }
 }
 
-/// Implemented by the embedding host. Resolve must enforce the invoking child's
-/// authority and explicit overrides; bind must retain the choice in memory before
-/// any child turn starts. Returning an error fails the spawn closed.
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 pub trait SpawnRouter: Send + Sync {
@@ -104,7 +95,6 @@ pub trait SpawnRouter: Send + Sync {
         host_context: Option<&str>,
     ) -> std::io::Result<SpawnRoute>;
 
-    /// Additive native choice support; existing routers continue routing every child.
     async fn resolve_spawn(
         &self,
         parent_session_id: &str,

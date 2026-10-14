@@ -1,6 +1,3 @@
-//! Shared envelope validation for embedded outputs and restored history.
-
-/// Checks image MIME and base64 syntax without decoding image pixels.
 #[must_use]
 pub fn valid_tool_image_data_url(url: &str) -> bool {
     let Some((header, encoded)) = url.split_once(',') else {
@@ -38,8 +35,7 @@ pub fn valid_tool_image_data_url(url: &str) -> bool {
     {
         return false;
     }
-    // Canonical base64 requires unused bits in the final sextet to be zero.
-    // Strict decoders reject otherwise syntactically valid strings like YR==.
+
     let last = payload[payload.len() - 1];
     let sextet = match last {
         b'A'..=b'Z' => last - b'A',

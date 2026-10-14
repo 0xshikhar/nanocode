@@ -1,4 +1,3 @@
-//! Stable, recoverable completion diagnostics. Never include submitted values.
 use serde::Serialize;
 use std::fmt;
 
@@ -8,26 +7,22 @@ pub enum CompletionErrorCode {
     NotChild,
     MissingInstructionRevision,
     InactiveTurn,
-    /// Legacy diagnostic retained for native API compatibility. Supersession is now an outcome.
+
     SteeringInProgress,
-    /// Legacy diagnostic retained for native API compatibility; models no longer supply tokens.
+
     StaleTurnToken,
     AlreadyAccepted,
     SchemaValidation,
     MissingResult,
 }
 
-/// `recoverable` means the active turn can correct its submission, not that task
-/// execution may be retried. Kept inside `io::Error` for typed native inspection;
-/// Display stays readable in user-facing failure cards; native callers can
-/// inspect this type or serialize it to retain structured recovery metadata.
 #[derive(Clone, Debug, Serialize)]
 pub struct CompletionError {
     pub code: CompletionErrorCode,
     pub recoverable: bool,
     pub message: &'static str,
     pub recovery: &'static str,
-    /// Legacy native API field; new diagnostics never expose instruction revisions.
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_turn_token: Option<u64>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -52,8 +47,6 @@ impl CompletionError {
     }
 
     pub(crate) fn with_details(mut self, details: Vec<String>) -> Self {
-        // Schema paths can contain caller-supplied property names. Bound bytes,
-        // as well as count, without ever echoing rejected instance values.
         self.details = details
             .into_iter()
             .take(4)

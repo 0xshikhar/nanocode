@@ -9,9 +9,12 @@ export type {
   ResumeOptions,
   Runtime,
   SpawnOptions,
+  BackendRuntime,
+  BackendSpawnOptions,
+  InheritedSpawnOptions,
   ToolFactoryContext,
   ToolSource,
 } from "../runtime/nanocodex.mjs";
 
-/** Configures backends once and returns a runtime that spawns independent root Agents. */
+
 export function create(options: Options): Promise<Runtime.Runtime>;

@@ -1,5 +1,3 @@
-//! Cancellation-safe, serialized MCP OAuth refresh transactions.
-
 use std::{sync::Arc, time::Duration};
 
 use oauth2::TokenResponse;
@@ -41,10 +39,6 @@ impl McpOAuthCredentials {
 }
 
 impl OAuthRuntime {
-    /// Refreshes known-expiring credentials before an MCP operation starts.
-    ///
-    /// The owned task continues through persistence if its caller is cancelled after a rotating
-    /// refresh token may have been consumed.
     pub(crate) async fn refresh_if_needed(self: &Arc<Self>) -> Result<(), String> {
         let refresh_needed = self
             .last_credentials

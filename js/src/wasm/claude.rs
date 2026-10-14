@@ -1,25 +1,3 @@
-//! Explicit Claude embedding. No Codex model catalog or ambient tools are installed.
-//!
-//! `create` accepts camelCase JSON: model (required), apiKey OR authHostId,
-//! sessionId (optional; durable IDs must match durabilityId), endpoint,
-//! subscriptionCompatibility, hostDefinitionId (required with tools),
-//! toolMode ("code-only" default, or "direct"), tools (exec/wait definitions
-//! in Code Mode; native client definitions in direct mode), maxTokens, thinking (effort),
-//! adaptiveThinking, keepThinking, fastMode, cache ("off", "5m", "1h"), autoCompact
-//! (false rejects unsupported disabling, true keeps backend policy),
-//! autoCompactWindowTokens, contextWindowTokens, instructions, systemBlocks,
-//! workspace, parallelTools, parallelSafeTools (host-derived),
-//! durabilityHostId, durabilityId, resume (a portable Claude session
-//! checkpoint whose conversation the new session continues),
-//! terminalReceiptRetention. Code Mode is the default; direct mode is an
-//! explicit opt-in. Provider tools and client tool search are rejected in both
-//! modes. Credentials never enter a checkpoint.
-//!
-//! Host contracts: claudeAuth(authHostId) -> Promise<JSON header map string>;
-//! executeClaudeTool(hostDefinitionId, name, inputJson, sessionId, callId, model,
-//! turnId) -> Promise<JSON {content: string | block[], isError?: boolean,
-//! metadata?: value, structuredResult?: value}>. Host errors are redacted.
-
 use super::{
     AgentEvents, DurableAgentExt, HashMap, JavaScriptDurabilityStore, JavaScriptSpawnRouter,
     JsFuture, JsValue, Mutex, RustNanocodex, SessionCheckpoint, WasmHarnessFactory, WasmNanocodex,
@@ -61,9 +39,6 @@ extern "C" {
     ) -> Result<js_sys::Promise, JsValue>;
 }
 
-/// Streams the live nested starts and results of one exec/wait observation
-/// until the host closes it. Missing support or host errors only end live
-/// observation; the final receipt still settles every reported call.
 async fn observe_live_updates(
     host_definition_id: u32,
     session_id: &str,
@@ -135,7 +110,7 @@ pub(super) struct ClaudeConfig {
     adaptive_thinking: bool,
     #[serde(default)]
     keep_thinking: bool,
-    /// Requests fast mode where the model offers it; rejected before any request otherwise.
+
     fast_mode: Option<bool>,
     #[serde(default)]
     cache: CachePolicy,
@@ -147,7 +122,7 @@ pub(super) struct ClaudeConfig {
     workspace: Option<String>,
     #[serde(default)]
     parallel_tools: bool,
-    /// Host tools declaring `supportsParallelToolCalls`; consecutive calls overlap.
+
     #[serde(default)]
     parallel_safe_tools: Vec<String>,
     #[serde(default)]
@@ -174,7 +149,6 @@ enum CachePolicy {
 }
 
 impl ClaudeConfig {
-    /// Direct mode is an explicit opt-in; an absent mode keeps Code Mode.
     fn is_direct(&self) -> bool {
         self.tool_mode.as_deref() == Some("direct")
     }
@@ -317,9 +291,6 @@ async fn execute_tool(
     invocation: ClaudeToolInvocation,
     local_tools: Option<ClaudeTools>,
 ) -> Result<ClaudeToolReply, String> {
-    // Dropping a JsFuture only stops Rust observation. Abort the host's active
-    // handlers when native cancellation drops this invocation, preserving the
-    // session registration so an interrupted child can be reused.
     struct PendingTool<'a> {
         session_id: &'a str,
         cancel: Option<js_sys::Function>,
@@ -331,7 +302,6 @@ async fn execute_tool(
                 if let Some(cancel) = &self.cancel {
                     let _ = cancel.call0(&JsValue::UNDEFINED);
                 } else {
-                    // Compatibility with hosts that only expose session abort.
                     host_cancel_code_turn(self.session_id);
                 }
             }
@@ -350,7 +320,7 @@ async fn execute_tool(
     )
     .map_err(|error| error.to_string())?;
     let original = invocation.clone();
-    // JS owns the callback for the entire cell, including yielded continuations.
+
     let callback = Closure::wrap(
         Box::new(move |name: String, input: String, call_id: String| {
             let tools = local_tools.clone();
@@ -449,29 +419,11 @@ async fn execute_tool(
 
 #[wasm_bindgen(js_class = Nanocodex)]
 impl WasmNanocodex {
-    /// Builds a Claude-native session behind the shared Nanocodex handle.
-    ///
-    /// Only explicitly supplied Claude capabilities are installed;
-    /// authentication remains host-owned.
-    ///
-    /// # Errors
-    ///
-    /// Throws when the configuration or agent policy is invalid. Messages never
-    /// echo configuration values, which may contain credentials.
     #[wasm_bindgen(js_name = createClaude)]
     pub async fn create_claude(config_json: &str) -> Result<Self, JsValue> {
         Self::create_claude_with_codex_auth(config_json, None).await
     }
 
-    /// Builds a Claude-native session whose Codex children authenticate with
-    /// the Rust-owned ChatGPT subscription credential lifecycle.
-    ///
-    /// Identical to `createClaude` except that an alternate Codex harness uses
-    /// the subscription's current authorization instead of its recipe API key.
-    ///
-    /// # Errors
-    ///
-    /// Throws when the configuration, subscription or agent policy is invalid.
     #[wasm_bindgen(js_name = createClaudeWithChatGpt)]
     pub async fn create_claude_with_chat_gpt(
         config_json: &str,
@@ -485,7 +437,6 @@ impl WasmNanocodex {
         config_json: &str,
         codex_auth: Option<nanocode::oai::auth::OpenAiAuth>,
     ) -> Result<Self, JsValue> {
-        // Serde errors can include caller-supplied strings; do not echo config secrets.
         let config: ClaudeConfig = serde_json::from_str(config_json)
             .map_err(|_| js_error("invalid Claude configuration"))?;
         let (factory, subagents) = if let Some(settings) = &config.subagents {
@@ -522,6 +473,9 @@ impl WasmNanocodex {
                 hosts: Arc::new(Mutex::new(HashMap::new())),
                 codex,
                 claude: Some(serde_json::to_value(&config).map_err(js_error)?),
+                durability_host_id: (config.session_id == config.durability_id)
+                    .then(|| config.durability_host_id.clone())
+                    .flatten(),
             });
             let subagents = WasmSubagents::new(
                 host,
@@ -535,7 +489,7 @@ impl WasmNanocodex {
         } else {
             (None, None)
         };
-        let (inner, events) = build_claude(config, factory, None, None).await?;
+        let (inner, events) = build_claude(config, factory, None, None, None).await?;
         Ok(Self::from_parts(inner, events, subagents))
     }
 }
@@ -543,10 +497,19 @@ impl WasmNanocodex {
 pub(super) async fn build_claude(
     config: ClaudeConfig,
     factory: Option<Arc<WasmHarnessFactory>>,
-    checkpoint: Option<SessionCheckpoint>,
+    mut checkpoint: Option<SessionCheckpoint>,
     host_context: Option<Arc<str>>,
+    lineage: Option<nanocode::Lineage>,
 ) -> Result<(RustNanocodex, AgentEvents), JsValue> {
     config.validate().map_err(js_error)?;
+    let record = super::durability_record(
+        config.durability_id.as_deref(),
+        config.session_id.as_deref(),
+        nanocode::ModelSelection::new(nanocode::HarnessFamily::Claude, config.model.clone()),
+        config.workspace.as_deref(),
+        checkpoint.as_ref().or(config.resume.as_ref()),
+        lineage,
+    );
     let direct = config.is_direct();
     let endpoint = config.endpoint.unwrap_or_else(|| {
         if config.subscription_compatibility {
@@ -582,9 +545,7 @@ pub(super) async fn build_claude(
     let mut builder = RustNanocodex::builder(Claude::new(client, config.model))
         .parallel_tools(config.parallel_tools)
         .parallel_safe_tools(config.parallel_safe_tools);
-    // Resuming reopens the checkpointed session; an explicit, different
-    // session ID below makes it a new root continuing that conversation, and
-    // the configured host policy below then applies to it.
+
     if let Some(resume) = config.resume {
         builder = builder.resume(resume).map_err(js_agent_error)?;
     }
@@ -595,10 +556,7 @@ pub(super) async fn build_claude(
         builder = builder.max_tokens(tokens);
     }
     if let Some(effort) = config.thinking {
-        if builder_model
-            .parse::<nanocode_backend_codex::HarnessModel>()
-            .is_ok()
-        {
+        if builder_model.parse::<nanocode::ModelSelection>().is_ok() {
             builder = builder.thinking(effort).map_err(js_error)?;
         } else if effort != super::Thinking::None {
             let native = serde_json::from_value(serde_json::to_value(effort).map_err(js_error)?)
@@ -635,8 +593,7 @@ pub(super) async fn build_claude(
     if let Some(workspace) = config.workspace {
         builder = builder.workspace(workspace);
     }
-    // Direct mode registers every host definition as a native client tool and
-    // installs subagent tools beside them; Code Mode nests both under exec.
+
     builder = builder.code_only(!direct);
     let code_definitions = if factory.is_some() && !direct {
         config.tools.clone()
@@ -668,6 +625,20 @@ pub(super) async fn build_claude(
             nanocode::agent::durability::DurableSession::open(store, state_id).await
         }
         .map_err(js_error)?;
+        if durable
+            .latest_checkpoint()
+            .await
+            .map_err(js_error)?
+            .is_some()
+        {
+            checkpoint = None;
+        }
+        if let Some(checkpoint) = checkpoint.take() {
+            builder = builder.resume(checkpoint).map_err(js_agent_error)?;
+        }
+        if let Some(record) = record {
+            durable.describe(record).await.map_err(js_error)?;
+        }
         builder = builder.durability(durable).await.map_err(js_error)?;
     }
     if let Some(factory) = factory {

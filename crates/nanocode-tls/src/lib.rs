@@ -1,13 +1,3 @@
-//! Native certificate verification and TLS session state shared across connections.
-//!
-//! On macOS without certificate environment overrides, use the same platform
-//! verifier as Reqwest so startup does not enumerate the entire OS root store.
-//! Elsewhere, or with explicit overrides, load native roots off the async executor.
-//! Subsequent calls refresh cached configurations after five minutes, or sooner if
-//! overrides change. Retained configurations and connections are not revoked.
-//! Failed refreshes fail closed; this cache contains no application credentials
-//! or authorization.
-
 use rustls::{ClientConfig, RootCertStore};
 use std::{
     ffi::OsString,
@@ -31,24 +21,6 @@ impl Cached {
 }
 static CACHE: Mutex<Option<Cached>> = Mutex::const_new(None);
 
-/// Returns a native-trust TLS configuration, sharing session resumption state.
-///
-/// Each call reuses a matching configuration for up to five minutes. A subsequent
-/// call refreshes it after that interval, or when `SSL_CERT_FILE` or `SSL_CERT_DIR`
-/// changes. Files changed at the same override paths are reloaded on expiry.
-/// Refreshing creates new session state; retained configurations and established
-/// connections remain usable. Resumed sessions do not repeat full chain checks.
-///
-/// On macOS without certificate environment overrides, full handshakes use
-/// Security.framework's SecTrust chain policy through the platform verifier.
-/// An explicitly installed Rustls crypto provider is retained for TLS handshake
-/// cryptography; SecTrust controls certificate chain validation.
-///
-/// # Errors
-/// Returns an error if the platform verifier cannot be initialized, or native
-/// trust roots cannot be loaded or contain no usable certificates. A failed
-/// refresh never falls back to an expired configuration. Platform certificate
-/// verification errors are reported during the TLS handshake.
 pub async fn native_client_config() -> io::Result<Arc<ClientConfig>> {
     let environment = (
         std::env::var_os("SSL_CERT_FILE"),
@@ -81,9 +53,6 @@ fn load() -> io::Result<ClientConfig> {
     if std::env::var_os("SSL_CERT_FILE").is_none() && std::env::var_os("SSL_CERT_DIR").is_none() {
         use rustls_platform_verifier::BuilderVerifierExt;
 
-        // This passes the builder's existing CryptoProvider to the verifier.
-        // Explicit overrides retain the native-certs replacement-store semantics
-        // below; adding them to platform roots would silently broaden trust.
         let config = ClientConfig::builder()
             .with_platform_verifier()
             .map_err(io::Error::other)?
@@ -108,12 +77,6 @@ fn load() -> io::Result<ClientConfig> {
         .with_no_client_auth())
 }
 
-/// Installs ring as the process-level Rustls provider when the embedding host
-/// has not already selected one.
-///
-/// Nanocodex uses ring throughout its native dependency graph. Calling this
-/// before constructing TLS clients also keeps an embedding application's
-/// explicit provider choice authoritative.
 pub fn install_default_rustls_crypto_provider() {
     if rustls::crypto::CryptoProvider::get_default().is_none() {
         drop(rustls::crypto::ring::default_provider().install_default());

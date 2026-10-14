@@ -23,9 +23,7 @@ where
     let session_id_text = session_id.to_string();
     let context_source = codex.context.build();
     let PromptCacheConfig { key, shared } = prompt_cache;
-    // A reopened stored child (a durable fork or subagent recorded before its
-    // first turn) carries its provenance without a resume snapshot; it still
-    // continues its own recorded rollout instead of starting a root mirror.
+
     let is_resume = resume.is_some()
         || lineage
             .as_ref()
@@ -146,7 +144,7 @@ where
     let shutdown = DriverShutdown::default();
     let mut child_handle = AgentHandle::new(
         Arc::<str>::from(session_id_text.as_str()),
-        crate::HarnessModel::Codex(spawner.config.model),
+        crate::ModelSelection::Codex(spawner.config.model),
         Arc::new(super::handle::OpenAiAgentFactory {
             commands: commands.downgrade(),
             shutdown: shutdown.clone(),
@@ -162,8 +160,7 @@ where
         .tools
         .materialize(child_handle.clone())?
         .for_session(&child_handle.session_environment());
-    // Code Mode (the default) exposes tools through `exec`; direct exposure
-    // declares them as ordinary provider tools dispatched by the driver.
+
     if tools.exposure() == nanocode_code_mode::ToolExposure::Hidden {
         return Err(NanocodexError::InvalidRequest(
             "Nanocodex agents require Code Mode or direct tool exposure".to_owned(),
@@ -226,8 +223,7 @@ where
         checkpoints: Arc::clone(&checkpoints),
         initial_ready: Arc::new(std::sync::Mutex::new(Some(initial_ready))),
     });
-    // Start discovery before returning the handle so an idle CLI or TUI immediately
-    // contributes its human think time to provider prewarming.
+
     tools.start_providers();
     let driver = AgentDriver {
         commands: receiver,
@@ -305,7 +301,7 @@ pub(super) fn validate(config: &ModelConfig, prompt_cache_key: Option<&str>) -> 
 }
 
 pub(super) fn validate_model_thinking(model: Model, thinking: Thinking) -> Result<()> {
-    crate::HarnessModel::Codex(model)
+    crate::ModelSelection::Codex(model)
         .capabilities(crate::ModelTransport::Native)
         .check_thinking(thinking)
 }
@@ -314,7 +310,7 @@ pub(super) fn validate_model_reasoning_mode(
     model: Model,
     reasoning_mode: ReasoningMode,
 ) -> Result<()> {
-    crate::HarnessModel::Codex(model)
+    crate::ModelSelection::Codex(model)
         .capabilities(crate::ModelTransport::Native)
         .check_reasoning_mode(reasoning_mode)
 }

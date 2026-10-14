@@ -1,8 +1,6 @@
-//! Host-owned composition of native harness recipes.
-
 use std::{collections::HashMap, future::Future, sync::Arc};
 
-use crate::{Agent, AgentEvents, HarnessFamily, HarnessModel, NanocodexError, Thinking};
+use crate::{Agent, AgentEvents, HarnessFamily, ModelSelection, NanocodexError, Thinking};
 use nanocode_agent::{
     AgentHandle, ForkRequest, SessionCheckpoint, SpawnOptions,
     backend::{AgentFactory, BackendFuture},
@@ -11,98 +9,99 @@ use nanocode_agent::{
 pub(crate) type AgentResult = nanocode_agent::Result<(Agent, AgentEvents)>;
 type Recipe = Arc<dyn Fn(HarnessRequest) -> BackendFuture<AgentResult> + Send + Sync>;
 
-/// Validated construction input passed to a concrete provider recipe.
-///
-/// Recipes keep their native builders, credentials, tools and checkpoint policy.
-/// The shared router erases only the finished lifecycle and construction future.
 pub struct HarnessRequest {
-    /// Family-scoped model selected before any recipe executes.
-    pub model: HarnessModel,
-    /// Reasoning effort validated for the selected model.
+    pub model: ModelSelection,
+
     pub thinking: Thinking,
-    /// Complete resolved child configuration.
+
     pub options: SpawnOptions,
-    /// Weak invoking capability, absent for a newly started root thread.
+
     pub parent: Option<AgentHandle>,
-    /// Private host context inherited at this boundary, never model arguments.
+
     pub host_context: Option<Arc<str>>,
-    /// Session to reopen, keeping the checkpoint's session identity, lineage,
-    /// model policy and conversation, with the recipe's current host
-    /// capabilities. Present for [`Harness::resume`] (with no parent) and for
-    /// a parent restoring an evicted child; recipes pass it to their native
-    /// builder's `resume`. Its unredacted transcript stays in memory
-    /// and must not enter model arguments.
+
     pub checkpoint: Option<SessionCheckpoint>,
-    /// Durable catalog state to own, present for [`Harness::open`] (with no
-    /// parent and no checkpoint). Recipes attach it with
-    /// [`crate::DurableAgentExt::durability`], which restores the state's
-    /// latest boundary, identity and lineage and records every later turn.
+
     #[cfg(all(feature = "durability", not(target_family = "wasm")))]
     pub durable_state: Option<crate::durability::DurableSession>,
-    /// Shared router to install on every per-agent weak handle.
+
     pub spawn_factory: Arc<dyn AgentFactory>,
 }
 
-/// A reusable registry of explicitly authorized native harness recipes.
 #[derive(Clone)]
 pub struct Harness {
     inner: Arc<Router>,
 }
 
-/// Configures concrete recipes before crossing the lifecycle-erasure boundary.
 #[derive(Default)]
 pub struct HarnessBuilder {
     recipes: HashMap<HarnessFamily, Recipe>,
-    defaults: HashMap<HarnessFamily, HarnessModel>,
+    defaults: HashMap<HarnessFamily, ModelSelection>,
+    thinking_defaults: HashMap<HarnessFamily, Thinking>,
+    #[cfg(feature = "durability")]
+    recovery_store: Option<crate::durability::SessionStore>,
 }
 
 impl HarnessBuilder {
-    /// Registers one native construction recipe for a family.
+    #[cfg(all(feature = "durability", not(target_family = "wasm")))]
+    pub(crate) fn recovery_store(mut self, store: crate::durability::SessionStore) -> Self {
+        self.recovery_store = Some(store);
+        self
+    }
+
     #[cfg(not(target_family = "wasm"))]
     pub fn register<F, Fut>(mut self, family: HarnessFamily, recipe: F) -> Self
     where
         F: Fn(HarnessRequest) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = AgentResult> + Send + 'static,
     {
-        self.defaults.insert(family.clone(), family.default_model());
+        self.defaults
+            .entry(family.clone())
+            .or_insert_with(|| family.default_model());
         self.recipes
             .insert(family, Arc::new(move |request| Box::pin(recipe(request))));
         self
     }
 
-    /// Registers an isolate-local native construction recipe for a family.
     #[cfg(target_family = "wasm")]
     pub fn register<F, Fut>(mut self, family: HarnessFamily, recipe: F) -> Self
     where
         F: Fn(HarnessRequest) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = AgentResult> + 'static,
     {
-        self.defaults.insert(family.clone(), family.default_model());
+        self.defaults
+            .entry(family.clone())
+            .or_insert_with(|| family.default_model());
         self.recipes
             .insert(family, Arc::new(move |request| Box::pin(recipe(request))));
         self
     }
 
-    /// Sets the model used when routing into a registered backend without a model override.
-    pub fn default_model(mut self, model: HarnessModel) -> Self {
+    pub fn default_model(mut self, model: ModelSelection) -> Self {
         self.defaults.insert(model.family(), model);
         self
     }
 
-    /// Freezes this host's authorized families into a reusable router.
+    pub fn default_settings(mut self, model: ModelSelection, thinking: Thinking) -> Self {
+        self.thinking_defaults.insert(model.family(), thinking);
+        self.defaults.insert(model.family(), model);
+        self
+    }
+
     pub fn build(self) -> Harness {
         Harness {
             inner: Arc::new(Router {
                 recipes: self.recipes,
                 defaults: self.defaults,
+                thinking_defaults: self.thinking_defaults,
+                #[cfg(feature = "durability")]
+                recovery_store: self.recovery_store,
                 #[cfg(not(target_family = "wasm"))]
                 children: None,
             }),
         }
     }
 
-    /// Freezes recipes whose routed children are admitted and tracked by a
-    /// reusable runtime.
     #[cfg(not(target_family = "wasm"))]
     pub(crate) fn build_tracked(
         self,
@@ -112,6 +111,9 @@ impl HarnessBuilder {
             inner: Arc::new(Router {
                 recipes: self.recipes,
                 defaults: self.defaults,
+                thinking_defaults: self.thinking_defaults,
+                #[cfg(feature = "durability")]
+                recovery_store: self.recovery_store,
                 children: Some(children),
             }),
         }
@@ -119,16 +121,21 @@ impl HarnessBuilder {
 }
 
 impl Harness {
-    pub(crate) fn resolve_options(&self, options: SpawnOptions, parent: HarnessModel, thinking: Thinking) -> nanocode_agent::Result<SpawnOptions> {
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn resolve_options(
+        &self,
+        options: SpawnOptions,
+        parent: ModelSelection,
+        thinking: Thinking,
+    ) -> nanocode_agent::Result<SpawnOptions> {
         self.inner.resolve(options, parent, thinking)
     }
-    /// Starts configuring this host's native harness recipes.
+
     pub fn builder() -> HarnessBuilder {
         HarnessBuilder::default()
     }
 
-    /// Starts a new thread with one selected native model and its default effort.
-    pub async fn start(&self, model: HarnessModel) -> AgentResult {
+    pub async fn start(&self, model: ModelSelection) -> AgentResult {
         self.start_with(
             SpawnOptions::new()
                 .harness(model.family())
@@ -137,7 +144,6 @@ impl Harness {
         .await
     }
 
-    /// Starts a new thread after validating its family, model and effort.
     pub async fn start_with(&self, options: SpawnOptions) -> AgentResult {
         options.validate_harness()?;
         let family = options
@@ -146,45 +152,14 @@ impl Harness {
         let model = options
             .selected_harness_model()
             .unwrap_or_else(|| self.inner.default_model(&family));
-        let options = options.resolve(model.clone(), model.default_thinking())?;
+        let thinking = self.inner.default_thinking(&model);
+        let options = options.resolve(model.clone(), thinking)?;
         self.inner
             .clone()
             .construct(None, options, None, Reopen::default())
             .await
     }
 
-    /// Reopens a checkpointed session through the recipe registered for its
-    /// family, so hosts resume Codex and Claude sessions the same way.
-    ///
-    /// The resumed session keeps the checkpoint's session identity, lineage,
-    /// model, thinking level, conversation tree and committed history; it uses
-    /// the recipe's current credentials, tools and instructions. A checkpoint
-    /// taken before the first completed turn reopens the session with its
-    /// settings and no history. Use [`Agent::fork`] instead to continue a
-    /// conversation under a new identity.
-    ///
-    /// ```
-    /// # use nanocode::{Harness, HarnessModel, Model, SessionCheckpoint};
-    /// # async fn example(harness: Harness) -> nanocode::agent::Result<()> {
-    /// let (agent, _events) = harness.start(HarnessModel::Codex(Model::Sol)).await?;
-    /// agent.prompt("Summarize the open issues.").await?.result().await?;
-    /// let saved = agent.checkpoint().await?.to_json()?;
-    /// agent.shutdown().await?;
-    ///
-    /// // Later, possibly in another process with the same recipes:
-    /// let checkpoint = SessionCheckpoint::from_json(&saved)?;
-    /// let (resumed, _events) = harness.resume(checkpoint).await?;
-    /// assert_eq!(resumed.session_id(), agent.session_id());
-    /// # Ok(())
-    /// # }
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`NanocodexError::InvalidCheckpoint`] when the checkpoint fails
-    /// [`SessionCheckpoint::validate`] or its native payload is malformed,
-    /// [`NanocodexError::InvalidRequest`] when no recipe is registered for
-    /// the checkpoint's family, or the recipe's construction error.
     pub async fn resume(&self, checkpoint: SessionCheckpoint) -> AgentResult {
         checkpoint.validate()?;
         let model = checkpoint.model();
@@ -199,33 +174,6 @@ impl Harness {
             .await
     }
 
-    /// Reopens a session stored in a durable catalog by its ID, through the
-    /// recipe registered for its recorded family, so hosts reopen Codex and
-    /// Claude sessions the same way.
-    ///
-    /// The reopened session owns its durable state: it keeps the stored
-    /// session identity, lineage, model, thinking level and committed history,
-    /// and records every later turn in the same catalog entry. Use
-    /// [`SessionStore::branch`](crate::durability::SessionStore::branch) and
-    /// open the branch to continue from an earlier boundary under a new
-    /// identity, or [`Self::resume`] for a portable checkpoint.
-    ///
-    /// ```
-    /// # use nanocode::{Harness, durability::SessionStore};
-    /// # async fn example(harness: Harness, store: SessionStore) -> nanocode::agent::Result<()> {
-    /// // `store` is the host's catalog, such as `SessionStore::open(codex_home)`.
-    /// let (agent, _events) = harness.open(&store, "0190f5d4-7f8e-7c4a-9b1e-2d3c4b5a6978").await?;
-    /// agent.prompt("Where were we?").await?.result().await?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`NanocodexError::InvalidRequest`] for an unknown session or
-    /// when no recipe is registered for its family,
-    /// [`NanocodexError::Backend`] for a catalog failure, an error when
-    /// another live agent owns the state, or the recipe's construction error.
     #[cfg(all(feature = "durability", not(target_family = "wasm")))]
     pub async fn open(
         &self,
@@ -233,7 +181,7 @@ impl Harness {
         session_id: &str,
     ) -> AgentResult {
         let stored = store.load(session_id).await.map_err(catalog_error)?;
-        let model = stored.summary.record.model;
+        let model = stored.summary.record.model.clone();
         let thinking = stored
             .session_checkpoint()
             .map_err(catalog_error)?
@@ -261,7 +209,6 @@ impl Harness {
             .await
     }
 
-    /// Installs the same router on a concrete builder's per-agent capabilities.
     pub fn spawn_factory(&self) -> Arc<dyn AgentFactory> {
         Arc::new(RoutedFactory {
             inner: Arc::clone(&self.inner),
@@ -269,7 +216,6 @@ impl Harness {
     }
 }
 
-/// What a recipe reopens instead of starting a new session.
 #[derive(Default)]
 struct Reopen {
     checkpoint: Option<SessionCheckpoint>,
@@ -288,37 +234,68 @@ impl Reopen {
 
 struct Router {
     recipes: HashMap<HarnessFamily, Recipe>,
-    defaults: HashMap<HarnessFamily, HarnessModel>,
-    /// Runtime admission and tracking for children routed through this
-    /// registry; absent for a host-composed [`Harness`].
+    defaults: HashMap<HarnessFamily, ModelSelection>,
+    thinking_defaults: HashMap<HarnessFamily, Thinking>,
+    #[cfg(feature = "durability")]
+    recovery_store: Option<crate::durability::SessionStore>,
+
     #[cfg(not(target_family = "wasm"))]
     children: Option<std::sync::Weak<crate::runtime::Ownership>>,
 }
 impl Router {
-    fn default_model(&self, family: &HarnessFamily) -> HarnessModel {
-        self.defaults.get(family).cloned().unwrap_or_else(|| family.default_model())
+    fn default_model(&self, family: &HarnessFamily) -> ModelSelection {
+        self.defaults
+            .get(family)
+            .cloned()
+            .unwrap_or_else(|| family.default_model())
     }
 
-    fn resolve(&self, options: SpawnOptions, parent: HarnessModel, thinking: Thinking) -> nanocode_agent::Result<SpawnOptions> {
+    fn default_thinking(&self, model: &ModelSelection) -> Thinking {
+        if self.defaults.get(&model.family()) == Some(model) {
+            self.thinking_defaults
+                .get(&model.family())
+                .copied()
+                .unwrap_or_else(|| model.default_thinking())
+        } else {
+            model.default_thinking()
+        }
+    }
+
+    fn resolve(
+        &self,
+        options: SpawnOptions,
+        parent: ModelSelection,
+        thinking: Thinking,
+    ) -> nanocode_agent::Result<SpawnOptions> {
         let family = options.selected_family().unwrap_or_else(|| parent.family());
         let options = if family != parent.family() && options.selected_harness_model().is_none() {
             options.harness_model(self.default_model(&family))
         } else {
             options
         };
+        let options = if options.selected_thinking().is_none() {
+            match options.selected_harness_model() {
+                Some(model) if model != parent => options.thinking(self.default_thinking(&model)),
+                _ => options,
+            }
+        } else {
+            options
+        };
         options.resolve(parent, thinking)
     }
-    /// Codex when registered, otherwise the sole registered family.
+
     fn default_family(&self) -> HarnessFamily {
         if self.recipes.contains_key(&HarnessFamily::Codex) || self.recipes.len() != 1 {
             HarnessFamily::Codex
         } else {
-            self.recipes.keys().next().expect("one registered family").clone()
+            self.recipes
+                .keys()
+                .next()
+                .expect("one registered family")
+                .clone()
         }
     }
 
-    /// Runs one routed child construction under the owning runtime's
-    /// admission gate and tracks its result for runtime shutdown.
     async fn tracked<F>(&self, construct: F) -> nanocode_agent::Result<Vec<(Agent, AgentEvents)>>
     where
         F: Future<Output = nanocode_agent::Result<Vec<(Agent, AgentEvents)>>>,
@@ -390,11 +367,10 @@ impl AgentFactory for RoutedFactory {
     fn settings(
         &self,
         parent: AgentHandle,
-    ) -> BackendFuture<nanocode_agent::Result<(HarnessModel, Thinking)>> {
+    ) -> BackendFuture<nanocode_agent::Result<(ModelSelection, Thinking)>> {
         Box::pin(async move { parent.settings().await })
     }
 
-    /// Forks stay native: a conversation is continued by the family that owns it.
     fn fork(&self, parent: AgentHandle, request: ForkRequest) -> BackendFuture<AgentResult> {
         Box::pin(async move { parent.fork(request).await })
     }
@@ -417,10 +393,13 @@ impl AgentFactory for RoutedFactory {
                             .spawn_native_with_host_context(options, host_context)
                             .await;
                     }
-                    // A family switch takes destination defaults. The native parent's
-                    // model may be outside the shared catalog and is never inherited.
+
                     let parent_model = parent.harness_model();
-                    let options = inner.resolve(options, parent_model.clone(), parent_model.default_thinking())?;
+                    let options = inner.resolve(
+                        options,
+                        parent_model.clone(),
+                        parent_model.default_thinking(),
+                    )?;
                     inner
                         .construct(Some(parent), options, host_context, Reopen::default())
                         .await
@@ -429,9 +408,6 @@ impl AgentFactory for RoutedFactory {
         })
     }
 
-    /// Batches carry no family override, so they resolve exactly like a
-    /// default single spawn: the parent's family, through its native batch
-    /// boundary with atomic admission and rollback.
     fn spawn_many(
         &self,
         parent: AgentHandle,
@@ -473,6 +449,18 @@ impl AgentFactory for RoutedFactory {
                 .tracked_one(async move {
                     parent.ensure_available().await?;
                     checkpoint.validate()?;
+                    #[cfg(feature = "durability")]
+                    let checkpoint = match &inner.recovery_store {
+                        Some(store) => {
+                            store
+                                .recovery_checkpoint(checkpoint)
+                                .await
+                                .map_err(|error| {
+                                    NanocodexError::InvalidCheckpoint(error.to_string())
+                                })?
+                        }
+                        None => checkpoint,
+                    };
                     if checkpoint.family() == parent.harness_family() {
                         return parent
                             .restore_native_runtime(checkpoint, host_context)
@@ -511,8 +499,6 @@ fn catalog_error(error: crate::durability::Error) -> NanocodexError {
     }
 }
 
-/// The family a child of `parent` runs in: an explicit harness or model
-/// selection, otherwise the parent's own family.
 fn resolve_family(parent: &AgentHandle, options: &SpawnOptions) -> HarnessFamily {
     options.selected_family().unwrap_or(parent.harness_family())
 }

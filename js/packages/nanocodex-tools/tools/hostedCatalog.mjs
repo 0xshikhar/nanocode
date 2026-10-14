@@ -4,7 +4,7 @@ import { ToolRouter, toolMapSource } from "../runtime/tool-router.mjs";
 const DEFAULT_TIMEOUT_MS = Number.MAX_SAFE_INTEGER;
 const CATALOG_DIGEST_DOMAIN = "nanocodex-app-tool-catalog-v1\0";
 
-/** Materializes the exact reverse-tool catalog emitted for app-local named tools. */
+
 export function hostedAppToolCatalog(tools, provider = "javascript") {
   const resolved = resolveTools(tools ?? [], { defaultSubagents: false });
   if (resolved.subagents) throw new TypeError("hosted app tool catalogs do not accept subagents");
@@ -15,7 +15,7 @@ export function hostedAppToolCatalog(tools, provider = "javascript") {
   return hostedCatalog(router.catalog(provider));
 }
 
-/** Normalizes an admitted router catalog to the socket-owned wire contract. */
+
 export function hostedCatalog(catalog) {
   if (!Array.isArray(catalog)) throw new TypeError("tool attachment catalog must be an array");
   return Object.freeze(catalog.map((entry) => Object.freeze({
@@ -28,7 +28,7 @@ export function hostedCatalog(catalog) {
   })));
 }
 
-/** Returns the exact domain-separated digest signed into a Connect grant. */
+
 export async function hostedToolCatalogDigest(catalog) {
   const normalized = hostedCatalog(catalog);
   const canonical = canonicalJson([...normalized]

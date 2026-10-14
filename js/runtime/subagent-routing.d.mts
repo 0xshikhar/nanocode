@@ -27,11 +27,11 @@ export type SubagentRouting = Readonly<{
   bind(request: ChildRouteBinding): void;
   route(sessionId: string): ChildRoute;
 }>;
-/**
- * Host-owned routing lifecycle. Authorize must restrict the resolver to eligible
- * providers and credentials. Public model aliases are normalized before resolution.
- * Load and save must be synchronous; save must pin the live route before returning.
- */
+
+
+
+
+
 export function createSubagentRouting<Authority>(options: {
   authorize(parentSessionId: string, hostContextRef?: string): Authority | Promise<Authority>;
   resolve(request: ChildRouteRequest, authority: Authority): ChildRoute | Promise<ChildRoute>;

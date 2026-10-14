@@ -10,9 +10,9 @@ export async function openSubscription(options, openRaw, { replaceHost = false }
   const fetch = options.fetch;
   const host = {
     store: options.store,
-    // Cloudflare's global fetch requires the Worker global as its receiver.
-    // Keep the stored capability receiver-neutral so calling it through the
-    // host record cannot accidentally bind `this` to that record.
+
+
+
     fetch: fetch === undefined
       ? (...args) => globalThis.fetch(...args)
       : (...args) => fetch(...args),

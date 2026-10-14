@@ -53,7 +53,7 @@ pub(super) fn drain_blocking(
                     .blocking_lock()
                     .push(&buffer[..length], capture_limit),
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-                // PTY masters commonly report EIO when their slave closes.
+
                 Err(_) => return,
             }
         }

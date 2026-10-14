@@ -16,17 +16,17 @@ export type ResponsesTransport = Readonly<{
 }>;
 export type Transport = ResponsesTransport;
 
-/** A Responses transport whose complete descriptor can cross a module Worker boundary. */
+
 export type WorkerTransport = ResponsesTransport & Readonly<{
   [workerTransport]: true;
 }>;
 
 type SharedEndpointOptions = Readonly<{
   apiBaseUrl?: string | undefined;
-  /** Use HTTPS with full history replay, no stored responses, and no WebSocket warmup or preconnect. */
+
   stateless?: boolean | undefined;
   websocketUrl?: string | undefined;
-  /** Open the persistent socket as soon as Agent.create returns. Defaults to true for hostManaged. */
+
   websocketPreconnect?: boolean | undefined;
   websocketWarmup?: boolean | undefined;
 }>;
@@ -58,7 +58,7 @@ export function chatGpt(options: EndpointOptions & Readonly<{
   subscription: ChatGptSubscriptionHandle;
 }>): ResponsesTransport;
 
-/** Same-origin Nanocodex Responses proxy; defaults to `/api/responses`. */
+
 export function hostManaged(options?: WorkerEndpointOptions): WorkerTransport;
 export function hostManaged(options?: EndpointOptions): ResponsesTransport;
 
@@ -68,7 +68,7 @@ export function mpp(options: EndpointOptions & Readonly<{
 
 
 
-/** Caller-owned Responses socket pooling. Lanes accept response.create; closing one releases only its local subscriber. */
+
 export function multiplex(socket: WebSocket): Readonly<{
   lane(streamId: string): WebSocket;
   close(code?: number, reason?: string): void;

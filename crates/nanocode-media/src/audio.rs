@@ -1,7 +1,3 @@
-//! Duration-based audio token estimates, ported verbatim from codex-rs
-//! `utils/audio/src/lib.rs` (openai/codex 1427825c40): `ceil(seconds * 10)`,
-//! or `ceil(url.len() / 4)` when the duration cannot be measured.
-
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use sha1::{Digest, Sha1};
@@ -18,12 +14,8 @@ const AUDIO_TOKEN_ESTIMATE_CACHE_SIZE: usize = 32;
 const AUDIO_TOKENS_PER_SECOND: f64 = 10.0;
 const APPROX_BYTES_PER_TOKEN: usize = 4;
 
-/// Most-recently-used entries at the back, like codex's 32-entry LRU keyed by
-/// the SHA-1 of the audio URL. Memoization only; results are identical.
 static AUDIO_TOKEN_ESTIMATE_CACHE: Mutex<VecDeque<([u8; 20], usize)>> = Mutex::new(VecDeque::new());
 
-/// Estimates model tokens for an audio input from its decoded duration,
-/// falling back to the data URL size when the duration cannot be measured.
 #[must_use]
 pub fn estimate_audio_token_count(audio_url: &str) -> usize {
     let key: [u8; 20] = Sha1::digest(audio_url.as_bytes()).into();

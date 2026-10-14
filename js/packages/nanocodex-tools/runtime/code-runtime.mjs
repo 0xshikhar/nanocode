@@ -12,18 +12,18 @@ import {
 
 const CANCELLATION_MESSAGE = "Code Mode execution was cancelled";
 
-// Trusted instrumentation must preserve the handler's outcome even if span
-// setup/annotation fails, returns another value, or invokes its callback twice.
+
+
 export async function traceToolInvocation(traceTool, name, context, run) {
   let runPromise;
   const invoke = () => {
     if (runPromise === undefined) {
       let resolveRun, rejectRun;
       runPromise = new Promise((resolve, reject) => { resolveRun = resolve; rejectRun = reject; });
-      // A broken hook may discard this promise before its own setup settles.
+
       void runPromise.catch(() => undefined);
-      // Code Mode registers its observation queue before Rust reads it. Invoke
-      // synchronously while assigning the memoized promise before any reentry.
+
+
       try { resolveRun(run()); }
       catch (error) { rejectRun(error); }
     }
@@ -31,11 +31,11 @@ export async function traceToolInvocation(traceTool, name, context, run) {
   };
   try {
     const tracing = traceTool(name, context, invoke);
-    // Also preserve synchronous host setup when a hook postpones its callback.
+
     invoke();
     if (tracing?.then) void Promise.resolve(tracing).catch(() => undefined);
   }
-  catch { /* Instrumentation cannot replace a real tool failure or result. */ }
+  catch {   }
   return invoke();
 }
 
@@ -43,9 +43,9 @@ export function createCodeRuntime(toolConfiguration = {}, extras = {}) {
   const traceTool = extras.traceTool;
   const activeExecutions = new Set();
   const codeObservations = new Map();
-  // Relays of cells a completed turn left running, keyed like observations.
+
   const codeRelays = new Map();
-  // Unique per relay: a cell can be relayed again after a wait ends its relay.
+
   let nextRelayId = 1;
   const cells = new Map();
   const turns = new Map();
@@ -192,8 +192,8 @@ export function createCodeRuntime(toolConfiguration = {}, extras = {}) {
         }, () => router.execute(name, input, context)));
     } catch (error) {
       if (error?.code === "host_interrupted") interrupt(error);
-      // An abort is not proof that the dispatched operation did not write.
-      // Leave its retained intent pending, even if the handler rejects or ignores abort.
+
+
       if (controller.signal.aborted) throw error;
       receipt = { output: errorMessage(error), success: false, structured_result: null,
         metadata: null, value: null, thrown: false };
@@ -202,8 +202,8 @@ export function createCodeRuntime(toolConfiguration = {}, extras = {}) {
     let wire;
     try {
       if (!receipt) {
-        // No guest value is exposed by executeTool. Bound unique output/structured
-        // payloads BEFORE outputBody or structuredResult clone/stringify them.
+
+
         const raw = isToolResult(result) ? { output: result.output, metadata: result.metadata } : { result };
         if (isToolResult(result) && result.structuredResult !== result.output) raw.structured_result = result.structuredResult;
         boundedEffectSnapshot(raw, "direct effect result");
@@ -303,7 +303,7 @@ export function createCodeRuntime(toolConfiguration = {}, extras = {}) {
         })
       : definition);
     const pendingCalls = new Map();
-    // A journalled replay must address the same effects regardless of earlier cells.
+
     let nextJournalCallId = 1;
     const journal = extras.effectJournal;
     let canonicalIdentity;
@@ -317,9 +317,9 @@ export function createCodeRuntime(toolConfiguration = {}, extras = {}) {
       throw error;
     }
     function closePendingCalls() {
-      // Guest completion still ends the cell immediately, as in Codex. Host
-      // receipts outlive guest promises: every observed start needs a terminal
-      // result even when an invocation ignores cancellation or settles later.
+
+
+
       for (const finish of pendingCalls.values()) finish({
         output: "Code Mode cell ended before the tool returned; execution outcome unknown",
         structured_result: {
@@ -340,19 +340,19 @@ export function createCodeRuntime(toolConfiguration = {}, extras = {}) {
       const normalizedName = normalizeIdentifier(name);
       declaredTools[normalizedName] = (input) => {
         const invocation = executeNestedTool(input);
-        // Attach a rejection handler immediately so a discarded guest Promise
-        // cannot become an unhandled rejection before the cell reaches its
-        // quiescence boundary.
+
+
+
         void invocation.catch(() => undefined);
         return invocation;
       };
-      // Preserve existing SDK bracket access while advertising Codex's
-      // normalized identifiers to newly generated cells.
+
+
       if (name !== normalizedName) declaredTools[name] = declaredTools[normalizedName];
 
       async function executeNestedTool(input) {
-        // A native guest continuation can survive its cell if a host promise
-        // ignores abort. Reject before creating telemetry for a closed cell.
+
+
         controller.signal.throwIfAborted();
         if (finished) throw new Error(CANCELLATION_MESSAGE);
         const callId = `${parentCallId}/code-${journal ? nextJournalCallId++ : nextCallId++}`;
@@ -373,10 +373,10 @@ export function createCodeRuntime(toolConfiguration = {}, extras = {}) {
           duration_ns: 0,
           metadata: null,
         };
-        // Rust records nested calls in invocation order even when parallel
-        // siblings finish out of order. Reserve the slot before dispatch. An
-        // observed cell delivers each call through its observer instead, so
-        // its payloads are never retained for the whole cell lifetime.
+
+
+
+
         if (!cell) nestedCalls.push(recordedCall);
         function complete(fields) {
           if (!pendingCalls.delete(callId)) return;
@@ -399,12 +399,12 @@ export function createCodeRuntime(toolConfiguration = {}, extras = {}) {
         catch (cause) { interrupt(cause); }
         const effectContext = { ...resolvedIdentity, sessionId, parentCallId, callId, name, source, input: recordedInput,
           ...(turnId == null ? {} : { turnId }) };
-        // Never resolve a guest promise before its durable outcome is acknowledged.
+
         async function retain(receipt, valueRef, outputJsonRef) {
           if (!journal) return;
           try {
-            // JSON receipts need not repeat identical output/structured/value data.
-            // Keep references inside the receipt, never to mutable external state.
+
+
             const wire = { ...receipt };
             if (outputJsonRef) { wire.output = null; wire.outputJsonRef = outputJsonRef; }
             if (receipt.structured_result === receipt.output) {
@@ -425,7 +425,7 @@ export function createCodeRuntime(toolConfiguration = {}, extras = {}) {
             const message = "Code Mode nested effect has a retained dispatch intent but no completed receipt; outcome unknown. Reconcile the original operation before retrying.";
             const error = Object.assign(new Error(message), { code: "CODE_MODE_CALL_INTERRUPTED", outcome: "unknown" });
             complete({ output: message, structured_result: { error: message, code: error.code, outcome: "unknown" }, success: false });
-            // Guest catch blocks cannot turn an uncertain write into a new retry.
+
             execution.recoveryFailure = error;
             controller.abort(error);
             throw error;
@@ -485,9 +485,9 @@ export function createCodeRuntime(toolConfiguration = {}, extras = {}) {
             controller.abort(error);
             throw error;
           }
-          // Cancellation is not evidence that an already dispatched effect failed
-          // before writing. Retain the pending intent, never a replayable failure
-          // that a guest catch block could use to retry the cancelled operation.
+
+
+
           if (controller.signal.aborted) throw error;
           const message = errorMessage(error);
           const receipt = { output: message, structured_result: message, success: false,
@@ -497,13 +497,13 @@ export function createCodeRuntime(toolConfiguration = {}, extras = {}) {
               success: receipt.success, metadata: receipt.metadata });
           throw error;
         }
-        // Bound host data before outputBody/structuredResult clone or stringify it.
-        // A write already happened: an unretainable receipt leaves its intent unknown,
-        // not a catchable formatting error that could authorize another dispatch.
+
+
+
         if (journal) {
           try {
-            // Before cloning/formatting, bound each unique original payload;
-            // ToolResult commonly aliases all three fields to one media object.
+
+
             const raw = isToolResult(result) ? { output: result.output, metadata: result.metadata } : { result };
             if (isToolResult(result)) {
               if (result.structuredResult !== result.output) raw.structured_result = result.structuredResult;
@@ -549,7 +549,7 @@ export function createCodeRuntime(toolConfiguration = {}, extras = {}) {
     const tools = createCodeTools(Object.keys(declaredTools), (name, input) => declaredTools[name](input));
     const EXIT = Symbol("exit");
 
-    // Same as the sandboxed evaluators: text("label:", value) keeps every value.
+
     function text(...values) {
       controller.signal.throwIfAborted();
       content.push({ type: "input_text", text: values.length > 1 ? values.map(stringify).join(" ") : stringify(values[0]) });
@@ -655,8 +655,8 @@ export function createCodeRuntime(toolConfiguration = {}, extras = {}) {
               storedEntries: [...stored],
             });
           } finally {
-            // Root completion defines the isolate lifetime; pending nested work
-            // is cancelled below without delaying the completed result.
+
+
           }
         })(), controller.signal);
       } catch (error) {
@@ -684,14 +684,14 @@ export function createCodeRuntime(toolConfiguration = {}, extras = {}) {
       closePendingCalls();
       finished = true;
       const commitWrites = !controller.signal.aborted;
-      // End the isolate lifetime before asynchronous durability acknowledgement:
-      // timers/detached continuations cannot mutate an already captured delta.
+
+
       controller.abort(new Error(CANCELLATION_MESSAGE));
       for (const timer of timers.values()) clearTimeout(timer);
       try {
         if (commitWrites) {
-          // Failed scripts are completed results too. The durable adapter merges
-          // a delta once, never replacing newer writes on a completed-cell replay.
+
+
           if (cellContext) {
             try { await journal.commitStore(cellContext, boundedEffectSnapshot([...storedWrites], "cell store writes")); }
             catch (cause) { journalFailure(cause); }
@@ -722,7 +722,7 @@ export function createCodeRuntime(toolConfiguration = {}, extras = {}) {
       cells.set(cell.id, cell);
       if (extras.effectJournal?.observations) {
         try {
-          // Resolve once: the canonical host identity resolver consumes admission.
+
           cell.effectIdentity = await extras.effectIdentity?.(sessionId, parentCallId, turnId, cell.controller.signal) ?? {};
           await observationJournal(() => extras.effectJournal.observations.register({
             ...cell.effectIdentity, sessionId, parentCallId, callId: parentCallId,
@@ -737,8 +737,8 @@ export function createCodeRuntime(toolConfiguration = {}, extras = {}) {
         }
       }
       cell.completion = executeCode(options.source, sessionId, parentCallId, model, (update) => {
-        // Keep queued completions immutable; the invocation record is mutable
-        // until the nested call finishes. Original call IDs survive every wait.
+
+
         const encoded = JSON.stringify(update);
         if (cell.observation) cell.observation.push(encoded);
         else if (cell.relay) cell.relay.observation.push(encoded);
@@ -749,12 +749,12 @@ export function createCodeRuntime(toolConfiguration = {}, extras = {}) {
         if (!completed.success && typeof completed.output === "string") {
           cell.content.push({ type: "input_text", text: completed.output.split("Output:\n").slice(1).join("Output:\n") || completed.output });
         }
-        // A yielded evaluator can finish while the model is thinking, before
-        // another wait. Persist that terminal evidence immediately: the next
-        // observer may arrive in a replacement runtime. Do not drain live
-        // output here; the foreground observer still owns delivery.
-        // Cancellation/reset is not a terminal checkpoint: dispatched effects
-        // can still be unknown. finished proves normal store finalization.
+
+
+
+
+
+
         if (extras.effectJournal?.observations && cell.finished) {
           await recordCellObservation(cell, JSON.stringify({
             output: withStatus(completed.success ? "Script completed" : "Script failed", cell.startedAt, cell.content),
@@ -792,12 +792,12 @@ export function createCodeRuntime(toolConfiguration = {}, extras = {}) {
             return JSON.stringify(result);
           }
         }
-        // Cells hold live evaluator promises, not durable continuations. A
-        // retained exec/wait receipt can outlive this registry after recovery.
-        // Never rerun guest source to repair a missing wait: nested effects may
-        // have executed even when their final receipt was not acknowledged.
-        // Do not reveal another session's cell or infer cancellation/completion
-        // from absence. The ID prefix proves only a generation mismatch.
+
+
+
+
+
+
         const generation = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):[1-9][0-9]*$/i.exec(options.cell_id)?.[1];
         const reason = generation && generation !== cellGeneration
           ? "The cell ID belongs to a different runtime generation."
@@ -840,9 +840,9 @@ export function createCodeRuntime(toolConfiguration = {}, extras = {}) {
 
   function recordCellObservation(cell, encoded, running) {
     if (!extras.effectJournal?.observations) return Promise.resolve();
-    // Storage acknowledgement yields. Serialize terminal checkpoints with
-    // foreground observations so a delayed running snapshot cannot overwrite
-    // proof of completion. A failed write poisons this owner's chain.
+
+
+
     cell.recording = (cell.recording ?? Promise.resolve()).then(async () => {
       if (running && cell.terminalRecorded) return;
       await observationJournal(() => extras.effectJournal.observations.record(cell.sessionId, cell.id, encoded));
@@ -853,7 +853,7 @@ export function createCodeRuntime(toolConfiguration = {}, extras = {}) {
 
   async function observeCell(cell, observation, yieldTime, budget) {
     const startedAt = performance.now();
-    // A relay drains what it already took; this observer receives the rest.
+
     closeRelay(cell);
     cell.observing = true;
     cell.observation = observation;
@@ -866,8 +866,8 @@ export function createCodeRuntime(toolConfiguration = {}, extras = {}) {
         await new Promise((resolve) => {
           cell.wake = resolve;
           stopPreemptWake = observation.onPreempt(resolve);
-          // JS timer APIs overflow past this boundary; clamp instead of
-          // accidentally turning a large valid duration into a 1 ms wait.
+
+
           timer = setTimeout(resolve, Math.min(yieldTime + (yieldTime >= 10_000 ? 1_000 : 0), 2_147_483_647));
         });
       }
@@ -877,8 +877,8 @@ export function createCodeRuntime(toolConfiguration = {}, extras = {}) {
       const status = cell.terminated ? "Script terminated"
         : result ? (result.success ? "Script completed" : "Script failed")
         : `Script running with cell ID ${cell.id}`;
-      // Acknowledgement follows durability. Capture lengths so output arriving
-      // during storage.sync is left for the next observation.
+
+
       const contentCount = cell.content.length;
       const completedCount = cell.completedCalls.length;
       const notificationCount = cell.notifications.length;
@@ -909,9 +909,9 @@ export function createCodeRuntime(toolConfiguration = {}, extras = {}) {
     }
   }
 
-  // Hosts that consume each exec/wait result whole (Claude) never read the
-  // per-call update stream. Drop it once the call returns: otherwise every
-  // queued update, including full nested payloads, lives as long as the session.
+
+
+
   function discardCodeUpdates(sessionId, parentCallId) {
     const key = codeObservationKey(sessionId, parentCallId);
     const observation = codeObservations.get(key);
@@ -932,11 +932,11 @@ export function createCodeRuntime(toolConfiguration = {}, extras = {}) {
     return update;
   }
 
-  // At normal turn completion, give every unobserved cell of the session a
-  // relay so nested work the model never waited for still reports its start
-  // and terminal result. Buffered updates move to the relay in order. The
-  // relay ends after the cell settles (including aborted nested calls) or
-  // when a later wait attaches, so each update is delivered exactly once.
+
+
+
+
+
   function detachTurn(sessionId) {
     const relays = [];
     for (const cell of cells.values()) {
@@ -960,12 +960,12 @@ export function createCodeRuntime(toolConfiguration = {}, extras = {}) {
     cell.relay = undefined;
   }
 
-  // Cancels the current logical turn's cells like cancelTurn, and returns a
-  // relay per cancelled cell carrying every nested update no observer has
-  // received: updates a just-dropped exec/wait observer never read, buffered
-  // updates, then the aborted calls' terminal results. Each relay ends once
-  // its cell settles, or after a bound so a cancelled turn can always commit.
-  // Earlier turns' cells (including detached ones) are untouched.
+
+
+
+
+
+
   function cancelTurnWithUpdates(sessionId) {
     const turn = turns.get(sessionId) ?? 0;
     const relays = [];
@@ -998,13 +998,13 @@ export function createCodeRuntime(toolConfiguration = {}, extras = {}) {
     }
   }
 
-  // Preempt only a foreground observation, never the evaluator or nested
-  // effects. A signal is scoped to an already admitted exec/wait call ID;
-  // a missing/closed observation does not arm future cells or waits.
-  // This requires observer event-loop progress. A synchronous guest sharing
-  // that event loop cannot be preempted until it yields; evaluator interruption
-  // is NOT a safe substitute because it can destroy pending guest promises.
-  // Child-Worker evaluation keeps the observer reachable while guest JS is busy.
+
+
+
+
+
+
+
   function preempt(sessionId, callId) {
     if (typeof sessionId !== "string" || typeof callId !== "string") {
       throw new TypeError("preempt requires session and observation call IDs");
@@ -1275,9 +1275,9 @@ function deepFreeze(value) {
   return Object.freeze(value);
 }
 
-// A failed tool result rejects with a real Error so guest catch blocks can
-// read error.message/error.code. Fields of a structured failure value remain
-// available as own properties; replay rebuilds the same shape from its receipt.
+
+
+
 function toolFailureError(value, output) {
   if (value instanceof Error) return value;
   const record = value !== null && typeof value === "object" && !Array.isArray(value) ? value : undefined;
@@ -1331,10 +1331,10 @@ function abortableEvaluation(evaluation, signal) {
   });
 }
 
-// Abort rejects the evaluation independently of guest and host promises, and
-// the executor then gives every pending nested call an unknown-outcome terminal
-// (closePendingCalls) before durable finalization. The bound only covers that
-// finalization, so it never closes a relay ahead of a started call's terminal.
+
+
+
+
 const CANCELLED_RELAY_BOUND_MS = 10_000;
 
 function codeObservationKey(sessionId, callId) {
@@ -1374,7 +1374,7 @@ function createCodeObservation(sessionId, turn) {
       preemptWake = undefined;
       while (waiters.length) waiters.shift()(null);
     },
-    /** Closes the observation and returns updates its reader never took. */
+
     take() {
       const remaining = queued.splice(0);
       this.close();
@@ -1403,8 +1403,8 @@ function parseExec(source) {
   return { ...parseCellOptions(line.trimStart().slice("// @exec:".length), ["yield_time_ms", "max_output_tokens"], ["yield_time_ms", "max_output_tokens"]), source: rest };
 }
 
-// Match serde u64 parsing without losing integer spelling to IEEE-754
-// rounding. Fractional/exponent JSON numbers are not integer arguments.
+
+
 function parseCellOptions(encoded, allowed, nullable = [], ignoreUnknown = false) {
   const value = JSON.parse(encoded);
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError("cell options must be a JSON object");
@@ -1437,7 +1437,7 @@ function parseCellOptions(encoded, allowed, nullable = [], ignoreUnknown = false
   return value;
 }
 
-// Preserve guest-observable failure kind/code when replaying a failed handler.
+
 function effectFailure(error) {
   if (!(error instanceof Error)) return { kind: "value", value: error ?? null,
     ...(error === undefined ? { undefined: true } : {}) };
@@ -1461,10 +1461,10 @@ function restoreEffectFailure(failure) {
   return Object.assign(new Constructor(failure.value.message), failure.value);
 }
 
-// Receipt serialization is bounded BEFORE allocating JSON clones or multiplying
-// output/structured/value representations. The managed adapter may encode this
-// snapshot once more, but can never receive an unbounded post-effect payload.
-// Reject rather than truncate: truncated data is not an exact replay receipt.
+
+
+
+
 const MAX_EFFECT_RECEIPT_BYTES = 8 * 1024 * 1024;
 function boundedEffectSnapshot(value, label) {
   let budget = MAX_EFFECT_RECEIPT_BYTES;
@@ -1478,8 +1478,8 @@ function boundedEffectSnapshot(value, label) {
       }
       budget -= key.length * 3 + 4;
       if (typeof item === "string") {
-        // UTF-8 and escaping never require less space than the UTF-16 length.
-        // Check first so JSON.stringify(item) cannot allocate a giant string.
+
+
         if (item.length > budget) throw new RangeError("receipt too large");
         budget -= new TextEncoder().encode(JSON.stringify(item)).byteLength;
       } else budget -= 24;

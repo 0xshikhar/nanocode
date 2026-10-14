@@ -1,4 +1,4 @@
-// Needs Node and Cargo (`cargo metadata`); no Rust target or pnpm setup.
+
 import { execFileSync } from "node:child_process";
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
@@ -26,13 +26,13 @@ async function walk(directory, skipStandaloneTests = false) {
   return result;
 }
 
-// Three-valued cfg evaluation for wasm32-unknown-unknown: true, false, or null
-// (unknown). Unknown predicates keep their dependencies in the input set.
+
+
 function wasmCfg(platform) {
   const cfg = /^cfg\s*\(([\s\S]*)\)$/.exec(platform.trim());
   if (!cfg) return /^cfg\b/.test(platform.trim()) ? null : platform === "wasm32-unknown-unknown";
   const known = { target_arch: "wasm32", target_os: "unknown", target_family: "wasm", target_env: "", target_vendor: "unknown", target_pointer_width: "32", target_endian: "little" };
-  // Reduce leaves to 1/0/?, then fold all/any/not from the inside out.
+
   let expression = cfg[1]
     .replace(/([A-Za-z_]\w*)\s*=\s*"([^"\\]*)"/g, (_, name, value) => (Object.hasOwn(known, name) ? (known[name] === value ? "1" : "0") : "?"))
     .replace(/\b([A-Za-z_]\w*)\b(?!\s*\()/g, (_, name) => (name === "unix" || name === "windows" ? "0" : "?"));
@@ -49,9 +49,9 @@ function wasmCfg(platform) {
   return { 1: true, 0: false }[expression.trim()] ?? null;
 }
 
-// Local packages the WASM crate can compile, from Cargo's own manifest view.
-// Only target tables proven inapplicable to wasm32 are skipped; optional,
-// build, and proc-macro dependencies stay included. Cargo.lock pins the rest.
+
+
+
 function dependencyDirectories(repository) {
   const { packages } = JSON.parse(execFileSync("cargo", ["metadata", "--format-version", "1", "--no-deps", "--offline"],
     { cwd: repository, encoding: "utf8", maxBuffer: 64 << 20, stdio: ["ignore", "pipe", "pipe"] }));
@@ -65,18 +65,18 @@ function dependencyDirectories(repository) {
     const pkg = byDirectory.get(directory);
     if (!pkg) throw new Error(`local Rust dependency ${location} is not a workspace member`);
     const kinds = pkg.targets.flatMap((entry) => entry.kind);
-    // A proc macro and its dependency tree compile for the build host.
+
     target &&= !kinds.includes("proc-macro");
     if (visited.has(`${target}:${directory}`)) return;
     visited.add(`${target}:${directory}`);
     const buildScript = kinds.includes("custom-build");
-    // Explicit production entry points can live in normally test-only folders.
+
     const keepTests = buildScript || pkg.targets.some((entry) => !entry.kind.some((kind) => ["test", "bench", "example"].includes(kind))
       && ["tests", "benches"].includes(relative(directory, entry.src_path).split(/[\\/]/)[0]));
     inputs.set(directory, { directory, buildScript, skipStandaloneTests: !keepTests });
     for (const dependency of pkg.dependencies) {
       if (!dependency.path || dependency.kind === "dev") continue;
-      // Build dependencies, including target-specific ones, are built for the host.
+
       const dependencyTarget = target && dependency.kind !== "build";
       if (dependencyTarget && dependency.target && wasmCfg(dependency.target) === false) continue;
       visit(dependency.path, dependencyTarget);
@@ -86,7 +86,7 @@ function dependencyDirectories(repository) {
   return [...inputs.keys()].sort().map((directory) => inputs.get(directory));
 }
 
-// Every file whose content can change the WASM outputs, as sorted absolute paths.
+
 async function inputFiles(repository) {
   const files = new Set();
   const omittedTestDirectories = new Set();
@@ -114,8 +114,8 @@ async function inputFiles(repository) {
       else { await readFile(resolve(repository, name)); files.add(resolve(repository, name)); }
     } catch (error) { if (error.code !== "ENOENT") throw error; }
   }
-  // Rust literal include/#[path] references can leave their crate directory.
-  // Follow those recursively while retaining checkout-relative content keys.
+
+
   for (const path of files) {
     if (!path.endsWith(".rs")) continue;
     const source = await readFile(path, "utf8");
@@ -124,8 +124,8 @@ async function inputFiles(repository) {
       assert.ok(!relative(repository, included).startsWith(".."), "Rust include must remain inside repository");
       await readFile(included);
       files.add(included);
-      // A production Rust module in tests/ can itself use ordinary mod children.
-      // Retain that subtree rather than approximating Rust module resolution.
+
+
       if (included.endsWith(".rs")) for (const directory of omittedTestDirectories) {
         if (!relative(directory, included).startsWith("..")) {
           for (const path of await walk(directory)) files.add(path);
@@ -137,7 +137,7 @@ async function inputFiles(repository) {
   return [...files].sort();
 }
 
-// Resolution errors propagate: an unprovable input set fails the build loudly.
+
 export async function fingerprintInputs(repository = root, mode = "release", environment = process.env, files) {
   repository = await realpath(repository);
   assert.ok(["release", "development"].includes(mode));
@@ -145,12 +145,12 @@ export async function fingerprintInputs(repository = root, mode = "release", env
   const pkg = JSON.parse(await readFile(resolve(repository, "js/package.json"), "utf8"));
   const buildEnvironment = Object.fromEntries(Object.entries(environment)
     .filter(([name]) => /^(RUSTFLAGS|CARGO_ENCODED_RUSTFLAGS|RUSTC|RUSTC_WRAPPER|RUSTC_WORKSPACE_WRAPPER|CARGO_INCREMENTAL|CARGO_PROFILE_.*|CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_.*)$/.test(name))
-    // CI installs this transparent compiler cache only after a cache miss.
-    // Its presence cannot change either the planned release or the output key;
-    // custom wrappers remain inputs because they may transform compilation.
+
+
+
     .filter(([name, value]) => name !== "RUSTC_WRAPPER" || value !== "sccache")
-    // cargo +1.97 overrides RUSTUP_TOOLCHAIN. Dev/test overrides do not affect
-    // --profile wasm, and rust-toolchain setup commonly introduces them.
+
+
     .filter(([name, value]) => name !== "CARGO_INCREMENTAL" || value !== (mode === "release" ? "0" : "1"))
     .filter(([name]) => !name.startsWith("CARGO_PROFILE_") || (mode === "release"
       ? /^CARGO_PROFILE_(WASM|RELEASE)_/.test(name)
@@ -169,7 +169,7 @@ async function outputs(repository) {
   return { artifacts, node, sourceWasmSha256: sha(await readFile(resolve(repository, rawPath))) };
 }
 
-// Resolution errors propagate before the try, so they are never mistaken for a miss.
+
 export async function check(repository = root, mode = "release", files) {
   const key = await fingerprintInputs(repository, mode, process.env, files);
   try {
@@ -184,10 +184,10 @@ export async function check(repository = root, mode = "release", files) {
 
 export class CacheMiss extends Error {}
 
-// turbo.json must hash every WASM input into nanocodex#build, or cached
-// downstream tasks (Worker bundles embedding the WASM) replay stale outputs
-// after a Rust edit. Supported input forms: $TURBO_DEFAULT$ (the package),
-// $TURBO_ROOT$/<file>, and $TURBO_ROOT$/<directory>/**.
+
+
+
+
 export async function assertTurboInputs(repository = root, files) {
   repository = await realpath(repository);
   const inputs = JSON.parse(await readFile(resolve(repository, "turbo.json"), "utf8")).tasks?.["nanocodex#build"]?.inputs ?? [];
@@ -212,7 +212,7 @@ async function atomicWrite(path, bytes) {
 }
 
 export async function save(repository = root, mode = "release", source) {
-  // Remove pre-release cache locations so older local builds cannot publish raw WASM.
+
   for (const name of [".nanocodex-source.wasm", ".nanocodex-output-cache.json"]) {
     await rm(resolve(repository, "js/pkg-web", name), { force: true });
   }
@@ -226,10 +226,10 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
   const [command, mode = "release", source] = process.argv.slice(2);
   if (command === "key") console.log(await fingerprintInputs(root, mode));
   else if (command === "check") {
-    // Exit 1 is an ordinary miss (rebuild). Resolution failures exit 2 so the
-    // build stops instead of treating an unprovable input set as a miss.
-    // Resolve the input set once for both the Turbo coverage assertion and
-    // the fingerprint; a coverage failure is a resolution failure, not a miss.
+
+
+
+
     try {
       const files = await inputFiles(await realpath(root));
       await assertTurboInputs(root, files);

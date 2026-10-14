@@ -68,8 +68,8 @@ export type HostedToolCallOutcome =
   | { status: "ambiguous"; message: string }
   | { status: "cancelled"; message: string };
 
-/** Host-local monotonic durations, measured through result encoding before socket
- * handoff. No host wall clock or claim about one-way network latency. */
+
+
 export type HostedToolReceiptTiming = Readonly<{
   scheduler_ms: number;
   execution_gate_ms: number;
@@ -88,15 +88,15 @@ export type HostedToolsHostFrame =
       tools: HostedToolCatalogEntry[];
       machines?: HostedMachine[];
       attachment_id?: string;
-      /** Identity of the retained executor runtime, stable only across reconnects. */
+
       runtime_id?: string;
-      /** Retained command journal in this living executor runtime. */
+
       command_recovery?: true;
-      /** Trusted turn completion notifications, never exposed in the tool catalog. */
+
       turn_lifecycle?: true;
-      /** Opt-in is rejected by older strict brokers before any call executes. */
+
       diagnostics?: true;
-      /** Opaque client-generated identity for this connection attempt. */
+
       connection_id?: string;
     }
   | { type: "diagnostic"; call_id: string; stage: HostedToolDiagnosticStage; elapsed_ms: number }
@@ -107,7 +107,7 @@ export type HostedToolsHostFrame =
       timing?: HostedToolReceiptTiming;
     }
   | { type: "status"; call_id: string; state: "running" | "missing" }
-  /** Compatibility with publishers predating command recovery/control heartbeats. */
+
   | { type: "ping"; nonce: string }
   | { type: "drain" };
 
@@ -359,7 +359,7 @@ function parseCall(frame: Record<string, unknown>): Extract<HostedToolsManagedFr
     session_id: identifier(frame.session_id, "session_id"),
     ...(frame.turn_id === undefined ? {} : { turn_id: boundedText(frame.turn_id, 1, 256, "turn_id") }),
     call_id: identifier(frame.call_id, "call_id"),
-    // Model routing metadata is opaque; only the wire type belongs to this protocol.
+
     model: text(frame.model, "model"),
     name: toolName(frame.name),
     input,

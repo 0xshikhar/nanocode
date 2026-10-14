@@ -1,8 +1,3 @@
-//! Bounded native Read media. Images and PDF rasters remain Claude image blocks.
-//!
-//! PDF helpers are trusted host configuration, run without a shell or network
-//! arguments. The embedding must authorize and OS-isolate their filesystem and
-//! memory access, just as it isolates the workspace's other native operations.
 use crate::{ImageSource, SessionEnvironment, ToolOutput, ToolResultBlock};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
@@ -20,12 +15,10 @@ const MAX_MEDIA: usize = 20 * 1024 * 1024;
 const MAX_TEXT: usize = 64 * 1024;
 const MAX_BLOCKS: usize = 256;
 
-/// Trusted executable locations for PDF reading. Install Poppler to use defaults.
 #[derive(Clone, Debug)]
 pub struct MediaReadOptions {
-    /// Poppler's pdfinfo executable, never supplied by model tool arguments.
     pub pdfinfo: PathBuf,
-    /// Poppler's pdftoppm executable, never supplied by model tool arguments.
+
     pub pdftoppm: PathBuf,
 }
 impl Default for MediaReadOptions {
@@ -48,8 +41,7 @@ pub(crate) fn read(
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
-    // Check the signature as well as the extension, so extensionless screenshots
-    // and PDFs still use the media route instead of UTF-8 decoding.
+
     let mut prefix = [0; 16];
     let count = File::open(path)
         .map_err(|e| format!("read: {e}"))?
@@ -110,7 +102,7 @@ fn image_block(bytes: &[u8]) -> Result<ToolResultBlock, String> {
         image::ImageFormat::WebP => "image/webp",
         _ => return Err("unsupported image format; use PNG, JPEG, GIF or WebP".into()),
     };
-    // Validate the real image, limiting decoded allocations as well as input bytes.
+
     let mut reader = image::ImageReader::with_format(Cursor::new(bytes), format);
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(32768);
@@ -120,7 +112,7 @@ fn image_block(bytes: &[u8]) -> Result<ToolResultBlock, String> {
     let decoded = reader
         .decode()
         .map_err(|e| format!("invalid or oversized image: {e}"))?;
-    // Fit within the standard vision envelope while preserving aspect ratio.
+
     let pixels = f64::from(decoded.width()) * f64::from(decoded.height());
     let scale = (1568.0 / f64::from(decoded.width().max(decoded.height())))
         .min((1_150_000.0 / pixels).sqrt())
@@ -143,7 +135,6 @@ fn image_block(bytes: &[u8]) -> Result<ToolResultBlock, String> {
         mime = "image/png";
     }
     if encoded.len() > 500 * 1024 {
-        // JPEG has no alpha: composite onto white instead of turning it black.
         let rgba = resized.to_rgba8();
         let rgb = image::RgbImage::from_fn(rgba.width(), rgba.height(), |x, y| {
             let p = rgba.get_pixel(x, y).0;
@@ -217,8 +208,7 @@ fn read_pdf(
     if !bytes.starts_with(b"%PDF-") {
         return Err("invalid PDF header".into());
     }
-    // A private snapshot makes every helper see the same authorized bytes, even
-    // if the source is replaced while pages are rendering.
+
     let mut snapshot = tempfile::NamedTempFile::new().map_err(|e| format!("PDF snapshot: {e}"))?;
     snapshot
         .write_all(bytes)
@@ -278,14 +268,11 @@ fn read_pdf(
     ))
 }
 
-// Pipes are drained concurrently in bounded reader threads. This avoids pipe
-// deadlocks and accumulating unbounded stdout/stderr in memory or temporary files.
 fn helper(command: &mut Command, max: usize, deadline: Instant) -> Result<Vec<u8>, String> {
     if Instant::now() >= deadline {
         return Err("PDF rendering exceeded 30 seconds".into());
     }
-    // A dedicated process group lets timeout/output-limit cleanup close pipes
-    // inherited by helper subprocesses as well as terminate the direct child.
+
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -375,9 +362,7 @@ fn helper(command: &mut Command, max: usize, deadline: Instant) -> Result<Vec<u8
         let _ = child.kill();
     }
     let _ = child.wait();
-    // Never extend the deadline waiting for a pipe held by an escaped process.
-    // Completed readers can be joined; dropping an unfinished handle detaches it.
-    // Hosts still must isolate trusted helpers, particularly on non-Unix systems.
+
     if out_thread.is_finished() {
         let _ = out_thread.join();
     }
@@ -510,7 +495,7 @@ fn read_notebook(bytes: &[u8], input: &Value) -> Result<ToolOutput, String> {
                                         .into(),
                                 );
                             }
-                            // Check the original MIME before normalization changes the encoding.
+
                             let actual = match image::guess_format(&bytes).ok() {
                                 Some(image::ImageFormat::Png) => "image/png",
                                 Some(image::ImageFormat::Jpeg) => "image/jpeg",
@@ -532,7 +517,6 @@ fn read_notebook(bytes: &[u8], input: &Value) -> Result<ToolOutput, String> {
                     if let Some(text) = data.get("text/plain") {
                         push_text(&mut blocks, &mut text_bytes, notebook_text(text)?)?;
                     } else if !image {
-                        // Preserve HTML/JSON/SVG as labeled source, never pretend it is raster media.
                         for (mime, value) in data {
                             let text = if mime == "application/json" {
                                 value.to_string()

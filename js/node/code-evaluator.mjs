@@ -2,7 +2,7 @@ import { createQuickJsEvaluator } from '../runtime/quickjs-evaluator.mjs';
 
 let initialization;
 
-/** Lazy sandboxed evaluator; guest code receives only the Code Mode capabilities. */
+
 export function createNodeEvaluator() {
   let evaluate;
   return async (source, environment) => {

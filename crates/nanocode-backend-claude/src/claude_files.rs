@@ -1,6 +1,3 @@
-//! The canonical Claude Code file tools as shared tools, so Claude Code Mode
-//! nests them under `exec` with their Claude names, schemas and results.
-
 use std::{path::PathBuf, sync::Arc};
 
 use nanocode_agent::input::ImageDetail;
@@ -12,7 +9,6 @@ use nanocode_code_mode::{
 };
 use serde_json::Value;
 
-/// One agent's canonical file tools and workspace Bash capability.
 pub(super) fn selection(
     files: &Arc<ClaudeWorkspaceFiles>,
     workspace: PathBuf,
@@ -80,7 +76,6 @@ impl Tool for ClaudeFileTool {
     }
 }
 
-/// Native Claude blocks as shared tool content; images keep their bytes.
 fn item(block: ToolResultBlock) -> ToolOutputContent {
     match block {
         ToolResultBlock::Text { text } => ToolOutputContent::InputText { text },

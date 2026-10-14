@@ -385,6 +385,7 @@ pub(super) fn handle_idle_command<S>(
             host_context,
             result,
         } => {
+            let stateless_http = options.stateless_http;
             let outcome = options
                 .validate_harness()
                 .and_then(|()| {
@@ -396,13 +397,14 @@ pub(super) fn handle_idle_command<S>(
                             "selected harness requires a configured child factory".into(),
                         ));
                     }
-                    // Shared selection semantics: omitted settings inherit,
-                    // an explicit model or family takes its own defaults.
+
                     let resolved = options.resolve(
-                        crate::HarnessModel::Codex(defaults.model),
+                        crate::ModelSelection::Codex(defaults.model),
                         defaults.thinking,
                     )?;
-                    let Some(model) = resolved.selected_harness_model().and_then(|model| model.as_codex())
+                    let Some(model) = resolved
+                        .selected_harness_model()
+                        .and_then(|model| model.as_codex())
                     else {
                         return Err(NanocodexError::InvalidRequest(
                             "selected harness requires a configured child factory".into(),
@@ -428,7 +430,7 @@ pub(super) fn handle_idle_command<S>(
                         model,
                         thinking,
                         defaults.service_tier,
-                        options.stateless_http,
+                        stateless_http,
                         host_context.or_else(|| spawner.host_context.as_ref().map(Arc::clone)),
                         execution,
                     )

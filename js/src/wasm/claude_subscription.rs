@@ -1,5 +1,3 @@
-//! Private host capabilities for the Rust-owned Claude subscription lifecycle.
-//! No OAuth state or credential is copied to agent session/checkpoint state.
 use super::{JsFuture, JsValue, js_error};
 use nanocode_backend_claude::subscription::{
     ClaudeLoginMode, ClaudeSubscription, ClaudeSubscriptionCommit, ClaudeSubscriptionConfig,
@@ -132,7 +130,7 @@ struct Credential {
     headers: BTreeMap<String, String>,
     revision: String,
 }
-/// Host-only lifecycle handle. Authorization URL/status are the only browser-safe results.
+
 #[wasm_bindgen(js_name = ClaudeSubscription)]
 pub struct WasmClaudeSubscription {
     inner: ClaudeSubscription,
@@ -182,7 +180,7 @@ impl WasmClaudeSubscription {
         serde_json::to_string(&self.inner.status().await.map_err(js_error)?)
             .map_err(|_| js_error("Claude status unavailable"))
     }
-    /// Private capability: never expose through account API, tool result, or trace.
+
     pub async fn credential(&self) -> Result<String, JsValue> {
         let headers = self
             .inner
@@ -199,7 +197,7 @@ impl WasmClaudeSubscription {
         })
         .map_err(|_| js_error("Claude host unavailable"))
     }
-    /// Invalidate only the rejected credential; next credential() performs bounded refresh.
+
     pub async fn recover(&self, encoded: &str) -> Result<bool, JsValue> {
         let input: BTreeMap<String, String> =
             serde_json::from_str(encoded).map_err(|_| js_error("invalid Claude recovery"))?;

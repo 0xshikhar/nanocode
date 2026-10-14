@@ -51,24 +51,13 @@ impl Tool for ApplyPatchHandler {
     }
 }
 
-/// One filesystem mutation produced by the canonical Rust patch engine.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PatchOperation {
-    /// Create or replace a UTF-8 file.
-    Write {
-        /// Workspace-relative or absolute patch path.
-        path: PathBuf,
-        /// Complete replacement contents.
-        contents: String,
-    },
-    /// Delete a file.
-    Delete {
-        /// Workspace-relative or absolute patch path.
-        path: PathBuf,
-    },
+    Write { path: PathBuf, contents: String },
+
+    Delete { path: PathBuf },
 }
 
-/// Verified filesystem mutations and the normal `apply_patch` success output.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PatchPlan {
     operations: Vec<PatchOperation>,
@@ -76,22 +65,17 @@ pub struct PatchPlan {
 }
 
 impl PatchPlan {
-    /// Returns the mutations in execution order.
     #[must_use]
     pub fn operations(&self) -> &[PatchOperation] {
         &self.operations
     }
 
-    /// Returns the canonical model-visible success summary.
     #[must_use]
     pub fn summary(&self) -> &str {
         &self.summary
     }
 }
 
-/// Returns existing UTF-8 files that must be read before planning a patch.
-///
-/// Files created earlier in the same patch are not returned.
 pub fn required_files(patch: &str) -> Result<Vec<PathBuf>, String> {
     let hunks = parse(patch)?;
     Ok(required_files_from_hunks(&hunks))
@@ -123,7 +107,6 @@ fn required_files_from_hunks(hunks: &[Hunk]) -> Vec<PathBuf> {
     required
 }
 
-/// Verifies a patch against its required input files and produces mutations.
 pub fn plan(patch: &str, initial_files: &HashMap<PathBuf, String>) -> Result<PatchPlan, String> {
     let hunks = parse(patch)?;
     plan_hunks(hunks, initial_files)

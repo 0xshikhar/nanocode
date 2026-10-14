@@ -132,9 +132,7 @@ fn shell_response_text(result: &super::ExecCommandResult) -> String {
 #[serde(deny_unknown_fields)]
 struct ExecCommandArguments {
     cmd: String,
-    // Codex exposes these approval metadata fields even under a fixed
-    // full-access/never-ask policy. Nanocodex accepts but does not act on
-    // them; this does not add a second approval or sandbox policy owner.
+
     #[serde(default, rename = "justification")]
     _justification: Option<String>,
     #[serde(default)]

@@ -16,26 +16,22 @@ use crate::{
     skills::SkillRoot,
 };
 
-/// A workspace and its project root: the nearest ancestor containing `.git`
-/// (as Codex resolves it), or the workspace itself outside a repository.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ProjectHome {
     root: PathBuf,
     workspace: PathBuf,
 }
 
-/// One project instruction file location, not yet read.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct InstructionFile {
     pub path: PathBuf,
     pub canonical_path: PathBuf,
-    /// Directory whose subtree the file applies to.
+
     pub directory: PathBuf,
     pub kind: InstructionKind,
     pub convention: Convention,
 }
 
-/// Bounded project instruction texts in root-to-leaf order.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct ProjectInstructions {
     pub sources: Vec<InstructionSource>,
@@ -43,14 +39,12 @@ pub struct ProjectInstructions {
 }
 
 impl ProjectInstructions {
-    /// Source texts joined by a blank line, or `None` when there are none.
     pub fn combined(&self) -> Option<String> {
         combine(&self.sources)
     }
 }
 
 impl ProjectHome {
-    /// Locates the project root for `workspace` (canonicalized when possible).
     pub fn discover(workspace: impl AsRef<Path>) -> Self {
         let workspace = workspace.as_ref();
         let workspace = fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf());
@@ -62,7 +56,6 @@ impl ProjectHome {
         Self { root, workspace }
     }
 
-    /// Explicit root and workspace; `workspace` must be inside `root`.
     pub fn new(root: impl Into<PathBuf>, workspace: impl Into<PathBuf>) -> io::Result<Self> {
         let (root, workspace) = (root.into(), workspace.into());
         if !workspace.starts_with(&root) {
@@ -82,7 +75,6 @@ impl ProjectHome {
         &self.workspace
     }
 
-    /// Root first, then each directory down to the workspace.
     pub fn directories(&self) -> Vec<PathBuf> {
         let mut dirs = self
             .workspace
@@ -94,11 +86,6 @@ impl ProjectHome {
         dirs
     }
 
-    /// Instruction files, root-to-leaf. Per directory: `AGENTS.override.md`
-    /// if present else `AGENTS.md` (Codex's rule), then `CLAUDE.md`,
-    /// `CLAUDE.local.md`, `.claude/CLAUDE.md`, then `.claude/rules/**/*.md`
-    /// sorted. The same file reached twice (e.g. `CLAUDE.md -> AGENTS.md`) is
-    /// listed once.
     pub fn instruction_files(&self) -> (Vec<InstructionFile>, Vec<Diagnostic>) {
         let mut files: Vec<InstructionFile> = Vec::new();
         let mut diagnostics = Vec::new();
@@ -160,10 +147,6 @@ impl ProjectHome {
         (files, diagnostics)
     }
 
-    /// Reads non-rule instruction files root-to-leaf, each whole: the model's
-    /// context window, not a fixed byte budget, bounds what fits. Rules are
-    /// path-scoped; read them via [`Self::instruction_files`]. Identical
-    /// texts are included once.
     pub fn read_instructions(&self) -> ProjectInstructions {
         let (files, mut diagnostics) = self.instruction_files();
         let mut sources = Vec::new();
@@ -187,9 +170,6 @@ impl ProjectHome {
         }
     }
 
-    /// Project skill roots in precedence order: nearest directory first; per
-    /// directory `.claude/skills` before `.agents/skills` (Claude-native
-    /// entries win over the generic location, as in nanocode-claude-tools).
     pub fn skill_roots(&self) -> Vec<SkillRoot> {
         let mut roots = Vec::new();
         for directory in self.directories().into_iter().rev() {
@@ -207,8 +187,6 @@ impl ProjectHome {
         roots
     }
 
-    /// Project subagent roots, nearest directory first: `.claude/agents`
-    /// (Markdown) and `.codex/agents` (Codex TOML).
     pub fn agent_profile_roots(&self) -> Vec<AgentProfileRoot> {
         let mut roots = Vec::new();
         for directory in self.directories().into_iter().rev() {

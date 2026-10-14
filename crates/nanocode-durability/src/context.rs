@@ -1,6 +1,3 @@
-//! Persistent model-context sequences. Pages reference immutable message records;
-//! a new model boundary publishes only new messages and changed tail pages.
-
 use crate::{EncodedPayload, Result, StoreRecord, session::DurableOwner};
 use nanocode_backend_codex::{
     execution::ExecutionContinuation,
@@ -14,7 +11,7 @@ use std::collections::HashSet;
 pub(crate) enum Reader<'a> {
     Owner(&'a DurableOwner),
     Session(&'a crate::DurableSession),
-    /// Non-fencing reads of one state's immutable records (native catalog).
+
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     Store(&'a crate::shared_store::SharedStore, &'a str),
 }
@@ -68,7 +65,6 @@ struct Continuation {
     prefix: Sequence,
 }
 
-/// Prepared immutable writes. The cache is advanced only after a successful commit.
 pub(crate) struct Prepared {
     pub(crate) payload: EncodedPayload,
     pub(crate) keys: HashSet<String>,
@@ -95,7 +91,7 @@ impl<'a> Writer<'a> {
         if self.keys.insert(key.clone()) && !self.known.contains(&key) {
             payload.stage(&mut self.records);
         }
-        // Page references never keep message bodies resident.
+
         Ok(payload.reference())
     }
 

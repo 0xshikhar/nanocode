@@ -112,9 +112,7 @@ impl CodeModeObserver for NestedToolEventObserver<'_> {
                         progress.active_nested_tool_calls.remove(index);
                     }
                 }
-                // A yielded cell can finish a tool in a later wait call, whose
-                // progress does not contain the original start. The completion
-                // update still belongs to that original call and must be emitted.
+
                 self.events.emit(
                     AgentEventKind::ToolResult,
                     ToolResultEvent {
@@ -137,8 +135,6 @@ impl CodeModeObserver for NestedToolEventObserver<'_> {
     }
 }
 
-/// Owned nested-tool event emitter for a cell left running after its turn
-/// completed. It emits the same events an exec/wait observer would.
 pub(super) struct DetachedNestedToolEvents {
     events: EventSink,
     tool_call_indices: HashMap<Box<str>, u32>,
@@ -183,11 +179,6 @@ impl CodeModeObserver for DetachedNestedToolEvents {
     }
 }
 
-/// Nested-tool emitter for cells a cancelled or failed turn terminates. Their
-/// remaining receipts would otherwise be discarded with the cell, leaving
-/// starts that an earlier exec/wait observer already emitted without a terminal
-/// result. Nested calls still tracked by an active call are skipped: committing
-/// the interrupted turn reports those as cancelled.
 pub(super) struct TurnTeardownEvents<'a> {
     events: &'a EventSink,
     tool_call_indices: &'a HashMap<Box<str>, u32>,
@@ -318,7 +309,7 @@ where
         let session_id = events.request_id().to_owned();
         let model = self.model;
         let host_context = self.host_context.clone();
-        // Every call in this response retains the revision consumed by its model request.
+
         let instruction_revision = self.instruction_revision;
         let execution_steps = self.execution_steps.clone();
         let mut executions = prepared
@@ -346,8 +337,6 @@ where
                         None
                     };
                     let (result, persist_result) = if let Some(mut completed) = recovered {
-                        // Legacy effect receipts bypass fresh tool execution. Prepare
-                        // their media before those response items enter history too.
                         prepare_output_images(&mut completed.output).await;
                         nanocode_code_mode::image::prepare_history_images(
                             &mut completed.response_items,
@@ -712,8 +701,7 @@ where
                     }
                 }
             };
-            // The explicit result is retained by CompletedToolCall. Move it before
-            // image preparation instead of keeping another large copy alive.
+
             let structured_result = execution.take_structured_result();
             prepare_output_images(&mut execution.output).await;
             if let Some(content) = serialize_trace_content(&execution.output) {

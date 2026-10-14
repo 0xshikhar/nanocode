@@ -67,7 +67,7 @@ export function create(options = {}) {
   } = resolveResponsesTransport(transport);
   const { tools: hostTools, subagents: subagentConfig } = resolveTools(tools);
   const events = createEventChannel();
-  // Host lifecycle observers need terminal events even without a public watcher.
+
   events.subscribe(() => {});
   if (filesystem && workspace !== undefined && workspace !== filesystem.root) {
     throw new TypeError("workspace must match filesystem.root when both are provided");
@@ -147,7 +147,7 @@ export function create(options = {}) {
     adopt(raw) {
       host.retain();
       try {
-        // Adopted child handles are ephemeral and do not own the root store.
+
         if (raw.sessionId === stableSessionId) durabilityOwner?.retain();
         bindHostSession(host, raw.sessionId);
         events.addSource(raw);

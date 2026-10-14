@@ -1,4 +1,3 @@
-//! Foreground HWND and read-only native edit-control password metadata.
 #![allow(unsafe_code)]
 use super::*;
 use windows_sys::Win32::{
@@ -21,8 +20,6 @@ impl Observer {
         false
     }
     pub(super) fn sample(&mut self) -> Result<Observation> {
-        // SAFETY: all pointers are stack-owned output buffers, handles are
-        // obtained from the OS, and no input/keyboard messages are sent.
         unsafe {
             let window = GetForegroundWindow();
             if window.is_null() {
@@ -47,7 +44,7 @@ impl Observer {
                 ));
             }
             let mut buttons = 0;
-            // Only mouse virtual keys. No key enumeration or key history.
+
             for (bit, key) in [(0, 1), (1, 4), (2, 2)] {
                 if GetAsyncKeyState(key) < 0 {
                     buttons |= 1 << bit;
@@ -62,16 +59,14 @@ impl Observer {
                 let len = GetClassNameW(info.hwndFocus, class.as_mut_ptr(), class.len() as i32);
                 if len > 0 {
                     let class = String::from_utf16_lossy(&class[..len as usize]);
-                    // ES_PASSWORD is meaningful only on native edit controls;
-                    // custom browser/UIA controls must remain Unknown.
+
                     if class.eq_ignore_ascii_case("Edit")
                         || class.eq_ignore_ascii_case("RichEdit20W")
                         || class.eq_ignore_ascii_case("RichEdit50W")
                     {
                         let style = GetWindowLongW(info.hwndFocus, GWL_STYLE);
                         let mut password_char = 0;
-                        // EM_GETPASSWORDCHAR (0xD2) reads the masking glyph only,
-                        // never text. Timeout prevents a hung application stall.
+
                         let response = SendMessageTimeoutW(
                             info.hwndFocus,
                             0xD2,

@@ -1,5 +1,3 @@
-//! Model-visible byte accounting from codex-rs 36430b3688 context_manager/history.rs.
-//! Transport envelopes, IDs, citations and JSON escaping do not consume model context.
 use super::*;
 pub(super) fn model_visible_len(item: &ResponseItem) -> usize {
     match item {
@@ -23,9 +21,9 @@ pub(super) fn model_visible_len(item: &ResponseItem) -> usize {
             .iter()
             .map(|part| match part {
                 crate::client::responses::AgentMessageContent::InputText { text } => text.len(),
-                crate::client::responses::AgentMessageContent::EncryptedContent { encrypted_content } => {
-                    encrypted_content.len().saturating_mul(9).div_ceil(16)
-                }
+                crate::client::responses::AgentMessageContent::EncryptedContent {
+                    encrypted_content,
+                } => encrypted_content.len().saturating_mul(9).div_ceil(16),
             })
             .fold(
                 author.len().saturating_add(recipient.len()),
@@ -134,7 +132,7 @@ fn output_bytes(output: &FunctionOutputBody) -> usize {
             .fold(0, usize::saturating_add),
     }
 }
-/// Mirrors codex `estimate_audio_bytes`: duration tokens times four bytes.
+
 fn audio_bytes(url: &str) -> usize {
     crate::client::audio::estimate_audio_token_count(url).saturating_mul(APPROX_BYTES_PER_TOKEN)
 }

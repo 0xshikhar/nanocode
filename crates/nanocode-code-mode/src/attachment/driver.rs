@@ -31,22 +31,16 @@ const PONG_TIMEOUT: Duration = Duration::from_secs(10);
 const STABLE_CONNECTION: Duration = Duration::from_secs(30);
 
 const HEARTBEAT_TIMEOUT_REASON: &str = "attachment heartbeat timed out";
-/// Fenced reason when the endpoint reports the attachment permanently gone (HTTP 410).
+
 pub(crate) const ATTACHMENT_REVOKED_REASON: &str =
     "attachment endpoint permanently revoked this attachment";
-/// Other HTTP refusals (404, 409 superseded/conflict, 429 and other 4xx) back
-/// off furthest.
 
 const MAX_REJECTED_BACKOFF: Duration = Duration::from_secs(60);
 
-/// Transport loss or a failed connect: the endpoint may be unreachable.
 const MAX_TRANSPORT_BACKOFF: Duration = Duration::from_secs(5);
-/// HTTP 5xx proves a reachable service that temporarily cannot admit the
-/// attachment (deploys, isolate restarts, backend exceptions mapped to 503).
-/// Reattach quickly while such an outage is young so a deploy window does not
-/// grow into a long exponential gap.
+
 const MAX_SERVICE_BACKOFF: Duration = Duration::from_secs(2);
-/// A continuous service outage older than this falls back to the transport cap.
+
 const FAST_SERVICE_WINDOW: Duration = Duration::from_secs(30);
 
 pub(crate) struct Config {
@@ -68,8 +62,6 @@ pub(crate) async fn run(
     status: watch::Sender<AttachmentStatus>,
     closed: watch::Sender<Option<Result<(), AttachmentError>>>,
 ) {
-    // Transport generations may change while the same runtime owns processes.
-    // A new driver gets a new identity so local numeric IDs cannot be retargeted.
     let runtime_id = uuid::Uuid::new_v4().to_string();
     let mut active = Vec::<InFlight>::new();
     let mut journal = HashMap::<Box<str>, RetainedCall>::new();
@@ -77,7 +69,7 @@ pub(crate) async fn run(
     let mut backoff = Duration::from_millis(100);
     let mut attempt = 0_u64;
     let mut previous_delay = Duration::ZERO;
-    // Start of the current run of consecutive transient service refusals.
+
     let mut service_outage: Option<Instant> = None;
     let terminal = loop {
         attempt = attempt.saturating_add(1);
@@ -124,8 +116,7 @@ pub(crate) async fn run(
                     "attachment TCP connected");
                 let upgrade_started = Instant::now();
                 let upgraded = client_async_tls_with_config(request, stream, None, connector).await;
-                // tokio-tungstenite owns TLS and HTTP upgrade in one public call.
-                // Keep this combined duration explicit rather than inventing a split.
+
                 tracing::info!(target: "nanocode_code_mode::attachment", stage = "attachment.socket.tls_upgrade",
                     duration_ms = upgrade_started.elapsed().as_secs_f64() * 1000.0,
                     reason_code = if upgraded.is_ok() { "connected" } else { "tls_upgrade_failure" }, "attachment TLS and upgrade finished");
@@ -153,8 +144,6 @@ pub(crate) async fn run(
             Ok(Err(tokio_tungstenite::tungstenite::Error::Http(response)))
                 if response.status().as_u16() == 410 =>
             {
-                // The attachment's allocation or conversation is permanently
-                // gone. Reconnecting can never succeed; let the owner reap it.
                 connection_span.in_scope(|| tracing::warn!(target: "nanocode_code_mode::attachment", stage = "attachment.socket.rejected", reason_code = "attachment_revoked", pending_calls = active.len(), "attachment permanently revoked"));
                 break Err(AttachmentError::Fenced(ATTACHMENT_REVOKED_REASON.into()));
             }
@@ -229,8 +218,7 @@ pub(crate) async fn run(
         {
             backoff = Duration::from_millis(100);
         }
-        // A socket lost after upgrade is transport loss. Its cap applies even
-        // when earlier refusals grew the shared exponent past it.
+
         let delay = matches!(
             end,
             ConnectionEnd::Failed(_)
@@ -272,7 +260,7 @@ pub(crate) async fn run(
             }
         }
     };
-    // Closure must not leave surviving handles advertising a ready transport.
+
     let _ = status.send(
         if matches!(
             terminal,
@@ -317,10 +305,7 @@ fn request(
         http::HeaderValue::from_str(connection_id)
             .map_err(|_| AttachmentError::Transport("invalid connection identity".into()))?,
     );
-    // Only account machine publishers support regional pre-upgrade routing.
-    // Named/scoped attachments retain the legacy owner route. Metadata::machine
-    // guarantees one machine whose exact ID is also the catalog attachment_id.
-    // Account machine publishers always use regional relays.
+
     if config.endpoint.path() == "/v1/account/tool-host"
         && let Some(machine) = config
             .metadata
@@ -348,21 +333,16 @@ fn safe_uuid(value: &str) -> Option<String> {
         .map(|id| id.to_string())
 }
 
-/// How a reconnect attempt failed, which selects its reconnect schedule.
 #[derive(Clone, Copy)]
 enum Failure {
-    /// Transport loss, refused TCP, DNS, TLS or a connect timeout.
     Transport,
-    /// HTTP 5xx from a reachable service that may admit us shortly.
+
     Service { retry_after: Option<Duration> },
-    /// Other HTTP refusals (including 409 and 429), unlikely to clear soon.
+
     Rejected { retry_after: Option<Duration> },
 }
 
 impl Failure {
-    /// Returns this attempt's wait and advances the shared exponent. Each class
-    /// caps the exponent independently, so a long permanent-refusal exponent
-    /// never stretches a transient or transport reconnect.
     fn delay(self, backoff: &mut Duration, service_outage: Option<Instant>) -> Duration {
         let cap = match self {
             Self::Transport => MAX_TRANSPORT_BACKOFF,
@@ -378,8 +358,6 @@ impl Failure {
         let scheduled = (*backoff).min(cap);
         *backoff = (scheduled * 2).min(cap);
         match self {
-            // Retry-After is the service's lower bound; never retry sooner. The
-            // wait stays interruptible by detach.
             Self::Service {
                 retry_after: Some(after),
             }
@@ -391,8 +369,6 @@ impl Failure {
     }
 }
 
-/// Retry-After as delta-seconds or an HTTP-date (RFC 9110 section 10.2.3). A
-/// date in the past means no extra wait; malformed values use the schedule.
 fn retry_after(headers: &http::HeaderMap) -> Option<Duration> {
     let value = headers
         .get(http::header::RETRY_AFTER)?
@@ -504,8 +480,6 @@ impl CallClock {
     }
 }
 
-// This RAM journal belongs to the living executor runtime, never a socket.
-// A process restart loses proof; recovery may only report missing in that case.
 struct RetainedCall {
     identity: CallIdentity,
     task: Option<tokio::task::AbortHandle>,
@@ -547,7 +521,6 @@ async fn shutdown_calls(active: &mut Vec<InFlight>) {
     }
 }
 
-// Completion telemetry follows execution, even after the receiving socket is gone.
 struct TaskEvents {
     call: Option<CallEvents>,
     events: mpsc::Sender<AttachmentEvent>,
@@ -707,8 +680,6 @@ fn start_call(
                     AttachmentCallOutcome::Unavailable,
                 )
             } else {
-                // Settle locally just before the hosted deadline so the broker
-                // receives this runtime's own outcome rather than expiring it.
                 let duration = Duration::from_millis(
                     remaining
                         .saturating_sub(EXECUTION_DEADLINE_MARGIN_MS)
@@ -767,7 +738,7 @@ fn start_call(
             if let Some(call) = events.call.take() {
                 call.complete(&events.events, observed);
             }
-            // The runtime owns this channel across every transport connection.
+
             timing.lock().unwrap().result_queued = Some(Instant::now());
             let _ = completed.send(Completion::Result {
                 call_id: task_identity.call_id,
@@ -781,23 +752,17 @@ fn start_call(
     abort
 }
 
-/// Time reserved after a local execution timeout for its result to reach the broker.
 const EXECUTION_DEADLINE_MARGIN_MS: u64 = 1_000;
 #[cfg(not(feature = "workspace-runtime"))]
 fn clamp_shell_yield(_name: &str, input: Value, _remaining_ms: u64) -> Value {
     input
 }
 
-/// Time reserved after a shell yield for result encoding and delivery.
 #[cfg(feature = "workspace-runtime")]
 const SHELL_YIELD_DEADLINE_MARGIN_MS: u64 = 3_000;
 #[cfg(feature = "workspace-runtime")]
 const MIN_SHELL_YIELD_MS: u64 = 250;
 
-/// Shell yields are observation deadlines: a process that outlives the hosted
-/// call deadline must return its live session before that deadline instead of
-/// letting the broker settle the call as ambiguous. Shorter yields and the
-/// tools' own defaults are preserved.
 #[cfg(feature = "workspace-runtime")]
 fn clamp_shell_yield(name: &str, mut input: Value, remaining_ms: u64) -> Value {
     let exec = name == crate::StandardTool::ExecCommand.name();
@@ -813,7 +778,7 @@ fn clamp_shell_yield(name: &str, mut input: Value, remaining_ms: u64) -> Value {
     let requested = match object.get("yield_time_ms") {
         Some(Value::Number(value)) => value.as_u64(),
         Some(Value::Null) | None => None,
-        // Leave invalid input to the tool's own validation.
+
         Some(_) => return input,
     };
     let effective = requested.unwrap_or_else(|| {
@@ -833,8 +798,6 @@ fn clamp_shell_yield(name: &str, mut input: Value, remaining_ms: u64) -> Value {
     input
 }
 
-// Diagnostics never wait on the socket; the runtime channel survives disconnects.
-// The clock retains phases and receipt transmission flushes them before the result.
 struct ExecutionPhase<'a> {
     timing: &'a Arc<Mutex<CallClock>>,
     completed: &'a mpsc::UnboundedSender<Completion>,
@@ -968,7 +931,6 @@ where
         },
     );
 
-    // Collect completions that arrived offline before replaying retained receipts.
     while let Ok(completion) = completed_rx.try_recv() {
         if let Completion::Result {
             call_id, outcome, ..
@@ -1117,9 +1079,7 @@ where
                         journal.insert(call_id.into(), RetainedCall { identity, task: Some(task), timing, receipt: None });
                     }
                     RemoteFrame::TurnEnded { session_id, turn_id, hook_event_name } => {
-                        // The trusted broker sends this only after the turn has
-                        // settled. Keep cleanup ordered before another turn can
-                        // use this same retained provider session.
+
                         if tokio::time::timeout(Duration::from_secs(5), runtime.end_turn(&session_id, &turn_id, &hook_event_name)).await.is_err() {
                             tracing::warn!(target: "nanocode_code_mode::attachment",
                                 "turn cleanup timed out; not retried");
@@ -1129,14 +1089,14 @@ where
                         tracing::info!(target: "nanocode_code_mode::attachment", stage = "attachment.call.cancel_received", transport_call_id = call_id.as_str(), pending_calls = journal.values().filter(|call| call.task.is_some()).count(), pending_receipts = journal.values().filter(|call| call.receipt.is_some()).count(), reason_code = "cancel_received", "attachment cancellation received");
                         if let Some(call) = journal.get_mut(call_id.as_str()) {
                             let replayed = call.receipt.is_some();
-                            // A queued terminal receipt wins cancellation races.
+
                             if call.timing.lock().unwrap().result_queued.is_some() { continue; }
                             if let Some(task) = call.task.take() {
                                 task.abort();
                                 if let Some(index) = active.iter().position(|active| active.task.id() == task.id()) {
                                     let _ = active.swap_remove(index).task.await;
                                 }
-                                // Completion may have won between the first clock check and abort.
+
                                 if call.timing.lock().unwrap().result_queued.is_some() { continue; }
                                 if let Err(error) = call.finish(&ambiguous("tool execution was cancelled after dispatch")) { break ConnectionEnd::Failed(error); }
                             }
@@ -1173,8 +1133,6 @@ where
 
     tracing::info!(target: "nanocode_code_mode::attachment", stage = "attachment.socket.pending_at_close", reason_code = end.reason_code(), pending_calls = journal.values().filter(|call| call.task.is_some()).count(), pending_receipts = journal.values().filter(|call| call.receipt.is_some()).count(), "attachment socket pending work at close");
     if matches!(&end, ConnectionEnd::HeartbeatTimeout) {
-        // The transport is still writable: send a reason before relinquishing
-        // the socket, including when a detach was draining in the background.
         close_heartbeat_timeout(&mut socket).await;
     }
 
@@ -1261,7 +1219,7 @@ where
             })?;
             Ok(None)
         }
-        // Unsolicited control pongs are harmless; only matching pongs prove health.
+
         Some(Ok(Message::Pong(_))) => Ok(None),
         Some(Ok(Message::Close(Some(frame)))) if frame.code == CloseCode::Policy => {
             Err(ConnectionEnd::Rejected(if frame.reason.is_empty() {
@@ -1374,7 +1332,7 @@ where
         )
         .await?;
     }
-    // Live progress remains promptly visible; terminal phases share the result flush.
+
     if !prepared && pending_count > 0 {
         socket
             .flush()
@@ -1420,8 +1378,7 @@ where
         .await
         .map_err(|error| AttachmentError::Transport(error.to_string().into()))?;
     let flushed = Instant::now();
-    // Local flush completion is not peer receipt or acknowledgement. Keep these
-    // observations out of the immutable journaled result and its replay identity.
+
     tracing::info!(target: "nanocode_code_mode::attachment",
         stage = if replayed { "attachment.result_replayed" } else { "attachment.result_sent" },
         transport_call_id = call.identity.call_id.as_ref(),
@@ -1440,8 +1397,7 @@ fn encode_result(
 ) -> Result<String, AttachmentError> {
     let encode_started = Instant::now();
     let mut timing = clock.lock().unwrap().snapshot(encode_started);
-    // Encode the business receipt once, then append small timing metadata. Its
-    // final encoding/append and socket write remain in the roundtrip residual.
+
     let mut text = serde_json::to_string(&ExecutorFrame::Result {
         call_id,
         outcome,
@@ -1452,7 +1408,7 @@ fn encode_result(
     let encode_ms = encoded_at.duration_since(encode_started).as_secs_f64() * 1000.0;
     timing.result_encode_ms += encode_ms;
     timing.host_elapsed_ms += encode_ms;
-    text.pop(); // The serialized tagged result is always a JSON object.
+    text.pop();
     text.push_str(",\"timing\":");
     text.push_str(
         &serde_json::to_string(&timing)

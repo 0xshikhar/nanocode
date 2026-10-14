@@ -112,7 +112,6 @@ pub(crate) struct ShellSessions {
 }
 
 impl ShellSessions {
-
     pub(crate) fn with_environment(environment: Arc<Vec<(OsString, OsString)>>) -> Self {
         Self {
             lifecycle: Mutex::new(()),
@@ -141,9 +140,7 @@ impl ShellSessions {
             selection::get_shell_by_model_provided_path,
         );
         let (environment, secrets) = process::sanitized_environment(&self.environment);
-        // Registration and full cleanup are one linearized lifecycle. Once a
-        // process has spawned, terminate_all must either observe it in the
-        // store or have completed before this execution began spawning.
+
         let lifecycle_guard = self.lifecycle.lock().await;
         let spawned = match process::spawn(
             &command.script,
@@ -240,8 +237,6 @@ impl ShellSessions {
     }
 
     pub(crate) async fn terminate_all(&self) {
-        // Keep concurrent cleanup acknowledgements behind the same boundary,
-        // and do not allow a process to spawn between draining and reaping.
         let _lifecycle_guard = self.lifecycle.lock().await;
         let sessions = {
             let mut store = self.sessions.lock().await;
@@ -297,9 +292,6 @@ impl Session {
     }
 
     async fn terminate(&self) {
-        // Signal first: a direct caller can hold the interaction lock while
-        // awaiting this child, and waiting for that lock before terminating
-        // would make cancellation wait for the command's full yield timeout.
         if let Err(error) = self.process_group.terminate_and_disarm() {
             tracing::warn!(
                 shell.session.id = self.id,
@@ -307,12 +299,9 @@ impl Session {
                 "failed to terminate shell process group"
             );
         }
-        // The active interaction observes the signal and releases the child
-        // wait path. Own it before the idempotent reap/drain cleanup so a
-        // cancellation acknowledgement is a real process-cleanup boundary.
+
         let _interaction = self.interaction.lock().await;
-        // No write can remain active after taking the interaction lock, so the
-        // stdin handle can now be dropped without delaying the kill signal.
+
         self.stdin.lock().await.take();
         if let Err(error) = self.child.lock().await.wait().await {
             tracing::warn!(

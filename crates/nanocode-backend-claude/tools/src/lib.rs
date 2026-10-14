@@ -1,7 +1,3 @@
-//! Independent Claude-native capability adapters. No model transport, ambient
-//! permissions, host lifecycle, OAuth, or provider implementation is installed.
-//! Embeddings explicitly supply and authorize every external capability.
-
 pub mod bash;
 pub mod host;
 #[cfg(not(target_family = "wasm"))]
@@ -48,9 +44,8 @@ pub mod profiles;
 #[cfg(not(target_family = "wasm"))]
 pub use profiles::{AgentProfile, AgentProfileCatalog, ClaudeAgentProfiles};
 
-/// Shared typed tool macro for either harness.
 pub use nanocode_tools::tool;
-/// Shared execution traits, context and wire result contracts.
+
 pub mod contract {
     pub use nanocode_tools::*;
 }

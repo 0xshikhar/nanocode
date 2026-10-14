@@ -77,7 +77,6 @@ pub fn trim_tool_outputs_to_fit_context_window(
     request_prefix: &[ResponseItem],
     context_window_tokens: u64,
 ) -> usize {
-    // Codex model_context_window uses 95% of the raw model/configured window.
     let usable_context_tokens = context_window_tokens.saturating_mul(95) / 100;
     let mut estimated_tokens = request_prefix
         .iter()
@@ -219,8 +218,7 @@ pub fn install_history_with_provenance(
         RETAINED_MESSAGE_TOKEN_BUDGET,
         client_authored,
     );
-    // A retained developer message can follow the last user input. Context belongs
-    // before the latest real input, or immediately before the summary if none remains.
+
     let insertion_index = installed
         .iter()
         .rposition(|item| item.is_user_message() || is_retained_agent_message(item))
@@ -268,8 +266,6 @@ fn is_client_developer_message(item: &ResponseItem, client_authored: &BTreeSet<S
         .is_some_and(|id| client_authored.contains(id.as_str()))
 }
 
-// A client-authored notice-shaped message is independent, never attached to the
-// preceding source. Match upstream v2_history_item_groups before retention.
 fn retained_item_groups<T: std::borrow::Borrow<ResponseItem>>(
     items: impl IntoIterator<Item = T>,
     client_authored: &BTreeSet<String>,
@@ -328,7 +324,7 @@ fn truncate_retained_messages_with_provenance(
         let has_images = !developer
             && matches!(&item, ResponseItem::Message { content, .. }
             if content.iter().any(|part| matches!(part, ContentItem::InputImage { .. } | ContentItem::InputImageFile { .. })));
-        // Do not backfill with older history when an oversized image consumes the boundary.
+
         if has_images {
             remaining = 0;
         }
@@ -498,7 +494,7 @@ fn original_image_bytes_estimate(image_url: &str) -> Option<usize> {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(payload)
             .ok()?;
-        // Estimation needs header dimensions, never a full decoded pixel buffer.
+
         let (width, height) = image::ImageReader::new(std::io::Cursor::new(bytes))
             .with_guessed_format()
             .ok()?

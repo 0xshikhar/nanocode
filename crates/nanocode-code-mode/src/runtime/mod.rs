@@ -1,5 +1,3 @@
-//! Declarative tool selection and the stateful per-agent execution runtime.
-
 mod execution;
 mod registry;
 mod schema;

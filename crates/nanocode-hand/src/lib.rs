@@ -1,6 +1,5 @@
-//! Platform APIs compiled into the Rust Nanocodex Hand. No companion executable.
 #![deny(unsafe_code)]
-/// Native platform capture or input failure.
+
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod capture;
@@ -28,8 +27,6 @@ pub use macos_audio::{capture_audio, capture_video, main_display_dimensions};
 mod video;
 pub use video::VideoSettings;
 
-/// Bounded persistent workflow recording.
 pub mod recording;
 
-/// Native privacy-aware recording observations.
 pub mod recording_observer;

@@ -295,7 +295,6 @@ impl ProviderState {
             .collect()
     }
 
-    /// A refresh supersedes earlier refreshes, but never races a reconnect.
     pub(crate) fn native_refresh_generation(&self, server: &str, client: &Client) -> Option<u64> {
         let mut catalog = self.catalog();
         if catalog.pending_servers.contains(server)
@@ -656,7 +655,6 @@ pub(crate) fn normalized_server_names<'a>(
     }
     candidates.sort_by(|left, right| left.0.cmp(&right.0));
 
-    // Reserve enough of the 128-byte qualified-name budget for a hashed tool segment.
     let maximum_body_bytes = MAX_MODEL_TOOL_NAME_BYTES - NAME_HASH_SUFFIX_BYTES - 2;
     let mut used = BTreeSet::new();
     candidates

@@ -6,7 +6,7 @@ import { open as openWorkspace } from "./workspace.mjs";
 import { create as createAgent } from "./Agent.mjs";
 import { createNanocodexFactory } from "../runtime/nanocodex.mjs";
 
-/** Configures backends once; every spawn is an independent Node WASM root Agent. */
+
 export const create = createNanocodexFactory({
   placement: "node",
   connectCua,

@@ -1,4 +1,4 @@
-// Direct port of utils/{string,output-truncation} at pinned Codex 36430b3688.
+
 import { wavDuration } from "./code-values.mjs";
 
 const encoder = new TextEncoder();

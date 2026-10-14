@@ -1,8 +1,3 @@
-//! Explicitly rooted, bounded workspace operations for a host-authorized Claude-style tool surface.
-//!
-//! Construct this module only after the host authorizes and isolates the workspace. The
-//! path checks are defense in depth, not a substitute for OS-level isolation or permissions.
-
 use crate::{SessionEnvironment, ToolContent, ToolOutput, media::MediaReadOptions};
 use regex::RegexBuilder;
 use serde_json::{Value, json};
@@ -18,11 +13,6 @@ const MAX_VISITS: usize = 10_000;
 const MAX_SEARCH_BYTES: u64 = 128 * 1024 * 1024;
 static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
-/// A host-authorized directory used by workspace tools.
-///
-/// The host must explicitly authorize and OS-isolate this root. In particular, path
-/// validation cannot eliminate races with a hostile process concurrently swapping
-/// directory entries; do not use this as a security boundary against such processes.
 #[derive(Clone, Debug)]
 pub struct ClaudeWorkspaceFiles {
     root: PathBuf,
@@ -32,7 +22,6 @@ pub struct ClaudeWorkspaceFiles {
 }
 
 impl ClaudeWorkspaceFiles {
-    /// Canonicalize an existing directory; no ambient/current workspace is assumed.
     pub fn new(root: impl AsRef<Path>) -> Result<Self, String> {
         let given = root.as_ref();
         let root_alias = if given.is_absolute() {
@@ -54,23 +43,18 @@ impl ClaudeWorkspaceFiles {
         })
     }
 
-    /// Configure trusted PDF helper executables. These paths are host configuration,
-    /// never tool-call arguments. The host must isolate helpers like other file tools.
     #[must_use]
     pub fn with_media_options(mut self, media: MediaReadOptions) -> Self {
         self.media = media;
         self
     }
 
-    /// Limit text Read output to the host's available token budget (four-byte estimate).
-    /// `allow_large` may exceed the ordinary 25,000-token limit, never this budget.
     #[must_use]
     pub fn with_read_token_budget(mut self, tokens: usize) -> Self {
         self.read_token_budget = tokens;
         self
     }
 
-    /// Standalone JSON metadata for the five tools; no model-vendor contract is required.
     #[must_use]
     pub fn definitions() -> Vec<Value> {
         vec![
@@ -82,14 +66,11 @@ impl ClaudeWorkspaceFiles {
         ]
     }
 
-    /// Alias for [`Self::definitions`].
     #[must_use]
     pub fn tool_schemas() -> Vec<Value> {
         Self::definitions()
     }
 
-    /// Execute a text operation. Media requires [`Self::execute_output`]; it is never
-    /// silently converted to text or discarded by this compatibility interface.
     pub async fn execute(&self, name: &str, input: Value) -> Result<String, String> {
         match self.execute_output(name, input).await?.content {
             ToolContent::Text(text) => Ok(text),
@@ -106,16 +87,10 @@ impl ClaudeWorkspaceFiles {
         }
     }
 
-    /// Execute with native Claude text/image result blocks, preserving actual media.
     pub async fn execute_output(&self, name: &str, input: Value) -> Result<ToolOutput, String> {
         self.execute_output_with_context(name, input, true).await
     }
 
-    /// Execute a file operation with optional project-guidance loading.
-    ///
-    /// Hosts enforcing read restrictions can disable augmentation to avoid
-    /// opening unrelated instructions, rules or imports. This flag does not
-    /// authorize the requested operation; the host must check that separately.
     pub async fn execute_output_with_context(
         &self,
         name: &str,
@@ -126,11 +101,6 @@ impl ClaudeWorkspaceFiles {
             .await
     }
 
-    /// Like [`Self::execute_output_with_context`], on behalf of `session`.
-    ///
-    /// Helper processes (PDF rendering) receive the session identity as
-    /// `CODEX_THREAD_ID` and `NANOCODEX_ROOT_SESSION_ID`, overriding inherited
-    /// values; without a session those variables are removed.
     pub async fn execute_output_in_session(
         &self,
         name: &str,
@@ -163,8 +133,7 @@ impl ClaudeWorkspaceFiles {
             if !include_project_context {
                 return Ok(output);
             }
-            // Load guidance for the requested path only. Searching a directory
-            // does not imply opening every descendant's instructions.
+
             let requested = if matches!(name.as_str(), "Glob" | "Grep") {
                 input.get("path").and_then(Value::as_str).unwrap_or(".")
             } else {
@@ -172,8 +141,7 @@ impl ClaudeWorkspaceFiles {
             };
             let relative = this.relative(requested, true)?;
             let relative = if relative == Path::new(".") { Path::new("") } else { &relative };
-            // Context diagnostics are data: a failed guidance read must never
-            // disguise a successful Write/Edit as a failed mutation.
+
             if let Ok(loader) = crate::ClaudeProjectContext::new(&this.root) {
                 let context = loader.load_for_path(relative);
                 if !context.excerpts.is_empty() || !context.diagnostics.is_empty() {
@@ -199,7 +167,7 @@ impl ClaudeWorkspaceFiles {
             "Write" => &["file_path", "content"],
             "Edit" => &["file_path", "old_string", "new_string", "replace_all"],
             "Glob" => &["pattern", "path"],
-            // Grep validates its larger option set below.
+
             "Grep" => return self.grep(input),
             _ => return Err(format!("unknown workspace tool: {name}")),
         };
@@ -242,7 +210,6 @@ impl ClaudeWorkspaceFiles {
             .components()
             .any(|c| !matches!(c, Component::Normal(_)))
         {
-            // A bare "." is allowed only as a search root.
             if !(allow_root && (text == "." || relative.as_os_str().is_empty())) {
                 return Err("path must not contain traversal, root, or special components".into());
             }
@@ -400,8 +367,7 @@ impl ClaudeWorkspaceFiles {
         if count != 1 && !replace_all {
             return Err(format!("old_string occurs {count} times; set replace_all"));
         }
-        // Validate expansion before allocating: a tiny repeated match can otherwise
-        // amplify a bounded input into an unbounded replacement allocation.
+
         let replacements = if replace_all { count } else { 1 };
         let updated_len = content.len() - old.len() * replacements;
         let updated_len = new
@@ -417,7 +383,7 @@ impl ClaudeWorkspaceFiles {
         };
         debug_assert_eq!(updated.len(), updated_len);
         let (_, path) = self.write_target(text)?;
-        // Best-effort stale-read check before the atomic replacement.
+
         if Self::read_text(&path)? != content {
             return Err("file changed during edit".into());
         }
@@ -450,8 +416,6 @@ impl ClaudeWorkspaceFiles {
                 files.push(next);
             } else if meta.is_dir() {
                 for entry in fs::read_dir(&next).map_err(|e| format!("walk: {e}"))? {
-                    // Count discovered entries before enqueuing, not only after
-                    // popping: one wide directory must not bypass the memory cap.
                     if visits + stack.len() >= MAX_VISITS {
                         return Err("search exceeds 10000 entries".into());
                     }
@@ -474,7 +438,7 @@ impl ClaudeWorkspaceFiles {
             raw_pattern.to_owned()
         };
         let matcher = glob_regex(&pattern)?;
-        // An explicit literal prefix denoting a symlink escape is an error, not an empty match.
+
         let literal_prefix = pattern
             .split('/')
             .take_while(|part| !part.contains(['*', '?', '[', '{', '\\']))
@@ -557,7 +521,7 @@ impl ClaudeWorkspaceFiles {
         if input.get("case_sensitive").is_some() && input.get("-i").is_some() {
             return Err("case_sensitive conflicts with -i".into());
         }
-        // Retain the original, unadvertised spelling for old callers.
+
         let sensitive = grep_bool(input, "case_sensitive", !insensitive)?;
         let only_matching = grep_bool(input, "-o", false)?;
         let line_numbers = grep_bool(input, "-n", true)?;
@@ -649,14 +613,13 @@ impl ClaudeWorkspaceFiles {
             let Ok(contents) = Self::read_text(&file) else {
                 continue;
             };
-            // Like ripgrep, do not treat NUL-containing binary data as text.
+
             if contents.contains('\0') {
                 continue;
             }
             let lines: Vec<&str> = contents.lines().collect();
             let mut hits = vec![false; lines.len()];
             if multiline {
-                // A match spanning lines marks each touched line. Byte offsets are UTF-8 safe.
                 let starts: Vec<usize> = std::iter::once(0)
                     .chain(contents.match_indices('\n').map(|(i, _)| i + 1))
                     .collect();
@@ -868,7 +831,6 @@ fn validate_pattern(pattern: &str) -> Result<(), String> {
     Ok(())
 }
 
-// The same glob engine used by ripgrep supports braces, classes, escapes and **.
 fn glob_regex(pattern: &str) -> Result<globset::GlobMatcher, String> {
     validate_pattern(pattern)?;
     globset::GlobBuilder::new(pattern)

@@ -4,11 +4,11 @@ const MARKER_VERSION = 1;
 const MAX_MARKER_BYTES = 16 * 1024;
 const SHA1 = /^[a-f0-9]{40}$/;
 
-/**
- * Materializes one immutable repository generation into a workspace child.
- * A completed generation is never refreshed: matching reopens only validate
- * the host marker and local HEAD, leaving retained worktree changes untouched.
- */
+
+
+
+
+
 export async function materializeRepositoryWorkspace(options) {
   const input = repositoryOptions(options);
   const { default: git } = await import("isomorphic-git");
@@ -32,8 +32,8 @@ export async function materializeRepositoryWorkspace(options) {
     return descriptor(input, directory, markerPath);
   }
 
-  // This named child is package-owned. Only an unmarked partial checkout at
-  // this exact, validated child path is eligible for recursive cleanup.
+
+
   if (await workspaceEntry(input.workspace, directory)) {
     await input.workspace.remove(directory, { recursive: true });
   }

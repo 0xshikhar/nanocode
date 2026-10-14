@@ -1,5 +1,5 @@
-// Join trusted accepted/run events to the exact tool ABI identity. Event turn
-// UUIDs and ABI turn IDs differ; neither is guessed from an ordinal or call ID.
+
+
 export function createTurnLifecycle(endTurn) {
   const accepted = new Map();
   const eventCalls = new Map();
@@ -19,7 +19,7 @@ export function createTurnLifecycle(endTurn) {
   return {
     call(sessionId, callId, turnId, child) {
       if (typeof turnId !== 'string' || !turnId) return;
-      // A call without a trusted accepted session cannot own terminal cleanup.
+
       if (![...accepted.values()].includes(sessionId)) return;
       const callKey = key(sessionId, callId);
       invocations.set(callKey, { sessionId, turnId, child });
@@ -44,7 +44,7 @@ export function createTurnLifecycle(endTurn) {
         turns.delete(projected);
         accepted.delete(projected);
         for (const [callKey, turn] of eventCalls) if (turn === projected) eventCalls.delete(callKey);
-        // Ownership is removed before dispatch: uncertain cleanup is never retried.
+
         for (const owner of owners?.values() ?? []) {
           const hook = event.type === 'run.completed' && payload.status === 'completed'
             ? owner.child ? 'SubagentStop' : 'Stop' : 'Interrupt';

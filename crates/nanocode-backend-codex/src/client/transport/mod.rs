@@ -1,5 +1,3 @@
-//! Responses transport policy, errors, and connection statistics.
-
 mod api_error;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod chat;
@@ -8,7 +6,7 @@ pub(crate) mod connector;
 #[cfg(not(target_family = "wasm"))]
 mod crypto;
 pub(crate) mod error;
-/// Portable embedding-host interfaces for persistent Responses connections.
+
 pub mod host;
 mod retry_after;
 #[cfg(target_family = "wasm")]
@@ -22,7 +20,9 @@ mod wire;
 
 use std::{fmt, str::FromStr};
 
-pub use crate::client::tower::attempt::{TransportStats, TransportStatsDelta, TransportStatsSnapshot};
+pub use crate::client::tower::attempt::{
+    TransportStats, TransportStatsDelta, TransportStatsSnapshot,
+};
 #[cfg(not(target_family = "wasm"))]
 pub use chat::{ChatGateway, DEFAULT_STALL_TIMEOUT, OPENROUTER_API_BASE_URL};
 #[cfg(not(target_family = "wasm"))]
@@ -33,20 +33,15 @@ pub(crate) use retry_after::RetryReceipt;
 pub use telemetry::TRANSPORT;
 pub use wire::EncodedRequest;
 
-/// Initial Responses transport policy for a managed session.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ResponsesTransport {
-    /// Prefer a persistent Responses WebSocket. The
-    /// standard stack falls back one-way to HTTPS after exhausting the
-    /// WebSocket retry budget.
     #[default]
     WebSocket,
-    /// Use HTTPS requests with server-sent event response bodies exclusively.
+
     Https,
 }
 
 impl ResponsesTransport {
-    /// Returns the stable telemetry name for this transport.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -79,14 +74,11 @@ impl FromStr for ResponsesTransport {
     }
 }
 
-/// How committed client history is represented in each Responses request.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ResponsesHistory {
-    /// Reuse a response ID when the selected transport and storage policy make
-    /// it valid, falling back to complete client-owned history as needed.
     #[default]
     Incremental,
-    /// Send complete committed client-owned history on every request.
+
     FullReplay,
 }
 

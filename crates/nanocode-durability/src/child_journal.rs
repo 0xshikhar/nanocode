@@ -1,9 +1,3 @@
-//! Durable subagent task-tree journal beside a root's execution state.
-//!
-//! Every durability adapter attaches this to its builder, so any harness whose
-//! root is durable also exposes a durable task tree on its handle, and a
-//! subagent registry needs no host-specific wiring.
-
 use std::{collections::HashSet, sync::Arc};
 
 use nanocode_agent::backend::{BackendFuture, ChildJournal, ChildJournalStore};
@@ -18,8 +12,7 @@ use crate::{
 struct Fenced {
     store: SharedStore,
     owner: Option<(OwnerToken, u64)>,
-    /// Record keys this journal has committed. Records are immutable, so a
-    /// growing checkpoint resends only its new chunks.
+
     committed: HashSet<String>,
 }
 
@@ -55,9 +48,7 @@ impl ChildJournalStore for SharedJournal {
     fn save(&self, payload: String, records: Vec<Arc<str>>) -> BackendFuture<std::io::Result<()>> {
         let inner = Arc::clone(&self.0);
         Box::pin(async move {
-            // Checkpoints are content-addressed and chunked like execution
-            // payloads: the journal row stays small, and an unchanged prefix of
-            // a growing child conversation reuses its stored chunks.
+
             let mut staged = Vec::new();
             for json in records {
                 EncodedPayload::from_json(json).stage(&mut staged);
@@ -73,7 +64,7 @@ impl ChildJournalStore for SharedJournal {
                 .owner
                 .clone()
                 .ok_or_else(|| std::io::Error::other("journal owner was not acquired"))?;
-            // A newer runtime acquiring this journal fences this writer.
+
             let revision = fenced
                 .store
                 .replace(&inner.state_id, &owner, revision, &payload, &staged)
@@ -100,7 +91,6 @@ impl ChildJournalStore for SharedJournal {
     }
 }
 
-/// The task-tree journal of the durable root stored as `root_state_id`.
 pub(crate) fn child_journal(store: SharedStore, root_state_id: &str) -> ChildJournal {
     ChildJournal::new(Arc::new(SharedJournal(Arc::new(Inner {
         state_id: format!("{root_state_id}:subagents"),

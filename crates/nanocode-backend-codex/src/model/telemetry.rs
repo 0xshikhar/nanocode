@@ -140,8 +140,7 @@ pub(super) struct UsageTotals {
     pub(super) total_tokens: u64,
     #[serde(skip)]
     pub(super) reported: bool,
-    /// Whether any response was priced from built-in rates rather than a
-    /// provider-reported charge.
+
     #[serde(skip)]
     pub(super) rate_estimated: bool,
     #[serde(skip)]

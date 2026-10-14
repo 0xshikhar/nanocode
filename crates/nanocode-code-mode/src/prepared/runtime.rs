@@ -61,9 +61,7 @@ impl PreparedToolEntry {
         let remote_name = definition.name().into();
         let supports_parallel_tool_calls =
             workspace.supports_parallel_tool_calls(definition.name());
-        // Shell handlers return a process session after their bounded yield.
-        // Include transport/cleanup grace and bound an unresponsive handler
-        // even while its connection stays healthy.
+
         let timeout_ms = match definition.name() {
             name if name == crate::StandardTool::ExecCommand.name() => {
                 crate::shell::MAX_EXEC_YIELD_MS + 10_000
@@ -100,12 +98,10 @@ impl PreparedToolEntry {
     }
 }
 
-/// Exact language-neutral definition published by an attachment.
 #[doc(hidden)]
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum PreparedToolDefinition {
-    /// JSON-schema function tool.
     Function {
         name: Box<str>,
         description: Box<str>,
@@ -114,7 +110,7 @@ pub(crate) enum PreparedToolDefinition {
         #[serde(skip_serializing_if = "Option::is_none")]
         output_schema: Option<Value>,
     },
-    /// Grammar-constrained free-form custom tool.
+
     Custom {
         name: Box<str>,
         description: Box<str>,
@@ -122,7 +118,6 @@ pub(crate) enum PreparedToolDefinition {
     },
 }
 
-/// Exact language-neutral custom-tool grammar format.
 #[doc(hidden)]
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct PreparedCustomToolFormat {
@@ -132,7 +127,6 @@ pub(crate) struct PreparedCustomToolFormat {
     definition: Box<str>,
 }
 
-/// Immutable language-neutral attachment catalog entry.
 #[doc(hidden)]
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct PreparedToolCatalogEntry {
@@ -145,7 +139,6 @@ pub(crate) struct PreparedToolCatalogEntry {
     timeout_ms: u64,
 }
 
-/// Owned invocation accepted by the private prepared runtime.
 #[doc(hidden)]
 pub(crate) struct PreparedToolCall {
     model: String,
@@ -158,7 +151,6 @@ pub(crate) struct PreparedToolCall {
 }
 
 impl PreparedToolCall {
-    /// Creates a complete host-side invocation without conversation history.
     #[must_use]
     pub fn new(
         model: impl Into<String>,
@@ -185,7 +177,6 @@ impl PreparedToolCall {
     }
 }
 
-/// Transport-independent execution owner for one immutable Tools recipe.
 #[doc(hidden)]
 pub(crate) struct PreparedToolRuntime {
     entries: Vec<PreparedToolEntry>,
@@ -194,11 +185,6 @@ pub(crate) struct PreparedToolRuntime {
 }
 
 impl PreparedToolRuntime {
-    /// Starts native providers, awaits discovery, and captures one immutable execution snapshot.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when MCP discovery fails or the resulting complete catalog is invalid.
     pub async fn initialize(tools: PreparedTools) -> Result<Self, PreparedToolError> {
         let PreparedTools {
             mut entries,
@@ -254,21 +240,10 @@ impl PreparedToolRuntime {
             .map(|entry| entry.timeout_ms)
     }
 
-    /// Returns one complete immutable language-neutral catalog snapshot.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when a catalog entry cannot be encoded.
     pub fn catalog(&self) -> Result<Vec<PreparedToolCatalogEntry>, PreparedToolError> {
         self.entries.iter().map(catalog_entry).collect()
     }
 
-    /// Executes one invocation against the exact immutable catalog entry.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for an unknown name, an input shape that contradicts
-    /// the published definition, or an output that cannot enter the wire form.
     pub async fn execute(
         &self,
         call: PreparedToolCall,
@@ -383,7 +358,6 @@ impl PreparedToolRuntime {
         Ok(wire)
     }
 
-    /// Terminates retained workspace subprocesses owned by this runtime.
     pub async fn shutdown(&self) {
         #[cfg(feature = "workspace-runtime")]
         for workspace in &self.workspaces {
@@ -480,35 +454,32 @@ fn input_for_definition(
     }
 }
 
-/// Failed prepared-tool invocation contract.
 #[doc(hidden)]
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum PreparedToolError {
-    /// A selected local tool has no pinned attachment executor.
     #[error("tool selection is not attachable: {0}")]
     NonAttachable(Box<str>),
-    /// Two static or discovered tools produced the same canonical name.
+
     #[error("attached tool name `{0}` is present more than once after discovery")]
     DuplicateTool(Box<str>),
-    /// A configured native MCP provider failed initial connection or discovery.
+
     #[cfg(feature = "mcp")]
     #[error("failed to initialize attached MCP: {0}")]
     McpInitialization(String),
-    /// The immutable catalog does not contain this tool.
+
     #[error("unknown attached tool `{0}`")]
     UnknownTool(Box<str>),
-    /// The input shape contradicted the published definition.
+
     #[error("attached tool `{name}` requires {expected} input")]
     InvalidInput {
-        /// Published tool name.
         name: Box<str>,
-        /// Required JSON shape.
+
         expected: &'static str,
     },
-    /// The selected catalog entry is not executable.
+
     #[error("attached tool `{0}` has a non-executable definition")]
     UnsupportedDefinition(Box<str>),
-    /// The completed output could not enter the lossless wire form.
+
     #[error("failed to encode attached tool output: {0}")]
     InvalidOutput(#[source] serde_json::Error),
 }

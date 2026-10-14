@@ -33,19 +33,19 @@ export type RepositoryWorkspaceDescriptor = Readonly<{
   writableRemote?: RepositoryWorkspaceRemote | undefined;
 }>;
 
-/**
- * Materializes one immutable, generation-pinned Git seed into a package-owned
- * workspace child. A matching retained checkout is reopened without network
- * access or implicit refresh, preserving local worktree changes.
- */
+
+
+
+
+
 export function materializeRepositoryWorkspace(options: Readonly<{
   workspace: Workspace;
   fetch: RepositoryWorkspaceFetch;
-  /** Credential-free smart-HTTP URL ending in the exact lowercase SHA-1 `head`. */
+
   seedUrl: string;
   head: string;
   branch?: string | undefined;
-  /** One safe child name beneath `workspace.root`; defaults to `repository`. */
+
   directory?: string | undefined;
   writableRemote?: Readonly<{
     url: string;

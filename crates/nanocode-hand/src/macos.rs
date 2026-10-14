@@ -1,5 +1,3 @@
-//! Native main-display observation and input. Called on a blocking worker.
-//! Authorization and raw-input lease ownership belong to the publisher.
 #![allow(unsafe_code)]
 
 use crate::{
@@ -30,12 +28,10 @@ fn error(message: &str) -> Error {
 const CAPTURE_PERMISSION: &str = "macOS screen capture unavailable: enable Screen & System Audio Recording for this application in System Settings > Privacy & Security, then relaunch it if macOS requests it";
 const INPUT_PERMISSION: &str = "macOS input unavailable: enable Accessibility for this application in System Settings > Privacy & Security";
 
-/// AVFoundation enumerates capture screens in CoreGraphics active-display order.
-/// Resolve the same main display used by screenshots and normalized input.
 pub fn main_display_index() -> Result<usize> {
     let mut displays = [0; 32];
     let mut count = 0;
-    // SAFETY: the array and count remain writable for this synchronous call.
+
     let status =
         unsafe { CGGetActiveDisplayList(displays.len() as u32, displays.as_mut_ptr(), &mut count) };
     if status != CGError::Success || count as usize > displays.len() {
@@ -47,7 +43,6 @@ pub fn main_display_index() -> Result<usize> {
         .ok_or_else(|| error("main display unavailable"))
 }
 
-/// Physical pixel dimensions of the main display, for native-resolution video.
 pub fn main_display_pixel_dimensions() -> Result<(u32, u32)> {
     let display = CGMainDisplayID();
     let width = u32::try_from(CGDisplayPixelsWide(display))?;
@@ -66,13 +61,7 @@ struct Held {
 }
 static HELD: OnceLock<Mutex<Held>> = OnceLock::new();
 
-/// Input, validation failures, and release share one input lock. Pure screen
-/// observations do not hold it while ScreenCaptureKit captures or JPEG encodes.
-/// No permission prompts are opened here; preflight checks return diagnostics.
 pub fn request(input: Value) -> Result<Value> {
-    // Live viewers must not make key-up or pointer events wait behind a screen
-    // capture. Only the exact read-only request can take this path; malformed
-    // actions and compound agent operations retain serialized validation/input.
     let observation_error = if input == json!({"action":"observe"}) {
         match autoreleasepool(|_| capture()) {
             Ok(frame) => return Ok(frame),
@@ -94,16 +83,14 @@ pub fn request(input: Value) -> Result<Value> {
         }
     };
     if let Some(error) = observation_error {
-        // Preserve the existing failure cleanup, including permission changes.
         let _ = held.release();
         return Err(error);
     }
     let result = autoreleasepool(|_| {
         let request: Request =
             serde_json::from_value(input).map_err(|_| error("invalid macOS screen request"))?;
-        let plan = request.plan()?; // Validate the complete action before posting anything.
-        // Agent actions promise an observation. Check that prerequisite before
-        // modifying the desktop so a missing recording grant has no side effects.
+        let plan = request.plan()?;
+
         if plan.observe {
             capture_available()?;
         }
@@ -170,7 +157,7 @@ struct Raw {
     text: Option<String>,
     delta_x: Option<f64>,
     delta_y: Option<f64>,
-    // The publisher validates these lease fields before entering this module.
+
     #[serde(rename = "sequence")]
     _sequence: Option<u64>,
     #[serde(rename = "generation")]
@@ -238,7 +225,6 @@ fn valid_button(button: u32) -> Result<u32> {
 }
 impl Raw {
     fn validate(self) -> Result<Input> {
-        // Reject fields belonging to another kind, including otherwise ignored coordinates.
         let fields: &[&str] = match self.kind.as_str() {
             "move" => &["x", "y"],
             "button" => &["x", "y", "button", "down"],
@@ -393,8 +379,6 @@ fn display_bounds() -> Result<CGRect> {
     Ok(bounds)
 }
 fn logical_point(x: f64, y: f64, bounds: CGRect) -> Result<CGPoint> {
-    // CGEvent uses top-left display points, not the Retina framebuffer pixels.
-    // At 1.0 keep the event inside the last point of the selected display.
     Ok(CGPoint::new(
         bounds.origin.x + coordinate(x)? * (bounds.size.width - 1.0),
         bounds.origin.y + coordinate(y)? * (bounds.size.height - 1.0),
@@ -451,12 +435,9 @@ impl Held {
     }
     fn release(&mut self) -> Result<()> {
         if (!self.keys.is_empty() || !self.buttons.is_empty()) && !CGPreflightPostEventAccess() {
-            // Permission can be revoked mid-lease. Keep the state for a later
-            // cleanup attempt; CGEventPost has no delivery acknowledgement.
             return Err(error(INPUT_PERMISSION));
         }
-        // Attempt every release even if an individual event cannot be allocated.
-        // Keep any failed release in the set so the next request can retry it.
+
         let mut failure = None;
         for key in self.keys.clone() {
             if let Err(err) = self.key(key, false) {
@@ -497,8 +478,6 @@ impl Held {
             }
             Input::Key(key, down) => self.key(key, down),
             Input::Text(text) => {
-                // One Unicode scalar per pair avoids truncation by event consumers,
-                // and never splits a UTF-16 surrogate pair. No clipboard mutation.
                 for character in text.chars() {
                     let mut buffer = [0u16; 2];
                     let utf16 = character.encode_utf16(&mut buffer);
@@ -506,7 +485,7 @@ impl Held {
                         .ok_or_else(|| error("macOS could not allocate a Unicode event"))?;
                     let up = CGEvent::new_keyboard_event(None, 0, false)
                         .ok_or_else(|| error("macOS could not allocate a Unicode event"))?;
-                    // SAFETY: utf16 is a live buffer with exactly the supplied length.
+
                     unsafe {
                         CGEvent::keyboard_set_unicode_string(
                             Some(&down),
@@ -537,7 +516,6 @@ impl Held {
     }
 }
 
-/// USB HID keyboard usages to Apple's hardware-independent virtual key codes.
 fn hid_to_mac(hid: u16) -> Option<u16> {
     Some(match hid {
         4 => 0,
@@ -659,12 +637,6 @@ fn hid_to_mac(hid: u16) -> Option<u16> {
     })
 }
 
-/// Explicit, user-initiated consent request for THIS process. Only the
-/// persistent Hand's own process may call it, so macOS attributes the Screen &
-/// System Audio Recording and Accessibility entries to the executable that
-/// actually captures and posts input. Already-granted access is never
-/// re-requested. `granted` reports only what macOS says right now; a request
-/// made here is still pending until the user confirms the system sheet.
 pub fn request_access() -> Value {
     fn one(preflight: impl Fn() -> bool, request: impl Fn() -> bool) -> Value {
         if preflight() {
@@ -678,10 +650,6 @@ pub fn request_access() -> Value {
     })
 }
 
-/// Read-only counterpart of [`request_access`] for permission guides that poll
-/// while the user edits System Settings. Never shows a prompt or adds an entry.
-/// Screen Recording preflight can stay false in an already-running process
-/// until it relaunches, so callers offer a restart rather than waiting forever.
 pub fn access_status() -> Value {
     json!({
         "screenCapture": {"granted": CGPreflightScreenCaptureAccess(), "requested": false},
@@ -707,21 +675,19 @@ fn capture_available() -> Result<()> {
 fn capture() -> Result<Value> {
     let began = Instant::now();
     capture_available()?;
-    // Resolve current main-display bounds every time; no window enumeration,
-    // cached pixels, or stale display metadata after hot-plug.
+
     let bounds = display_bounds()?;
     let (width, height) = target_dimensions(bounds.size.width, bounds.size.height)?;
     capture_rect(bounds, width, height, began)
 }
-/// The availability check in capture() guards all macOS 26-only objects.
+
 fn capture_rect(bounds: CGRect, width: u32, height: u32, began: Instant) -> Result<Value> {
     let (sender, receiver) = mpsc::sync_channel(1);
     let completion = RcBlock::new(move |output: *mut SCScreenshotOutput, err: *mut NSError| {
         autoreleasepool(|_| {
             let image_ms = began.elapsed().as_secs_f64() * 1000.0;
             let encode_started = Instant::now();
-            // SAFETY: callback arguments are owned by ScreenCaptureKit for this
-            // invocation; the retained SDR image lives through conversion.
+
             let result = unsafe {
                 output.as_ref().filter(|_| err.is_null()).and_then(|output| output.sdrImage())
             }.ok_or_else(|| error("ScreenCaptureKit could not capture the main display; check Screen Recording permission and the active desktop session"))
@@ -732,8 +698,7 @@ fn capture_rect(bounds: CGRect, width: u32, height: u32, began: Instant) -> Resu
             let _ = sender.send(result);
         });
     });
-    // SAFETY: capture() verifies API availability. The async API copies the
-    // completion block and retains configuration for the request.
+
     unsafe {
         let configuration = SCScreenshotConfiguration::new();
         configuration.setWidth(width as isize);
@@ -759,9 +724,7 @@ fn encode_capture(image: &CGImage) -> Result<Value> {
     let mut rgba = vec![0u8; width * height * 4];
     let space = CGColorSpace::new_device_rgb()
         .ok_or_else(|| error("could not create capture color space"))?;
-    // SAFETY: the backing buffer covers height * bytes_per_row and outlives the
-    // context, which is dropped before Rust reads that buffer. Big-endian RGBA,
-    // opaque skip-last avoids interpreting the source image's BGRA/HDR layout.
+
     let context = unsafe {
         CGBitmapContextCreate(
             rgba.as_mut_ptr().cast(),

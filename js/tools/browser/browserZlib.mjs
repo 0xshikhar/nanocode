@@ -67,9 +67,9 @@ function compressionOptions(options) {
   const maximum = validateMaxOutputLength(maxOutputLength);
   return {
     maxOutputLength: maximum,
-    // pako emits incrementally at this boundary. For a very small caller limit,
-    // ask it to stop at the first byte beyond that limit instead of materializing
-    // the complete decompressed payload before the compatibility layer sees it.
+
+
+
     chunkSize: Math.max(2, Math.min(DEFAULT_CHUNK_BYTES, Math.floor(maximum) + 1)),
     pako,
   };

@@ -1,6 +1,3 @@
-// Derived from clabby/tact@1d9ccaefd1d8613dab020812af04a91cd9b4c52c (Apache-2.0).
-// Modified for Nanocodex's reusable native/WASM extension runtime.
-
 use super::{
     message::MAX_MESSAGE_BYTES,
     model::{
@@ -14,12 +11,11 @@ use super::{
 };
 use async_trait::async_trait;
 use futures_util::future::join_all;
-use nanocode_code_mode::{
-    Tool, ToolContext, ToolDefinition, ToolInput, ToolOutput, ToolResult, Tools,
-    runtime::ToolsBuildError,
-};
 use nanocode_agent::{
-    AgentHandle, ForkRequest, HarnessFamily, HarnessModel, SpawnOptions, Thinking,
+    AgentHandle, ForkRequest, HarnessFamily, ModelSelection, SpawnOptions, Thinking,
+};
+use nanocode_tools::{
+    Tool, ToolCollection, ToolContext, ToolDefinition, ToolInput, ToolOutput, ToolResult,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -30,8 +26,6 @@ use std::{
 };
 use tokio::sync::oneshot;
 
-/// Wait used when the caller omits timeout_ms. An explicit timeout is honored
-/// as requested, without a ceiling.
 const DEFAULT_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
 const SPAWN_AGENT_TOOL: &str = "spawn_agent";
 const SUBMIT_RESULT_TOOL: &str = "submit_result";
@@ -47,8 +41,6 @@ pub struct AgentTask {
     pub output_schema: Value,
 }
 
-/// A closed, recursively typed model-facing language for child result shapes.
-/// No caller-authored JSON Schema object is exposed to strict function calling.
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum OutputContractNode {
@@ -75,8 +67,6 @@ impl OutputContractNode {
     fn into_schema(self) -> Value {
         match self {
             Self::Object { fields } => {
-                // Last declaration wins on duplicate names, including whether
-                // it is required, so every strict-valid input yields one schema.
                 let mut deduplicated = BTreeMap::new();
                 for field in fields {
                     deduplicated.insert(field.name, (field.schema, field.required));
@@ -121,9 +111,7 @@ struct SpawnAgentTask {
     harness: Option<HarnessFamily>,
     #[serde(default)]
     thinking: Option<Thinking>,
-    // Old in-flight calls can finish after deployment. New model declarations
-    // expose only the typed contract, while trusted Rust/JS APIs retain raw
-    // schemas through `start_agent` rather than this tool.
+
     #[serde(default)]
     output_schema: Option<Value>,
     #[serde(default)]
@@ -131,8 +119,10 @@ struct SpawnAgentTask {
 }
 
 impl SpawnAgentTask {
-
-    fn into_parts_with_parent(self, parent: Option<HarnessFamily>) -> std::io::Result<(AgentTask, SpawnOptions)> {
+    fn into_parts_with_parent(
+        self,
+        parent: Option<HarnessFamily>,
+    ) -> std::io::Result<(AgentTask, SpawnOptions)> {
         let output_schema = match (self.output_contract, self.output_schema) {
             (Some(contract), None) => contract.into_schema(),
             (None, Some(schema)) => schema,
@@ -144,14 +134,16 @@ impl SpawnAgentTask {
         };
         let mut options = SpawnOptions::new();
         if let Some(model) = self.model {
-            let model = match model.parse::<HarnessModel>() {
-                Ok(model) => model,
-                Err(_) => HarnessModel::new(
-                    self.harness.clone().or(parent).ok_or_else(|| {
-                        std::io::Error::other("a custom model requires a backend selection")
-                    })?,
-                    model,
-                ),
+            let backend = self.harness.clone().or(parent).ok_or_else(|| {
+                std::io::Error::other("a model requires a backend selection or parent")
+            })?;
+            let model = ModelSelection::new(backend, model);
+            let model = if let Some(known) = model.as_codex() {
+                ModelSelection::Codex(known)
+            } else if let Some(known) = model.as_claude() {
+                ModelSelection::Claude(known)
+            } else {
+                model
             };
             options = options.harness_model(model);
         }
@@ -247,16 +239,6 @@ pub async fn start_agent(
     start_agent_with(parent, registry, session_id, task, SpawnOptions::new()).await
 }
 
-/// Starts a stable, ordered batch of clean-room subagents.
-///
-/// Every task schema and every available turn slot is validated and reserved
-/// before any child is created or its initial turn is launched.
-///
-/// # Errors
-///
-/// Returns an error without launching a child when validation or reservation
-/// fails. If a later lifecycle step fails, already-created children are closed
-/// before returning that error where the runtime remains available.
 pub async fn start_agents(
     parent: &AgentHandle,
     registry: &Arc<Registry>,
@@ -266,8 +248,6 @@ pub async fn start_agents(
     start_agents_observed(parent, registry, session_id, tasks, |_| {}).await
 }
 
-/// Equivalent to [`start_agents`], with one synchronous observation of every
-/// child session created for cancellation-safe embedding cleanup.
 #[doc(hidden)]
 pub async fn start_agents_observed(
     parent: &AgentHandle,
@@ -277,7 +257,7 @@ pub async fn start_agents_observed(
     observe_session: impl Fn(&str) + Send + Sync + 'static,
 ) -> AgentToolResult<Vec<AgentStartReport>> {
     registry.register_handle(parent.clone());
-    // Held until the batch's IDs are reserved, so concurrent spawns keep call order.
+
     let admission = registry.admit_spawn(session_id).await?;
     let prepared = prepare_batch(tasks)?;
     let mut startup = registry.batch_startup();
@@ -286,8 +266,6 @@ pub async fn start_agents_observed(
     drop(admission);
     let host_context = registry.host_context_for_session(session_id).await;
     let children = if let Some(router) = registry.spawn_router() {
-        // Resolve all choices before creating a child. No initial turn runs until
-        // the entire batch has been bound and inserted below.
         let mut routes = Vec::with_capacity(prepared.len());
         for (task, _) in &prepared {
             let route = router
@@ -383,8 +361,7 @@ pub async fn start_agents_observed(
             )
             .await
         {
-            startup.rollback().await;
-            return Err(error.into());
+            return Err(startup.fail(error).await.into());
         }
         startup.track(&reservation.root_session_id, id);
         reports.push(AgentStartReport {
@@ -418,10 +395,9 @@ pub async fn start_agents_observed(
                 .await
         });
     if let Some(error) = join_all(launches).await.into_iter().find_map(Result::err) {
-        startup.rollback().await;
-        return Err(error.into());
+        return Err(startup.fail(error).await.into());
     }
-    startup.commit();
+    startup.commit().await?;
     Ok(reports)
 }
 
@@ -446,9 +422,6 @@ pub async fn start_agent_with(
     start_agent_with_host_context(parent, registry, session_id, task, options, host_context).await
 }
 
-/// Starts a native conversation fork in the existing task tree. The provider
-/// owns the safe fork boundary and preserves its model; mixed-family routing
-/// and model overrides do not apply. Output stays on the child until retrieved.
 pub async fn start_fork_agent(
     parent: &AgentHandle,
     registry: &Arc<Registry>,
@@ -501,7 +474,7 @@ async fn start_child(
         return Err("child caller identity must match its native parent handle".into());
     }
     registry.register_handle(parent.clone());
-    // Held until the ID is reserved, so concurrent spawns keep call order.
+
     let admission = registry.admit_spawn(session_id).await?;
     let AgentTask {
         role,
@@ -509,6 +482,7 @@ async fn start_child(
         output_schema,
     } = task;
     let contract = OutputContract::compile(&output_schema)?;
+    let mut startup = registry.batch_startup();
     let capacity = registry.reserve_turn()?;
     let reservation = registry.reserve(session_id).await?;
     drop(admission);
@@ -520,7 +494,13 @@ async fn start_child(
     let router = if fork { None } else { registry.spawn_router() };
     let route = if let Some(router) = &router {
         let route = router
-            .resolve_spawn(session_id, &role, &task, options.clone(), host_context.as_deref())
+            .resolve_spawn(
+                session_id,
+                &role,
+                &task,
+                options.clone(),
+                host_context.as_deref(),
+            )
             .await?;
         route.validate(options.clone())?;
         Some(route)
@@ -577,17 +557,22 @@ async fn start_child(
             contract,
         )
         .await?;
+    startup.track(&reservation.root_session_id, id);
     registry.send(&reservation.root_session_id, AgentUpdate::Added(descriptor));
     let _ = start_events.send(());
 
-    registry
+    if let Err(error) = registry
         .launch_initial_turn(
             &reservation.root_session_id,
             id,
             agent_prompt(id, &task),
             capacity,
         )
-        .await?;
+        .await
+    {
+        return Err(startup.fail(error).await.into());
+    }
+    startup.commit().await?;
     Ok(AgentStartReport {
         agent_id: id,
         role,
@@ -613,7 +598,8 @@ impl Tool for SpawnAgent {
     }
 
     async fn execute(&self, input: ToolInput, context: ToolContext<'_>) -> ToolResult {
-        let (task, options) = input.decode_json::<SpawnAgentTask>()?
+        let (task, options) = input
+            .decode_json::<SpawnAgentTask>()?
             .into_parts_with_parent(Some(self.parent.harness_family()))?;
         let host_context = context.host_context().map(Arc::<str>::from);
         let registry = self
@@ -630,9 +616,7 @@ impl Tool for SpawnAgent {
             host_context,
         )
         .await?;
-        // Tool futures are Send, while host JS routing and shutdown futures are
-        // isolate-local. Poll them on the WASM executor and await a Send receipt.
-        // Dropping the tool still cancels startup instead of detaching it.
+
         #[cfg(target_family = "wasm")]
         let report = {
             let parent = self.parent.clone();
@@ -791,12 +775,9 @@ impl Tool for SubmitResult {
             .await?;
         let output = match outcome {
             SubmissionOutcome::Accepted { decoded_json_text } => {
-                // durable reports whether the acceptance survives a restart.
                 let mut receipt =
                     json!({ "accepted": true, "status": "accepted", "durable": durable });
                 if !durable {
-                    // Accepted in this runtime and persistence is retried. A
-                    // second submission would be rejected, so say so plainly.
                     receipt["note"] = json!(
                         "Accepted in memory; not yet durable across a restart. Do not submit again."
                     );
@@ -1099,31 +1080,17 @@ fn shared_tools(parent: AgentHandle, registry: &Arc<Registry>) -> Vec<Arc<dyn To
     ]
 }
 
-struct SharedTool(Arc<dyn Tool>);
-#[async_trait]
-impl Tool for SharedTool {
-    fn definition(&self) -> ToolDefinition {
-        self.0.definition()
-    }
-    async fn execute(&self, input: ToolInput, context: ToolContext<'_>) -> ToolResult {
-        self.0.execute(input, context).await
-    }
-}
-
-/// Installs the task-tree operations into a Responses tool runtime.
-pub fn install_tools(
-    tools: Tools,
+pub fn install_tools<T: ToolCollection>(
+    mut tools: T,
     parent: AgentHandle,
     registry: Arc<Registry>,
-) -> Result<Tools, ToolsBuildError> {
-    let mut builder = tools.into_builder();
+) -> Result<T, T::Error> {
     for tool in shared_tools(parent, &registry) {
-        builder = builder.tool(SharedTool(tool));
+        tools = tools.add_shared_tool(tool)?;
     }
-    builder.build()
+    Ok(tools)
 }
 
-/// Installs the identical task-tree operations as native Claude callbacks.
 #[cfg(feature = "claude")]
 pub fn install_claude_tools<T: nanocode_tools::ToolCollection>(
     mut tools: T,
@@ -1136,8 +1103,6 @@ pub fn install_claude_tools<T: nanocode_tools::ToolCollection>(
     Ok(tools)
 }
 
-/// Claude hosts may run without host context. A child spawned there retains
-/// its spawning turn as its authority instead.
 #[cfg(feature = "claude")]
 struct TurnAuthority(Arc<dyn Tool>);
 

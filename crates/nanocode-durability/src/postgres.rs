@@ -19,13 +19,12 @@ const POSTGRES_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS nanocodex_durable_reco
        payload TEXT NOT NULL
      );";
 
-/// Postgres-backed state store.
 pub struct PostgresStore {
     client: Client,
 }
 
 impl PostgresStore {
-    /// Initializes the current state schema using a caller-driven Postgres client.
+
     pub async fn new(client: Client) -> Result<Self, StoreError> {
         let mut store = Self { client };
         let transaction = store.client.transaction().await.map_err(backend)?;
@@ -207,8 +206,6 @@ impl StateStore for PostgresStore {
         })
     }
 
-    /// Postgres states carry no creation order; identities are returned in
-    /// descending order, which is newest first for time-ordered (UUIDv7) IDs.
     fn list_states<'a>(
         &'a mut self,
         limit: usize,

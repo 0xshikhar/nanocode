@@ -5,10 +5,10 @@ import { StringDecoder } from "node:string_decoder";
 
 const MEMORY_BYTES = 64 * 1024;
 
-// Serialize output operations; callers pause each source until append completes.
-// Tiny commands need no filesystem round trip. Once unread output exceeds the
-// bounded memory window, spill it to a private file and retain all later bytes.
-// Reply budgets limit each read, never how much unread output is retained.
+
+
+
+
 export async function createProcessOutput() {
   let directory, file;
   let chunks = [];
@@ -40,7 +40,7 @@ export async function createProcessOutput() {
       directory = undefined;
       throw error;
     }
-    // Bytes already returned to the caller never need to be written to disk.
+
     fileBase = consumed;
     let position = 0;
     for (const chunk of chunks) {
@@ -75,8 +75,8 @@ export async function createProcessOutput() {
             chunk.copy(buffer, bytesRead, 0, take);
             bytesRead += take;
             if (take === chunk.length) chunks.shift();
-            // The original owned chunk is bounded by MEMORY_BYTES. Keep a
-            // slice instead of repeatedly copying its tail for tiny reads.
+
+
             else chunks[0] = chunk.subarray(take);
           }
         }

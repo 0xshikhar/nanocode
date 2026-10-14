@@ -1,11 +1,3 @@
-//! Focused retained runtime for the canonical local workspace tools.
-//!
-//! This runtime is intentionally smaller than the agent-facing
-//! `crate::runtime` module available in native builds. It lets constrained
-//! process boundaries, including the VM guest, reuse the exact workspace
-//! handlers without linking Code Mode, MCP, HTTP clients, or provider
-//! transports.
-
 use std::{ffi::OsString, path::PathBuf, sync::Arc};
 
 use crate::{
@@ -15,11 +7,6 @@ use crate::{
     view_image::ViewImageHandler,
 };
 
-/// Retained canonical workspace-tool runtime.
-///
-/// Shell processes and interactive sessions live for the lifetime of this
-/// value, so a later `write_stdin` call can address a session created by
-/// `exec_command`.
 pub struct WorkspaceToolRuntime {
     apply_patch: ApplyPatchHandler,
     exec_command: ExecCommandHandler,
@@ -28,14 +15,12 @@ pub struct WorkspaceToolRuntime {
     sessions: Arc<ShellSessions>,
 }
 
-/// Canonical local workspace tools rooted at one directory.
 #[derive(Clone, Debug)]
 pub struct WorkspaceTools {
     pub(crate) root: PathBuf,
 }
 
 impl WorkspaceTools {
-    /// Creates canonical workspace tools rooted at `workspace`.
     #[must_use]
     pub fn new(workspace: impl Into<PathBuf>) -> Self {
         Self {
@@ -43,7 +28,6 @@ impl WorkspaceTools {
         }
     }
 
-    /// Returns the configured workspace root.
     #[must_use]
     pub fn root(&self) -> &std::path::Path {
         &self.root
@@ -51,28 +35,16 @@ impl WorkspaceTools {
 }
 
 impl WorkspaceToolRuntime {
-    /// Creates a runtime rooted at `workspace` for one agent session.
-    ///
-    /// Commands run with a sanitized process environment plus the session's
-    /// [`SessionEnvironment`] variables.
     #[must_use]
     pub fn new(workspace: PathBuf, session: &SessionEnvironment) -> Self {
         Self::with_optional_view_image_wire_limit(workspace, None, Arc::new(session.os_variables()))
     }
 
-    /// Creates a runtime for a tool selection that no session has bound.
-    ///
-    /// Commands receive no session variables, not even inherited ones.
     #[cfg(feature = "attachment")]
     pub(crate) fn unbound(workspace: PathBuf) -> Self {
         Self::with_optional_view_image_wire_limit(workspace, None, Arc::default())
     }
 
-    /// Creates a retained runtime whose `view_image` responses must fit one
-    /// bounded process-transport frame.
-    ///
-    /// This is an internal process-boundary policy. Normal in-process callers
-    /// should use [`Self::new`].
     #[doc(hidden)]
     #[must_use]
     pub fn with_view_image_wire_limit(workspace: PathBuf, max_wire_bytes: u64) -> Self {
@@ -83,12 +55,6 @@ impl WorkspaceToolRuntime {
         )
     }
 
-    /// Creates a process-boundary runtime with an explicit environment that
-    /// should remain visible to guest shell commands.
-    ///
-    /// Values whose names look sensitive remain available to the isolated
-    /// process while also participating in normal subprocess-output
-    /// sanitization. Normal in-process callers should use [`Self::new`].
     #[doc(hidden)]
     #[must_use]
     pub fn with_environment_and_view_image_wire_limit(
@@ -123,7 +89,6 @@ impl WorkspaceToolRuntime {
         }
     }
 
-    /// Executes one canonical workspace tool through retained runtime state.
     pub async fn execute_tool(
         &self,
         name: &str,
@@ -152,7 +117,6 @@ impl WorkspaceToolRuntime {
         }
     }
 
-    /// Returns cancellation and shutdown control for retained subprocesses.
     #[must_use]
     pub fn control(&self) -> WorkspaceToolRuntimeControl {
         WorkspaceToolRuntimeControl {
@@ -161,13 +125,11 @@ impl WorkspaceToolRuntime {
     }
 }
 
-/// Cancellation and shutdown control for a [`WorkspaceToolRuntime`].
 pub struct WorkspaceToolRuntimeControl {
     sessions: Arc<ShellSessions>,
 }
 
 impl WorkspaceToolRuntimeControl {
-    /// Terminates every retained subprocess and its descendants.
     pub async fn cancel(&self) {
         self.sessions.terminate_all().await;
     }

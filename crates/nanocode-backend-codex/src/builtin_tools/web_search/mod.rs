@@ -24,7 +24,6 @@ const MAX_ATTEMPTS: usize = 2;
 const TOOL_TIMEOUT: Duration = Duration::from_secs(45);
 const RETRY_DELAY: Duration = Duration::from_millis(200);
 
-/// Executes the backend HTTP tool using configured authentication.
 pub struct WebSearchHandler {
     client: reqwest::Client,
     endpoint: String,
@@ -32,8 +31,6 @@ pub struct WebSearchHandler {
 }
 
 impl WebSearchHandler {
-
-    /// Creates a handler using the supplied HTTP client.
     pub fn with_client(config: WebSearchConfig, client: reqwest::Client) -> Self {
         Self {
             client,

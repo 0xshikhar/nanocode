@@ -58,7 +58,7 @@ export class ArtifactStore {
   tool(onArtifact?: (artifact: ArtifactDocument) => void): NamedTool;
 }
 
-/** Creates the named `render_artifact` tool for direct array composition. */
+
 export function artifact(options: ArtifactOptions): NamedTool;
 export function createArtifactTool(
   workspace: ArtifactWorkspace,

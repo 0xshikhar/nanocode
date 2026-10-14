@@ -1,8 +1,3 @@
-//! Generic WebSocket attachment for one immutable [`Tools`] recipe.
-//!
-//! This boundary knows only a final WebSocket URL and bearer credential. Agent,
-//! account, placement, and endpoint discovery remain the caller's responsibility.
-
 mod driver;
 mod protocol;
 
@@ -21,7 +16,6 @@ const MAX_MACHINE_WORKSPACE_BYTES: usize = 1024;
 const MAX_MACHINE_CAPABILITIES: usize = 64;
 const MAX_MACHINE_CAPABILITY_BYTES: usize = 64;
 
-/// Non-secret description of the one machine represented by an attachment.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct AttachmentMachine {
     id: Box<str>,
@@ -33,12 +27,6 @@ pub struct AttachmentMachine {
 }
 
 impl AttachmentMachine {
-    /// Creates a bounded machine descriptor accepted by the managed wire contract.
-    ///
-    /// # Errors
-    ///
-    /// Rejects unsafe identifiers, empty or oversized display fields, and
-    /// duplicate or unsafe capability identifiers.
     pub fn new<I, S>(
         id: impl Into<String>,
         name: impl Into<String>,
@@ -101,61 +89,53 @@ impl AttachmentMachine {
         })
     }
 
-    /// Adds a measured host resource sample without changing routing identity.
     #[must_use]
     pub const fn with_resources(mut self, resources: AttachmentResourceObservation) -> Self {
         self.resources = Some(resources);
         self
     }
 
-    /// Stable process-owned machine identifier.
     #[must_use]
     pub const fn id(&self) -> &str {
         &self.id
     }
 
-    /// Human-readable host display name.
     #[must_use]
     pub const fn name(&self) -> &str {
         &self.name
     }
 
-    /// Workspace represented by this attachment.
     #[must_use]
     pub const fn workspace(&self) -> &str {
         &self.workspace
     }
 
-    /// Non-secret capabilities available on this machine.
     #[must_use]
     pub const fn capabilities(&self) -> &[Box<str>] {
         &self.capabilities
     }
 }
 
-/// Timestamped host observations, never an allocation or capacity guarantee.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct AttachmentResourceObservation {
-    /// Unix milliseconds at collection time; reconnect must not retimestamp it.
     pub observed_at_ms: u64,
-    /// Logical processors available to the host process.
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cpu_logical_count: Option<u32>,
-    /// Total host memory in bytes.
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_total_bytes: Option<u64>,
-    /// OS-reported available memory in bytes, including reclaimable memory where supported.
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_available_bytes: Option<u64>,
-    /// Total bytes on the workspace filesystem.
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disk_total_bytes: Option<u64>,
-    /// Bytes available to an unprivileged caller on the workspace filesystem.
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disk_available_bytes: Option<u64>,
 }
 
-/// Optional stable routing metadata published with every attachment catalog.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AttachmentMetadata {
     attachment_id: Box<str>,
@@ -163,11 +143,6 @@ pub struct AttachmentMetadata {
 }
 
 impl AttachmentMetadata {
-    /// Creates a stable named attachment without machine topology.
-    ///
-    /// # Errors
-    ///
-    /// Rejects IDs outside the safe ASCII, 123-byte source-ID contract.
     pub fn named(attachment_id: impl Into<String>) -> Result<Self, AttachmentError> {
         let attachment_id = attachment_id.into();
         if !valid_safe_identifier(&attachment_id, MAX_ATTACHMENT_ID_BYTES) {
@@ -181,7 +156,6 @@ impl AttachmentMetadata {
         })
     }
 
-    /// Creates a machine attachment whose routing ID is the machine ID.
     #[must_use]
     pub fn machine(machine: AttachmentMachine) -> Self {
         Self {
@@ -190,13 +164,11 @@ impl AttachmentMetadata {
         }
     }
 
-    /// Stable source routing identifier.
     #[must_use]
     pub const fn attachment_id(&self) -> &str {
         &self.attachment_id
     }
 
-    /// Machine topology, when this attachment represents a user machine.
     #[must_use]
     pub const fn attached_machine(&self) -> Option<&AttachmentMachine> {
         self.machine.as_ref()
@@ -224,7 +196,6 @@ fn valid_capability(value: &str) -> bool {
         })
 }
 
-/// Transport-only destination for an attached tool executor.
 #[derive(Clone, Eq, PartialEq)]
 pub struct AttachmentTarget {
     endpoint: Url,
@@ -232,10 +203,6 @@ pub struct AttachmentTarget {
 }
 
 impl AttachmentTarget {
-    /// # Errors
-    ///
-    /// Rejects non-WebSocket URLs, embedded credentials, fragments, and empty
-    /// bearer values.
     pub fn new(
         endpoint: impl AsRef<str>,
         bearer: impl Into<String>,
@@ -271,14 +238,11 @@ impl AttachmentTarget {
         })
     }
 
-    /// Returns the final WebSocket endpoint.
     #[must_use]
     pub const fn endpoint(&self) -> &Url {
         &self.endpoint
     }
 
-    /// Returns the transport credential for a trusted, allocation-owned companion.
-    /// Never include this value in arguments, logs, or model-visible metadata.
     #[must_use]
     pub fn bearer(&self) -> &str {
         &self.bearer
@@ -295,7 +259,6 @@ impl fmt::Debug for AttachmentTarget {
     }
 }
 
-/// Prepared connection from one complete [`Tools`] recipe.
 pub struct AttachmentConnector {
     tools: Tools,
     target: AttachmentTarget,
@@ -303,7 +266,6 @@ pub struct AttachmentConnector {
 }
 
 impl Tools {
-    /// Binds this exact immutable recipe to a transport target.
     #[must_use]
     pub const fn attach(self, target: AttachmentTarget) -> AttachmentConnector {
         AttachmentConnector {
@@ -315,20 +277,12 @@ impl Tools {
 }
 
 impl AttachmentConnector {
-    /// Publishes stable non-secret routing metadata with every catalog reconnect.
     #[must_use]
     pub fn metadata(mut self, metadata: AttachmentMetadata) -> Self {
         self.metadata = Some(metadata);
         self
     }
 
-    /// Validates the recipe and starts its complete lifecycle in the background.
-    ///
-    /// # Errors
-    ///
-    /// Fails synchronously when the selected tools cannot produce an immutable
-    /// attached catalog. Discovery and transport failures are reported through
-    /// the returned handle while its driver initializes and reconnects.
     pub fn start(self) -> Result<(Attachment, AttachmentEvents), AttachmentError> {
         install_default_rustls_crypto_provider();
         let prepared = PreparedTools::prepare(&self.tools)?;
@@ -356,13 +310,6 @@ impl AttachmentConnector {
         ))
     }
 
-    /// Prepares the exact catalog, connects, publishes it, and waits for its acknowledgement.
-    ///
-    /// # Errors
-    ///
-    /// Fails for non-attachable selections, discovery failures, invalid protocol
-    /// frames, or endpoint rejection before readiness. Transient transport
-    /// failures reconnect in the background.
     pub async fn connect(self) -> Result<(Attachment, AttachmentEvents), AttachmentError> {
         let (attachment, events) = self.start()?;
         attachment.wait_until_ready().await?;
@@ -465,10 +412,6 @@ impl Drop for HandleRefs {
     }
 }
 
-/// Cheap live attachment handle.
-///
-/// Clones share one attachment. Dropping the last handle detaches the executor;
-/// dropping its independent [`AttachmentEvents`] observer does not.
 #[derive(Clone)]
 pub struct Attachment {
     refs: Arc<HandleRefs>,
@@ -486,19 +429,16 @@ impl fmt::Debug for Attachment {
 }
 
 impl Attachment {
-    /// Returns the latest observed lifecycle state.
     #[must_use]
     pub fn status(&self) -> AttachmentStatus {
         self.status.borrow().clone()
     }
 
-    /// Explicitly detaches and waits for terminal cleanup.
     pub async fn detach(self) -> Result<(), AttachmentError> {
         let _ = self.refs.command_tx.try_send(driver::Command::Detach);
         self.closed().await
     }
 
-    /// Waits for authoritative terminal closure.
     pub async fn closed(&self) -> Result<(), AttachmentError> {
         let mut closed = self.closed.clone();
         loop {
@@ -531,11 +471,6 @@ impl Attachment {
     }
 }
 
-/// Best-effort ordered observations from one attachment.
-///
-/// Observation never applies backpressure to execution or protocol progress.
-/// When this bounded stream lags, events may be dropped. Use [`Attachment::status`]
-/// and [`Attachment::closed`] for authoritative lifecycle state.
 pub struct AttachmentEvents {
     events: mpsc::Receiver<AttachmentEvent>,
 }
@@ -549,104 +484,87 @@ impl fmt::Debug for AttachmentEvents {
 }
 
 impl AttachmentEvents {
-    /// Receives the next available observation.
     pub async fn recv(&mut self) -> Option<AttachmentEvent> {
         self.events.recv().await
     }
 }
 
-/// Latest attachment connection state.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum AttachmentStatus {
-    /// A connection or reconnect is in progress.
     Connecting,
-    /// The exact catalog was acknowledged.
+
     Ready,
-    /// The transport is offline. [`Attachment::closed`] distinguishes terminal
-    /// closure from a transport that may reconnect.
+
     Disconnected,
-    /// The remote endpoint authoritatively rejected this socket.
+
     Fenced,
 }
 
-/// Best-effort ordered lifecycle and call observation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum AttachmentEvent {
-    /// A connection or reconnect attempt started.
     Connecting,
-    /// The endpoint accepted the socket and immutable catalog.
+
     Attached,
-    /// The immutable catalog was acknowledged.
+
     CatalogPublished {
-        /// Number of entries in the exact catalog.
         tool_count: usize,
     },
-    /// One pinned invocation was admitted.
+
     CallStarted {
-        /// Remote call identity.
         call_id: Box<str>,
-        /// Exact catalog name.
+
         name: Box<str>,
     },
-    /// One admitted invocation reached a transport outcome.
+
     CallCompleted {
-        /// Remote call identity.
         call_id: Box<str>,
-        /// Conservative transport classification.
+
         outcome: AttachmentCallOutcome,
     },
-    /// The executor detached normally.
+
     Detached {
-        /// Human-readable terminal reason.
         reason: Box<str>,
     },
-    /// The endpoint authoritatively rejected this executor.
+
     Fenced {
-        /// Human-readable protocol or lease violation.
         reason: Box<str>,
     },
 }
 
-/// Transport-level terminal classification for one invocation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum AttachmentCallOutcome {
-    /// A complete tool output was published.
     Completed,
-    /// Execution was not admitted or the tool was unavailable.
+
     Unavailable,
-    /// Side effects may have happened without a publishable exact result.
+
     Ambiguous,
-    /// Execution was cancelled before side effects were admitted.
+
     Cancelled,
 }
 
-/// Typed attachment preparation, transport, and protocol failure.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum AttachmentError {
-    /// The credential was malformed or rejected.
     #[error("attachment authentication failed: {0}")]
     Authentication(Box<str>),
-    /// The recipe could not produce an exact immutable catalog.
+
     #[error("attached catalog failed: {0}")]
     Catalog(Box<str>),
-    /// The remote endpoint rejected this socket or its protocol frames.
+
     #[error("attachment was fenced: {0}")]
     Fenced(Box<str>),
-    /// The WebSocket connection or frame exchange failed.
+
     #[error("attachment transport failed: {0}")]
     Transport(Box<str>),
-    /// The attachment terminated before the awaited operation completed.
+
     #[error("attachment is closed")]
     Closed,
 }
 
 impl AttachmentError {
-    /// True when the endpoint reported the attachment permanently gone (HTTP
-    /// 410). The executor has stopped and will never reconnect it.
     #[must_use]
     pub fn is_revoked(&self) -> bool {
         matches!(self, Self::Fenced(reason) if &**reason == driver::ATTACHMENT_REVOKED_REASON)

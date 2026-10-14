@@ -26,7 +26,7 @@ export async function initializeThreadGit(thread) {
         return status(fs, thread);
     });
 }
-/** Ensures the repository exists without scanning its complete worktree. */
+
 export function prepareThreadGit(thread) {
     return inspectPreparedThreadGit(thread, (rawFs, workspaceRoot) => ({ rawFs, workspaceRoot }));
 }

@@ -1,4 +1,3 @@
-//! ScreenCaptureKit system output only; microphone capture is never enabled.
 #![allow(unsafe_code)]
 use crate::Error;
 use block2::RcBlock;
@@ -53,8 +52,7 @@ struct StereoBuffers {
     count: u32,
     buffers: [AudioBuffer; 2],
 }
-// Copy while the CMSampleBuffer is valid. Both allocation and queue size have
-// fixed upper bounds; the capture queue never waits on a writer or a mutex.
+
 unsafe fn packet(sample: &CMSampleBuffer) -> Option<Vec<u8>> {
     let frames = usize::try_from(unsafe { sample.num_samples() }).ok()?;
     if frames == 0 || frames > MAX_FRAMES {
@@ -163,8 +161,7 @@ impl Drop for Stream {
         }
     }
 }
-/// Writes stereo 48 kHz s16le on a blocking worker. The caller must close or
-/// unblock its writer on cancellation. Audio callbacks only use try_send.
+
 pub fn capture_audio(writer: impl Write, stop: Arc<AtomicBool>) -> Result<()> {
     capture(writer, stop, None)
 }
@@ -295,7 +292,6 @@ fn capture(
     Ok(())
 }
 
-/// Physical main-display dimensions, with no upscaling.
 pub fn main_display_dimensions() -> Result<(usize, usize)> {
     let display = objc2_core_graphics::CGMainDisplayID();
     let size = (
@@ -307,8 +303,7 @@ pub fn main_display_dimensions() -> Result<(usize, usize)> {
     }
     Ok(size)
 }
-/// Packed BGRA frames at 60 Hz. Repeats the latest frame for static desktops.
-/// Caller must close/unblock the writer when requesting cancellation.
+
 pub fn capture_video(
     writer: impl Write,
     stop: Arc<AtomicBool>,

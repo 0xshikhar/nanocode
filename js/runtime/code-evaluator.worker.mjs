@@ -34,7 +34,7 @@ async function evaluate({ source, storedEntries = [], toolDefinitions = [], tool
   const storedWrites = new Map();
   const callableTools = createCodeTools(toolNames, callTool);
 
-  // Models often label values as text("label:", value); keep every argument.
+
   const text = (...values) => post("output", {
     kind: "text",
     value: values.length > 1 ? values.map(stringify).join(" ") : stringify(values[0]),
@@ -111,8 +111,8 @@ async function evaluate({ source, storedEntries = [], toolDefinitions = [], tool
         guestConsole,
       );
     } finally {
-      // The supervisor disposes the worker and cancels pending nested calls
-      // when the root script completes.
+
+
     }
     return [...storedWrites];
   } catch (error) {

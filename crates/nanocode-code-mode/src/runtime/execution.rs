@@ -1,9 +1,5 @@
 use super::*;
 
-/// Stateful execution runtime for one agent driver.
-///
-/// A runtime retains Code Mode cells and shell sessions across calls. It is
-/// normally owned privately by the higher-level agent driver.
 pub struct ToolRuntime {
     pub(super) registry: Arc<ToolRegistry>,
     exposure: Option<ToolExposure>,
@@ -24,14 +20,10 @@ pub struct ToolRuntimeControl {
 }
 
 impl ToolRuntime {
-    /// Creates a runtime with the standard workspace tools enabled.
-    ///
-    /// Backend-owned tools are supplied by the caller.
     pub fn new(workspace: impl Into<PathBuf>, builtin_tools: Vec<Arc<dyn Tool>>) -> Self {
         Self::new_inner(workspace, builtin_tools, true, Arc::new(Vec::new()))
     }
 
-    /// Builds the runtime from one complete declarative tool selection.
     #[must_use]
     pub fn new_with_tools(
         workspace: impl Into<PathBuf>,
@@ -126,13 +118,11 @@ impl ToolRuntime {
         self
     }
 
-    /// Returns the shell name described to the model.
     #[must_use]
     pub fn default_shell_name(&self) -> &str {
         &self.default_shell_name
     }
 
-    /// Returns the working directory described to the model.
     #[must_use]
     pub fn working_directory(&self) -> &str {
         &self.working_directory
@@ -148,14 +138,11 @@ impl ToolRuntime {
         }
     }
 
-    /// Whether model calls must use the Code Mode entrypoints.
     #[must_use]
     pub fn is_code_only(&self) -> bool {
         self.exposure.unwrap_or_default() == ToolExposure::CodeModeOnly
     }
 
-    /// Returns the direct model-visible Code Mode tool definitions.
-    /// Native definitions are session-independent; the argument matches hosted runtimes.
     #[must_use]
     pub fn model_specs(&self, _session_id: &str) -> Vec<ToolDefinition> {
         let mut nested = self.registry.registered_code_mode_definitions();
@@ -206,23 +193,16 @@ impl ToolRuntime {
         )
     }
 
-    /// Returns whether a model-visible tool explicitly permits parallel calls.
-    ///
-    /// Unknown tools and tools without an explicit opt-in return `false`.
     #[must_use]
     pub fn supports_parallel_tool_calls(&self, name: &str) -> bool {
         self.registry.supports_parallel_tool_calls(name)
     }
 
-    /// Returns whether a registered or dynamically activated tool is callable.
-    ///
-    /// Deferred provider tools become visible here only after activation.
     #[must_use]
     pub fn contains(&self, name: &str) -> bool {
         self.registry.contains(name)
     }
 
-    /// Starts or resumes a Code Mode cell and observes its first terminal boundary.
     pub async fn execute_code(
         &self,
         source: &str,
@@ -256,7 +236,6 @@ impl ToolRuntime {
             .await)
     }
 
-    /// Executes Code Mode without copying an already-owned history snapshot.
     #[doc(hidden)]
     pub async fn execute_code_owned(
         &self,
@@ -282,7 +261,6 @@ impl ToolRuntime {
             .await)
     }
 
-    /// Waits for a previously yielded Code Mode cell.
     pub async fn wait_for_code(
         &self,
         input: &str,
@@ -301,15 +279,6 @@ impl ToolRuntime {
         Ok(self.code_mode.wait_with_updates(input, observer).await)
     }
 
-    /// Executes one registered or dynamically activated tool through this
-    /// runtime's retained state.
-    ///
-    /// Shell sessions created by `exec_command` remain available to later
-    /// `write_stdin` calls on the same runtime, including after cancellation
-    /// of the turn that started or last observed them.
-    ///
-    /// Handler panics become failed `aborted` outputs and never unwind through
-    /// the runtime owner.
     pub async fn execute_tool(
         &self,
         name: &str,
@@ -364,7 +333,6 @@ fn group_direct_code_mode_definitions(
 }
 
 impl ToolRuntimeControl {
-    /// Yield current Code Mode observers; retained cells and effects continue.
     pub async fn preempt_turn(&self) {
         self.code_mode.preempt_turn();
     }
@@ -378,11 +346,6 @@ impl ToolRuntimeControl {
             });
     }
 
-    /// Keeps reporting nested-tool updates from cells the current turn left
-    /// running after it completed normally. `observer` receives each cell's
-    /// origin call ID and returns an owned observer for that cell. The cells
-    /// continue to run, and a later wait observes them without repeating any
-    /// update the relay already delivered.
     pub async fn detach_turn_with_updates(
         &self,
         observer: &mut (dyn FnMut(&str) -> Box<dyn CodeModeObserver> + Send),
@@ -397,15 +360,9 @@ impl ToolRuntimeControl {
         self.code_mode.terminate_turn(turn_id, None).await;
     }
 
-    /// Cancels turn-owned producers and delivers their remaining nested-tool updates.
-    /// Updates already delivered to an execution or wait observer are not repeated.
-    /// Active execution/wait futures must be driven concurrently or dropped before
-    /// awaiting this method: draining waits for their exclusive observation lease.
     pub async fn cancel_turn_with_updates(&self, observer: &mut dyn CodeModeObserver) {
         let turn_id = self.current_turn.load(Ordering::Acquire);
-        // Shell sessions are owned by this runtime once spawned, not by the
-        // turn that launched or observed them. Full runtime cancellation below
-        // remains their explicit cleanup boundary.
+
         self.code_mode.terminate_turn(turn_id, Some(observer)).await;
     }
 
@@ -415,14 +372,7 @@ impl ToolRuntimeControl {
         self.sessions.terminate_all().await;
     }
 
-    /// Cancels all producers, delivers remaining nested-tool updates, then drains shells.
-    /// Producer admission stays closed until shell cleanup finishes.
-    /// Active execution/wait futures must be driven concurrently or dropped before
-    /// awaiting this method: draining waits for their exclusive observation lease.
     pub async fn cancel_with_updates(&self, observer: &mut dyn CodeModeObserver) {
-        // Code Mode cells can still be inside a nested exec_command. Quiesce
-        // and join every producer before draining the session-owned shells so
-        // no late registration can escape the shutdown boundary.
         let _code_mode_quiescence = self.code_mode.terminate_all(Some(observer)).await;
         self.sessions.terminate_all().await;
     }

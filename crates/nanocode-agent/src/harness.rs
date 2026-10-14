@@ -1,39 +1,35 @@
-//! Harness selection without erasing provider-native builders or transcripts.
-
 use std::{fmt, str::FromStr};
 
-use nanocode_types::{Model, ReasoningMode, Thinking};
+use nanocode_types::{BackendId, Model, ReasoningMode, Thinking};
 
 use crate::{NanocodexError, ServiceTier};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
-/// Open agent-loop registration identity.
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct HarnessFamily(nanocode_types::BackendId);
 impl HarnessFamily {
-    /// Responses backend.
     #[allow(non_upper_case_globals)]
     pub const Codex: Self = Self(nanocode_types::BackendId::Codex);
-    /// Messages backend.
+
     #[allow(non_upper_case_globals)]
     pub const Claude: Self = Self(nanocode_types::BackendId::Claude);
-    /// Creates an open backend identity.
+
     pub fn new(value: impl Into<String>) -> Self {
         Self(nanocode_types::BackendId::new(value))
     }
-    /// Stable backend identifier.
+
     pub fn as_str(&self) -> &str {
         self.0.as_str()
     }
-    /// Compatibility default for bundled backends. Registrations supply custom defaults.
-    pub fn default_model(&self) -> HarnessModel {
+
+    pub fn default_model(&self) -> ModelSelection {
         if *self == Self::Codex {
-            HarnessModel::Codex(Model::Sol)
+            ModelSelection::Codex(Model::Sol)
         } else if *self == Self::Claude {
-            HarnessModel::Claude(ClaudeModel::Opus55)
+            ModelSelection::Claude(ClaudeModel::Opus55)
         } else {
-            HarnessModel::new(self.clone(), "default")
+            ModelSelection::new(self.clone(), "default")
         }
     }
 }
@@ -59,30 +55,24 @@ impl FromStr for HarnessFamily {
     }
 }
 
-/// Known Claude models available to the shared harness router.
-///
-/// A concrete Claude builder still accepts provider-native model identifiers;
-/// this catalog defines the validated choices exposed by shared routing tools.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum ClaudeModel {
-    /// Claude Opus 5.5.
     Opus55,
-    /// Claude Sonnet 5.5.
+
     Sonnet55,
-    /// Claude Haiku 5.5.
+
     Haiku55,
-    /// Claude Fable 5.1.
+
     Fable51,
-    /// Claude Opus 4.6.
+
     Opus46,
-    /// Claude Sonnet 4.6.
+
     Sonnet46,
-    /// Claude Haiku 4.5, with ordinary inference and no adaptive effort.
+
     Haiku45,
 }
 
 impl ClaudeModel {
-    /// Known routing models; availability remains the embedding host's policy.
     pub const ALL: [Self; 7] = [
         Self::Opus55,
         Self::Sonnet55,
@@ -93,7 +83,6 @@ impl ClaudeModel {
         Self::Haiku45,
     ];
 
-    /// Provider-native model identifier.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Opus55 => "claude-opus-5-5",
@@ -106,16 +95,14 @@ impl ClaudeModel {
         }
     }
 
-    /// Default reasoning effort for a new native thread.
     pub fn default_thinking(&self) -> Thinking {
-        HarnessModel::Claude(*self)
+        ModelSelection::Claude(*self)
             .capabilities(ModelTransport::Native)
             .default_thinking()
     }
 
-    /// Whether the native adaptive-thinking adapter supports this effort.
     pub fn supports_thinking(&self, thinking: Thinking) -> bool {
-        HarnessModel::Claude(*self)
+        ModelSelection::Claude(*self)
             .capabilities(ModelTransport::Native)
             .supports_thinking(thinking)
     }
@@ -146,21 +133,20 @@ impl FromStr for ClaudeModel {
     }
 }
 
-/// Open backend-qualified model identity.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct HarnessModel {
-    backend: HarnessFamily,
-    model: String,
+pub struct ModelSelection {
+    pub backend: BackendId,
+
+    pub model: String,
 }
-impl HarnessModel {
-    /// Selects a provider-native model from any backend.
+impl ModelSelection {
     pub fn new(backend: impl Into<HarnessFamily>, model: impl Into<String>) -> Self {
         Self {
-            backend: backend.into(),
+            backend: backend.into().into(),
             model: model.into(),
         }
     }
-    /// Rejects empty registration or provider-native model identities.
+
     pub fn validate(&self) -> crate::Result<()> {
         if self.backend.as_str().trim().is_empty() || self.model.trim().is_empty() {
             return Err(NanocodexError::InvalidRequest(
@@ -169,78 +155,55 @@ impl HarnessModel {
         }
         Ok(())
     }
-    /// Compatibility constructor for the Responses catalog.
+
     #[allow(non_snake_case)]
     pub fn Codex(model: Model) -> Self {
         Self::new(HarnessFamily::Codex, model.as_str())
     }
-    /// Compatibility constructor for the Messages catalog.
+
     #[allow(non_snake_case)]
     pub fn Claude(model: ClaudeModel) -> Self {
         Self::new(HarnessFamily::Claude, model.as_str())
     }
-    /// Known Responses catalog entry, if any.
+
     pub fn as_codex(&self) -> Option<Model> {
-        (self.backend == HarnessFamily::Codex)
+        (self.backend == BackendId::Codex)
             .then(|| self.model.parse().ok())
             .flatten()
     }
-    /// Known Messages catalog entry, if any.
+
     pub fn as_claude(&self) -> Option<ClaudeModel> {
-        (self.backend == HarnessFamily::Claude)
+        (self.backend == BackendId::Claude)
             .then(|| self.model.parse().ok())
             .flatten()
     }
-    /// Backend that owns this model.
+
     pub fn family(&self) -> HarnessFamily {
-        self.backend.clone()
+        self.backend.clone().into()
     }
-    /// Exact provider-native model identifier.
+
     pub fn as_str(&self) -> &str {
         &self.model
     }
 
-    /// Default native reasoning policy.
     pub fn default_thinking(&self) -> Thinking {
         self.capabilities(ModelTransport::Native).default_thinking()
     }
 
-    /// Whether the native builder for this model supports the requested effort.
     pub fn supports_thinking(&self, thinking: Thinking) -> bool {
         self.capabilities(ModelTransport::Native)
             .supports_thinking(thinking)
     }
 
-    /// Whether native fast processing is offered by this model: priority
-    /// processing on Responses models and fast mode on Claude Opus.
     pub fn supports_fast_mode(&self) -> bool {
         self.capabilities(ModelTransport::Native).fast_mode()
     }
 
-    /// Whether the native builder for this model supports a reasoning mode.
     pub fn supports_reasoning_mode(&self, mode: ReasoningMode) -> bool {
         self.capabilities(ModelTransport::Native)
             .supports_reasoning_mode(mode)
     }
 
-    /// Settings this model accepts on one transport.
-    ///
-    /// This is the shared capability source for thinking levels, processing
-    /// tiers and reasoning modes. Builders, setters, pickers and catalog
-    /// projections derive their choices from it; an account's managed catalog
-    /// may further narrow availability but never widen it.
-    ///
-    /// ```
-    /// use nanocode_agent::{ClaudeModel, HarnessModel, ModelTransport, Thinking};
-    ///
-    /// let opus = HarnessModel::Claude(ClaudeModel::Opus46);
-    /// let native = opus.capabilities(ModelTransport::Native);
-    /// assert!(native.supports_thinking(Thinking::Max));
-    /// assert!(!native.supports_thinking(Thinking::Xhigh));
-    /// let managed = opus.capabilities(ModelTransport::Managed);
-    /// assert!(!managed.supports_thinking(Thinking::Max));
-    /// assert!(managed.check_thinking(Thinking::Max).is_err());
-    /// ```
     pub fn capabilities(&self, transport: ModelTransport) -> ModelCapabilities {
         use Thinking::{High, Low, Max, Medium, None, Xhigh};
         const fn set(levels: &[Thinking]) -> u8 {
@@ -267,14 +230,13 @@ impl HarnessModel {
                         bits,
                         model.default_thinking(),
                         matches!(model, Model::Astra | Model::Sol | Model::Luna),
-                        // The managed control plane accepts only a priority switch.
                         matches!(transport, ModelTransport::Native)
                             && matches!(model, Model::Astra | Model::Sol),
                         model.supports_reasoning_mode(ReasoningMode::Pro),
                     )
                 }
                 (_, Some(ClaudeModel::Haiku45), _) => (set(&[None]), None, false, false, false),
-                // The native Messages adapter sends each level as output_config.effort.
+
                 (_, Some(model), ModelTransport::Native) => (
                     match model {
                         ClaudeModel::Opus46 | ClaudeModel::Sonnet46 => {
@@ -290,8 +252,7 @@ impl HarnessModel {
                     false,
                     false,
                 ),
-                // The managed control plane admits Claude at low, medium or high
-                // effort, standard mode and standard speed.
+
                 (_, Some(_), ModelTransport::Managed) => {
                     (set(&[Low, Medium, High]), Medium, false, false, false)
                 }
@@ -308,7 +269,6 @@ impl HarnessModel {
         }
     }
 
-    /// Validated model choices within one family.
     pub fn for_family(family: HarnessFamily) -> impl Iterator<Item = Self> {
         Model::ALL
             .into_iter()
@@ -318,20 +278,16 @@ impl HarnessModel {
     }
 }
 
-/// Transport serving a model; the same model can accept different settings on
-/// each.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum ModelTransport {
-    /// A provider-native builder in this process (Responses or Messages).
     Native,
-    /// The account-managed control plane.
+
     Managed,
 }
 
 impl ModelTransport {
-    /// Stable public transport identifier.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Native => "native",
@@ -344,11 +300,9 @@ const fn thinking_bit(thinking: Thinking) -> u8 {
     1 << thinking as u8
 }
 
-/// Thinking levels, processing tiers and reasoning modes one model accepts on
-/// one transport. Obtain it with [`HarnessModel::capabilities`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ModelCapabilities {
-    model: HarnessModel,
+    model: ModelSelection,
     transport: ModelTransport,
     thinking: u8,
     default_thinking: Thinking,
@@ -358,35 +312,33 @@ pub struct ModelCapabilities {
 }
 
 impl ModelCapabilities {
-    /// Model these capabilities describe.
-    pub fn model(&self) -> HarnessModel {
+    pub fn model(&self) -> ModelSelection {
         self.model.clone()
     }
-    /// Transport these capabilities describe.
+
     pub const fn transport(&self) -> ModelTransport {
         self.transport
     }
-    /// Effort selected for a new thread.
+
     pub const fn default_thinking(&self) -> Thinking {
         self.default_thinking
     }
-    /// Whether the model accepts this effort.
+
     pub const fn supports_thinking(&self, thinking: Thinking) -> bool {
         self.thinking & thinking_bit(thinking) != 0
     }
-    /// Accepted efforts in ascending order.
+
     pub fn thinking(&self) -> impl Iterator<Item = Thinking> + use<> {
         let capabilities = self.clone();
         Thinking::ALL
             .into_iter()
             .filter(move |thinking| capabilities.supports_thinking(*thinking))
     }
-    /// Whether fast processing (priority on Responses, fast mode on Claude) is accepted.
+
     pub const fn fast_mode(&self) -> bool {
         self.fast_mode
     }
-    /// Whether this processing tier is accepted; Priority is the
-    /// compatibility name of Fast.
+
     pub const fn supports_service_tier(&self, tier: ServiceTier) -> bool {
         match tier {
             ServiceTier::Standard => true,
@@ -394,7 +346,7 @@ impl ModelCapabilities {
             ServiceTier::Ultrafast => self.ultrafast,
         }
     }
-    /// Accepted processing tiers, slowest first.
+
     pub fn service_tiers(&self) -> impl Iterator<Item = ServiceTier> + use<> {
         let capabilities = self.clone();
         [
@@ -405,14 +357,14 @@ impl ModelCapabilities {
         .into_iter()
         .filter(move |tier| capabilities.supports_service_tier(*tier))
     }
-    /// Whether this reasoning mode is accepted.
+
     pub const fn supports_reasoning_mode(&self, mode: ReasoningMode) -> bool {
         match mode {
             ReasoningMode::Standard => true,
             ReasoningMode::Pro => self.pro,
         }
     }
-    /// Accepted reasoning modes, Standard first.
+
     pub fn reasoning_modes(&self) -> impl Iterator<Item = ReasoningMode> + use<> {
         let capabilities = self.clone();
         [ReasoningMode::Standard, ReasoningMode::Pro]
@@ -420,8 +372,6 @@ impl ModelCapabilities {
             .filter(move |mode| capabilities.supports_reasoning_mode(*mode))
     }
 
-    /// Keeps a retained effort the model accepts, otherwise its default.
-    /// Use for deliberate model switches, never for explicit requests.
     pub const fn normalize_thinking(&self, thinking: Thinking) -> Thinking {
         if self.supports_thinking(thinking) {
             thinking
@@ -430,7 +380,6 @@ impl ModelCapabilities {
         }
     }
 
-    /// Keeps a retained tier the model accepts, otherwise Standard.
     pub const fn normalize_service_tier(&self, tier: ServiceTier) -> ServiceTier {
         if self.supports_service_tier(tier) {
             tier
@@ -439,7 +388,6 @@ impl ModelCapabilities {
         }
     }
 
-    /// Keeps a retained reasoning mode the model accepts, otherwise Standard.
     pub const fn normalize_reasoning_mode(&self, mode: ReasoningMode) -> ReasoningMode {
         if self.supports_reasoning_mode(mode) {
             mode
@@ -448,11 +396,6 @@ impl ModelCapabilities {
         }
     }
 
-    /// Rejects an explicitly requested effort the model does not accept.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`NanocodexError::InvalidRequest`] naming the supported levels.
     pub fn check_thinking(&self, thinking: Thinking) -> crate::Result<()> {
         if self.supports_thinking(thinking) {
             return Ok(());
@@ -466,11 +409,6 @@ impl ModelCapabilities {
         )))
     }
 
-    /// Rejects an explicitly requested processing tier the model does not accept.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`NanocodexError::InvalidRequest`] naming the supported tiers.
     pub fn check_service_tier(&self, tier: ServiceTier) -> crate::Result<()> {
         if self.supports_service_tier(tier) {
             return Ok(());
@@ -484,11 +422,6 @@ impl ModelCapabilities {
         ))
     }
 
-    /// Rejects an explicitly requested fast mode the model does not accept.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`NanocodexError::InvalidRequest`] when fast mode is unavailable.
     pub fn check_fast_mode(&self, enabled: bool) -> crate::Result<()> {
         if !enabled || self.fast_mode {
             return Ok(());
@@ -502,11 +435,6 @@ impl ModelCapabilities {
         ))
     }
 
-    /// Rejects an explicitly requested reasoning mode the model does not accept.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`NanocodexError::InvalidRequest`] naming the supported modes.
     pub fn check_reasoning_mode(&self, mode: ReasoningMode) -> crate::Result<()> {
         if self.supports_reasoning_mode(mode) {
             return Ok(());
@@ -537,8 +465,7 @@ impl ModelCapabilities {
     }
 }
 
-/// Human-readable model name used in actionable errors.
-fn display_name(model: &HarnessModel) -> &'static str {
+fn display_name(model: &ModelSelection) -> &'static str {
     match (model.as_codex(), model.as_claude()) {
         (Some(Model::Sol), _) => "GPT-6.1 Sol",
         (Some(Model::Luna), _) => "GPT-6 Luna",
@@ -561,37 +488,37 @@ fn join<'a>(values: impl Iterator<Item = &'a str>) -> String {
     values.collect::<Vec<_>>().join(", ")
 }
 
-impl From<Model> for HarnessModel {
+impl From<Model> for ModelSelection {
     fn from(model: Model) -> Self {
         Self::Codex(model)
     }
 }
-impl Default for HarnessModel {
+impl Default for ModelSelection {
     fn default() -> Self {
         Self::Codex(Model::default())
     }
 }
-impl From<ClaudeModel> for HarnessModel {
+impl From<ClaudeModel> for ModelSelection {
     fn from(model: ClaudeModel) -> Self {
         Self::Claude(model)
     }
 }
-impl PartialEq<Model> for HarnessModel {
+impl PartialEq<Model> for ModelSelection {
     fn eq(&self, model: &Model) -> bool {
         self == &Self::Codex(*model)
     }
 }
-impl PartialEq<HarnessModel> for Model {
-    fn eq(&self, model: &HarnessModel) -> bool {
+impl PartialEq<ModelSelection> for Model {
+    fn eq(&self, model: &ModelSelection) -> bool {
         model == self
     }
 }
-impl fmt::Display for HarnessModel {
+impl fmt::Display for ModelSelection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
-impl FromStr for HarnessModel {
+impl FromStr for ModelSelection {
     type Err = &'static str;
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         value
@@ -601,7 +528,7 @@ impl FromStr for HarnessModel {
     }
 }
 
-impl Serialize for HarnessModel {
+impl Serialize for ModelSelection {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         if self
             .as_codex()
@@ -612,18 +539,21 @@ impl Serialize for HarnessModel {
         {
             serializer.serialize_str(self.as_str())
         } else {
-            nanocode_types::ModelSelection::new(self.backend.clone().into(), self.model.clone())
-                .serialize(serializer)
+            QualifiedModel {
+                backend: self.backend.clone(),
+                model: self.model.clone(),
+            }
+            .serialize(serializer)
         }
     }
 }
-impl<'de> Deserialize<'de> for HarnessModel {
+impl<'de> Deserialize<'de> for ModelSelection {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
         #[serde(untagged)]
         enum Wire {
             Known(String),
-            Open(nanocode_types::ModelSelection),
+            Open(QualifiedModel),
         }
         match Wire::deserialize(deserializer)? {
             Wire::Known(value) => value.parse().map_err(de::Error::custom),
@@ -636,13 +566,8 @@ impl<'de> Deserialize<'de> for HarnessModel {
     }
 }
 
-impl From<nanocode_types::ModelSelection> for HarnessModel {
-    fn from(value: nanocode_types::ModelSelection) -> Self {
-        Self::new(value.backend, value.model)
-    }
-}
-impl From<HarnessModel> for nanocode_types::ModelSelection {
-    fn from(value: HarnessModel) -> Self {
-        Self::new(value.backend.into(), value.model)
-    }
+#[derive(Serialize, Deserialize)]
+struct QualifiedModel {
+    backend: BackendId,
+    model: String,
 }

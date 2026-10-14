@@ -1,9 +1,9 @@
-// Authority-bearing host glue only: all OAuth transitions are Rust-owned.
-// Neither this bridge nor its private results belong in session/tool/model state.
+
+
 const hosts = new Map();
 const subscriptions = new WeakSet();
 
-/** Brand check for an open handle returned by ClaudeSubscription.open(). */
+
 export function isClaudeSubscription(value) { return subscriptions.has(value); }
 const MAX_BYTES = 64 * 1024;
 const TOKEN = 'https://platform.claude.com/v1/oauth/token';
@@ -33,7 +33,7 @@ export async function openSubscription(options, openRaw, { replaceHost = false }
         return JSON.parse(await call('completeLogin', code));
       },
       status: async () => JSON.parse(await call('status')),
-      // PRIVATE outbound capability; no public account endpoint may return this.
+
       credential: async () => JSON.parse(await call('credential')),
       recover: async (rejectedHeaders) => call('recover', JSON.stringify(rejectedHeaders)),
       logout: async () => call('logout'),
@@ -63,7 +63,7 @@ const bridge = Object.freeze({
     let timer;
     const abort = new Promise((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error('Claude HTTP deadline')); }, input.timeoutMillis); });
     try {
-      // No retries, no redirects: an uncertain token POST is fenced in Rust CAS.
+
       return await Promise.race([abort, (async () => {
         const response = await host.fetch(input.url, { method: input.method, headers: input.headers,
           ...(input.method === 'POST' ? { body: input.body } : {}), redirect: 'manual', signal: controller.signal });

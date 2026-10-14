@@ -1,10 +1,10 @@
-use nanocode_code_mode::contract::{ToolOutputBody, ToolOutputContent};
 use crate::client::{
     Prompt, PromptMessageRole,
     responses::{
         ContentItem, FunctionOutputBody, FunctionOutputContent, MessageRole, ResponseItem,
     },
 };
+use nanocode_code_mode::contract::{ToolOutputBody, ToolOutputContent};
 use serde_json::Value;
 
 use super::context::ContextSnapshot;
@@ -67,8 +67,6 @@ pub(in crate::model) fn developer_context() -> ResponseItem {
 fn permissions_instructions() -> String {
     #[cfg(not(target_family = "wasm"))]
     {
-        // This native runtime enforces full access, networking, and no escalation.
-        // Keep the bundled upstream sections exact; hosted WASM uses host facts.
         let sandbox = include_str!("prompts/danger_full_access.md")
             .replace("{{ network_access }}", "enabled");
         format!(
@@ -78,8 +76,6 @@ fn permissions_instructions() -> String {
     }
     #[cfg(target_family = "wasm")]
     {
-        // WASM delegates execution to a host whose grant can vary per tool and
-        // hand. It cannot truthfully manufacture a global full-access profile.
         "<host_execution_context>\nExecution permissions are supplied and enforced by the host for each tool and selected environment. The embedded runtime does not grant filesystem, network, or escalation access.\n</host_execution_context>".to_owned()
     }
 }

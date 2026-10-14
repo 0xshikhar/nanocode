@@ -1,5 +1,3 @@
-//! Prompt image preparation and model-output image normalization.
-
 use std::{
     borrow::Cow,
     collections::{HashMap, VecDeque},
@@ -31,10 +29,7 @@ const REMOTE_IMAGE_URL_PLACEHOLDER: &str =
 const DATA_URL_PREFIX: &str = "data:";
 const PROMPT_IMAGE_PATCH_SIZE: u32 = 32;
 const MAX_PROMPT_IMAGE_INPUT_BYTES: usize = 1024 * 1024 * 1024;
-// Pixel buffers expand independently of compressed file size. Keep ordinary
-// 12 MP RGB photos usable in Workers, but reject larger decodes before
-// allocating their pixels. RGBA needs more headroom for source/destination
-// buffers and serialized tool results. Native hosts retain the usual budget.
+
 #[cfg(target_family = "wasm")]
 const MAX_PROMPT_IMAGE_DECODE_BYTES: u64 = 40 * 1024 * 1024;
 #[cfg(not(target_family = "wasm"))]
@@ -161,10 +156,6 @@ impl ImagePreparationError {
     }
 }
 
-/// Validates, normalizes, and bounds images returned by a tool.
-///
-/// Unsupported or failed images become model-visible text placeholders. CPU
-/// image work runs on the blocking pool on native targets and inline on WASM.
 #[allow(
     clippy::unused_async,
     reason = "WASM prepares images inline without a blocking pool"
@@ -211,8 +202,6 @@ pub async fn prepare_output_images(output: &mut ToolOutputBody) {
     }
 }
 
-/// Prepares reconstructed history with the same decoder and limits as fresh images.
-/// Returns whether any image was replaced or normalized; item order is preserved.
 pub fn prepare_history_images(items: &mut [nanocode_types::responses::ResponseItem]) -> bool {
     use nanocode_types::responses::{FunctionOutputBody, FunctionOutputContent, ResponseItem};
     let mut changed = false;
@@ -264,10 +253,6 @@ pub fn prepare_history_images(items: &mut [nanocode_types::responses::ResponseIt
     changed
 }
 
-/// Converts public prompt input into provider-ready typed content.
-///
-/// Local or data-URL images are validated and resized according to their detail
-/// policy. Audio input is retained as an explicit placeholder until supported.
 #[allow(
     clippy::unused_async,
     reason = "WASM prepares images inline without a blocking pool"
@@ -458,13 +443,6 @@ fn prepare_image(image_url: &mut String, detail: ImageDetail) -> Result<(), Imag
     Ok(())
 }
 
-/// Prepares inline base64 image payloads at original detail, additionally
-/// bounded by `max_dimension` on either edge.
-///
-/// Each result is the prepared base64 data with its detected MIME type, or a
-/// model-visible omission message for an image that could not be processed.
-/// Decode budgets and the cache are shared with prompt and tool images. CPU
-/// image work runs on the blocking pool on native targets and inline on WASM.
 #[allow(
     clippy::unused_async,
     reason = "WASM prepares images inline without a blocking pool"
@@ -645,9 +623,6 @@ fn load_for_prompt_bytes(
             encode_image(&dynamic, ImageFormat::Png, metadata)?
         }
     } else {
-        // Triangle resize constructs an input-width x output-height RGBA-f32
-        // intermediate: about 170 MiB for an ordinary 12 MP original-detail
-        // photo. Area downsampling needs only source and destination pixels.
         let resized = dynamic.thumbnail_exact(target_width, target_height);
         drop(dynamic);
         encode_image(
@@ -665,7 +640,7 @@ fn load_for_prompt_bytes(
 }
 
 #[cfg(not(target_family = "wasm"))]
-/// Encodes supplied image bytes using the selected prompt detail limits.
+
 pub fn load_for_prompt_data_url(
     path: &Path,
     file_bytes: Vec<u8>,
@@ -725,8 +700,6 @@ fn prompt_image_dimensions_fit(width: u32, height: u32, limits: PromptImageResiz
         && patch_count <= u64::from(limits.max_patches)
 }
 
-// Both callers pass a positive u32 dimension multiplied by a scale in 0..=1,
-// so these conversions are bounded and cannot lose a sign or overflow u32.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn rounded_dimension(value: f64) -> u32 {
     (value.round() as u32).max(1)
@@ -781,8 +754,6 @@ fn encode_image(
     })
 }
 
-// Keep already-supported 8-bit buffers borrowed. Converting a 10 MP RGB
-// result to owned RGBA adds a 40 MiB allocation at the encoder boundary.
 fn rgb_or_rgba8_bytes(image: &DynamicImage) -> (Cow<'_, [u8]>, ColorType) {
     match image.color() {
         color @ (ColorType::Rgb8 | ColorType::Rgba8) => (Cow::Borrowed(image.as_bytes()), color),

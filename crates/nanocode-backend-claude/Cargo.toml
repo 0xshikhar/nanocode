@@ -12,7 +12,7 @@ description = "Typed Anthropic Messages protocol and streaming transport"
 [features]
 default = []
 tools = ["dep:nanocode-claude-tools", "nanocode-code-mode/code-mode"]
-# Compatibility alias for existing callers.
+
 workspace-files = ["tools"]
 
 [dependencies]
@@ -43,7 +43,6 @@ thiserror.workspace = true
 libc.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-nanocode-rollout.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 [target.'cfg(target_family = "wasm")'.dependencies]

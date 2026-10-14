@@ -25,7 +25,7 @@ const properties = {
   nocache: { type: "boolean", description: "Bypass Nanocodex's one-hour public-data cache." },
 };
 
-/** Shared validation for the native tool and the Worker HTTP boundary. */
+
 export function parseXRequest(input) {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new TypeError("X request must be an object");
   const value = {};

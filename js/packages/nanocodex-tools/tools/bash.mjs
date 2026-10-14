@@ -10,9 +10,9 @@ const OUTPUT_TRUNCATION_NOTICE = "\n[output truncated by exec_command]";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-// Resource ceilings are defense in depth, not a timer-based CPU sandbox.
-// Optimized commands yield inside their loops; synchronous fallback work is
-// admitted before it enters the bundled interpreter's regex engine.
+
+
+
 const DEFAULT_EXECUTION_LIMITS = Object.freeze({
   maxSourceBytes: 1024 * 1024, maxExecDepth: 64, maxCallDepth: 64,
   maxCommandCount: 10_000, maxLoopIterations: 100_000,
@@ -38,9 +38,9 @@ const DEFAULT_INTERPRETER_SPECIFIER = "just-bash/browser";
 
 const DEVICES = new Set(["/dev/full", "/dev/null", "/dev/stderr", "/dev/stdout"]);
 
-// just-bash@3.4.0's built-in command registry (without the conditional curl
-// command). The parity test compares this manifest with Bash.commands so an
-// upstream dependency change cannot silently alter the advertised tool surface.
+
+
+
 const BUILTIN_COMMANDS = Object.freeze(
   "alias awk base64 basename bash cat chmod clear column comm cp cut date diff dirname du echo egrep env expand expr false fgrep file find fold grep gunzip gzip head help history hostname html-to-markdown join jq ln ls md5sum mkdir mv nl od paste printenv printf pwd readlink rev rg rm rmdir sed seq sh sha1sum sha256sum sleep sort split stat strings tac tail tee time timeout touch tr tree true unalias unexpand uniq wc which whoami xargs zcat".split(" "),
 );
@@ -59,8 +59,8 @@ export async function justBash(options) {
     ? undefined : positiveInteger(options.maxEntries, undefined, "maxEntries");
   const maxOutputTokens = positiveInteger(options.maxOutputTokens, undefined, "maxOutputTokens");
   const shellFilesystem = new WorkspaceShellFileSystem(options.filesystem, maxEntries, options.executionLimits?.maxInputBytes ?? DEFAULT_EXECUTION_LIMITS.maxInputBytes);
-  // Shared workspaces refresh before every command. Opening here duplicates
-  // the first refresh and puts a remote storage listing on chat-only startup.
+
+
   if (!options.refreshFilesystemBeforeExec) await shellFilesystem.open();
   const filesystem = shellFilesystem.workspace();
   const runtime = await createJustBashRuntime({
@@ -104,10 +104,10 @@ export async function justBash(options) {
   return Object.freeze({ ...runtime, filesystem });
 }
 
-/**
- * Constructs the common Just Bash interpreter, execution tool, instructions, and descriptor over
- * a caller-owned Just Bash filesystem adapter. Hosts retain ownership of persistence and locking.
- */
+
+
+
+
 export async function createJustBashRuntime(options) {
   if (!options || typeof options !== "object" || Array.isArray(options)) {
     throw new TypeError("Just Bash runtime options must be an object");
@@ -135,9 +135,9 @@ export async function createJustBashRuntime(options) {
     throw new RangeError("defaultMaxOutputTokens cannot exceed maxOutputTokens");
   }
   const executionLimits = Object.freeze({ ...DEFAULT_EXECUTION_LIMITS, ...options.executionLimits });
-  // Do not evaluate just-bash/browser on chat-only managed turns. Initialization
-  // is shared across concurrent first commands; the existing execution tail
-  // still serializes refresh + command execution after initialization.
+
+
+
   const networkEnabled = typeof options.fetch === "function"
     || options.network !== false && options.network !== undefined;
   let bash;
@@ -163,14 +163,14 @@ export async function createJustBashRuntime(options) {
           : { network: options.network }),
       customCommands: [...createSearchCommands({ Bash }), ...customCommands ?? []],
       executionLimitProfile: "normal",
-      // Allocation builders require safe integer capacities, even for tiny output.
+
       executionLimits: {
         ...executionLimits,
         maxOutputSize: Math.min(executionLimits.maxOutputSize, Number.MAX_SAFE_INTEGER),
         maxStringLength: Math.min(executionLimits.maxStringLength, Number.MAX_SAFE_INTEGER),
       },
     });
-    // An abandoned loader must never publish into a later initialization.
+
     if (initialization === attempt) {
       registeredCommands = customCommands;
       bash = loaded;
@@ -178,7 +178,7 @@ export async function createJustBashRuntime(options) {
     return loaded;
     })();
     initialization = attempt;
-    // A failed first import/build must not poison all later shell calls.
+
     void attempt.catch(() => { if (initialization === attempt) initialization = undefined; });
     return awaitInitialization(attempt, signal);
   };
@@ -215,15 +215,15 @@ export async function createJustBashRuntime(options) {
     outputSchema: EXECUTION_OUTPUT_SCHEMA,
     handler(input, context) {
       const admittedAt = now();
-      // Only a bounded first literal token is inspected. No parsing, argument
-      // capture, hashing, or upstream logger (which includes source/output).
+
+
       const command = commandFamily(input);
       const emit = (event) => {
         try {
           const pending = options.onExecution?.(Object.freeze({ command, command_scope: "first_literal", ...event }), context);
-          // Observers are observational, including an accidentally async sink.
+
           if (pending && typeof pending.then === "function") void Promise.resolve(pending).catch(() => {});
-        } catch { /* Logging must never alter shell behavior. */ }
+        } catch {   }
       };
       emit({ phase: "queued" });
       const execute = async () => {
@@ -319,8 +319,8 @@ async function executeCommand({
   );
   let result;
   try {
-    // Import and remote metadata are asynchronous host boundaries. Cancellation
-    // can release their waiter; synchronous interpreter work still needs admission.
+
+
     const bash = await initialize(deadline.signal);
     const execute = async () => {
       const binary = binaryEnabled() ? await tryExecuteBinaryCommand({
@@ -365,8 +365,8 @@ async function executeCommand({
   };
 }
 
-// Labels are code-owned constants, never arbitrary executable names. Unknown,
-// dynamic, quoted, assignment-prefixed, or long first words remain "other".
+
+
 const TELEMETRY_COMMANDS = new Set([...BUILTIN_COMMANDS, "curl", "git", "gh", "ssh", "ffmpeg", "ffprobe", "pdftotext"]);
 function commandFamily(input) {
   if (typeof input?.cmd !== "string") return "other";
@@ -374,8 +374,8 @@ function commandFamily(input) {
   return match && TELEMETRY_COMMANDS.has(match[1]) ? match[1] : "other";
 }
 
-// Diagnostics may identify a refused search later in a pipeline. Only this
-// fixed label leaves the bounded inspection; it is best-effort attribution.
+
+
 function admissionCommandLabel(diagnostic) {
   if (typeof diagnostic !== "string") return;
   for (const match of diagnostic.slice(0, 4096).matchAll(/^(?:bash: )?(rg|grep|fgrep|egrep|sed|awk): ([^\r\n]*)/gm)) {
@@ -385,8 +385,8 @@ function admissionCommandLabel(diagnostic) {
 
 function resultCategory(result) {
   if (result.exitCode === 0) return "none";
-  // Inspection stays local and bounded; only the enum is emitted. No error
-  // text or arbitrary error property is passed across the observer boundary.
+
+
   const diagnostic = typeof result.stderr === "string" ? result.stderr.slice(0, 4096) : "";
   if (/search_admission|synchronous regex.*admission|uncertain dynamic regex admission/.test(diagnostic)) return "search_admission";
   if (/limit exceeded|exceeded.*limit|resource limit|size limit|maximum.*exceeded|input ceiling|workspace exceeds/i.test(diagnostic)) return "resource_limit";
@@ -924,9 +924,9 @@ function requiredString(value, name) {
 }
 
 function fsError(code, message) {
-  // just-bash filesystem safety helpers inspect errno text, not only .code.
-  // Preserve both so a missing destination is provable, without treating
-  // permission/unsupported errors as absence or bypassing identity guards.
+
+
+
   return Object.assign(new Error(`${code}: ${message}`), { code });
 }
 
@@ -934,7 +934,7 @@ function now() {
   return globalThis.performance?.now?.() ?? Date.now();
 }
 
-// Only asynchronous host operations use this race. It cannot preempt CPU work.
+
 function abortable(promise, signal) {
   if (!signal) return promise;
   signal.throwIfAborted();

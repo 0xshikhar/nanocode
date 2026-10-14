@@ -1,28 +1,3 @@
-//! This module is responsible for parsing & validating a patch into a list of "hunks".
-//! (It does not attempt to actually check that the patch can be applied to the filesystem.)
-//!
-//! The official Lark grammar for the apply-patch format is:
-//!
-//! start: begin_patch environment_id? hunk+ end_patch
-//! begin_patch: "*** Begin Patch" LF
-//! environment_id: "*** Environment ID: " filename LF
-//! end_patch: "*** End Patch" LF?
-//!
-//! hunk: add_hunk | delete_hunk | update_hunk
-//! add_hunk: "*** Add File: " filename LF add_line+
-//! delete_hunk: "*** Delete File: " filename LF
-//! update_hunk: "*** Update File: " filename LF change_move? change?
-//! filename: /(.+)/
-//! add_line: "+" /(.+)/ LF -> line
-//!
-//! change_move: "*** Move to: " filename LF
-//! change: (change_context | change_line)+ eof_line?
-//! change_context: ("@@" | "@@ " /(.+)/) LF
-//! change_line: ("+" | "-" | " ") /(.+)/ LF
-//! eof_line: "*** End of File" LF
-//!
-//! The parser below is a little more lenient than the explicit spec and allows for
-//! leading/trailing whitespace around patch markers.
 #![allow(
     clippy::doc_markdown,
     clippy::enum_glob_use,
@@ -46,12 +21,6 @@ pub(crate) const EOF_MARKER: &str = "*** End of File";
 pub(crate) const CHANGE_CONTEXT_MARKER: &str = "@@ ";
 pub(crate) const EMPTY_CHANGE_CONTEXT_MARKER: &str = "@@";
 
-/// Currently, the only OpenAI model that knowingly requires lenient parsing is
-/// gpt-4.1. While we could try to require everyone to pass in a strictness
-/// param when invoking apply_patch, it is a pain to thread it through all of
-/// the call sites, so we resign ourselves allowing lenient parsing for all
-/// models. See [`ParseMode::Lenient`] for details on the exceptions we make for
-/// gpt-4.1.
 const PARSE_IN_STRICT_MODE: bool = false;
 
 #[derive(Debug, PartialEq, Error, Clone)]
@@ -77,25 +46,17 @@ pub enum Hunk {
         path: PathBuf,
         move_path: Option<PathBuf>,
 
-        /// Chunks should be in order, i.e. the `change_context` of one chunk
-        /// should occur later in the file than the previous chunk.
         chunks: Vec<UpdateFileChunk>,
     },
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct UpdateFileChunk {
-    /// A single line of context used to narrow down the position of the chunk
-    /// (this is usually a class, method, or function definition.)
     pub change_context: Option<String>,
 
-    /// A contiguous block of lines that should be replaced with `new_lines`.
-    /// `old_lines` must occur strictly after `change_context`.
     pub old_lines: Vec<String>,
     pub new_lines: Vec<String>,
 
-    /// If set to true, `old_lines` must occur at the end of the source file.
-    /// (Tolerance around trailing newlines should be encouraged.)
     pub is_end_of_file: bool,
 }
 
@@ -109,41 +70,8 @@ pub fn parse_patch(patch: &str) -> Result<ApplyPatchArgs, ParseError> {
 }
 
 enum ParseMode {
-    /// Parse the patch text argument as is.
     Strict,
 
-    /// GPT-4.1 is known to formulate the `command` array for the `local_shell`
-    /// tool call for `apply_patch` call using something like the following:
-    ///
-    /// ```json
-    /// [
-    ///   "apply_patch",
-    ///   "<<'EOF'\n*** Begin Patch\n*** Update File: README.md\n@@...\n*** End Patch\nEOF\n",
-    /// ]
-    /// ```
-    ///
-    /// This is a problem because `local_shell` is a bit of a misnomer: the
-    /// `command` is not invoked by passing the arguments to a shell like Bash,
-    /// but are invoked using something akin to `execvpe(3)`.
-    ///
-    /// This is significant in this case because where a shell would interpret
-    /// `<<'EOF'...` as a heredoc and pass the contents via stdin (which is
-    /// fine, as `apply_patch` is specified to read from stdin if no argument is
-    /// passed), `execvpe(3)` interprets the heredoc as a literal string. To get
-    /// the `local_shell` tool to run a command the way shell would, the
-    /// `command` array must be something like:
-    ///
-    /// ```json
-    /// [
-    ///   "bash",
-    ///   "-lc",
-    ///   "apply_patch <<'EOF'\n*** Begin Patch\n*** Update File: README.md\n@@...\n*** End Patch\nEOF\n",
-    /// ]
-    /// ```
-    ///
-    /// In lenient mode, we check if the argument to `apply_patch` starts with
-    /// `<<'EOF'` and ends with `EOF\n`. If so, we strip off these markers,
-    /// trim() the result, and treat what is left as the patch text.
     Lenient,
 }
 
@@ -167,8 +95,6 @@ fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<ApplyPatchArgs, Pars
     })
 }
 
-/// Checks the start and end lines of the patch text for `apply_patch`,
-/// returning an error if they do not match the expected markers.
 fn check_patch_boundaries_strict<'a>(lines: &'a [&'a str]) -> Result<&'a [&'a str], ParseError> {
     let (first_line, last_line) = match lines {
         [] => (None, None),
@@ -179,13 +105,6 @@ fn check_patch_boundaries_strict<'a>(lines: &'a [&'a str]) -> Result<&'a [&'a st
     Ok(lines)
 }
 
-/// If we are in lenient mode, we check if the first line starts with `<<EOF`
-/// (possibly quoted) and the last line ends with `EOF`. There must be at least
-/// 4 lines total because the heredoc markers take up 2 lines and the patch text
-/// must have at least 2 lines.
-///
-/// If successful, returns the lines of the patch text that contain the patch
-/// contents, excluding the heredoc markers.
 fn check_patch_boundaries_lenient<'a>(
     original_lines: &'a [&'a str],
 ) -> Result<&'a [&'a str], ParseError> {

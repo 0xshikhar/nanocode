@@ -37,37 +37,37 @@ export const HOSTED_MACHINE_TOOL_NAMES = Object.freeze([
   "mcp__cua_repl__js_reset",
 ] as const);
 const MACHINE_TOOL_NAMES: ReadonlySet<string> = new Set(HOSTED_MACHINE_TOOL_NAMES);
-// Older attachments and persisted catalogs must not restore hosted browser tools.
+
 function disabledBrowserTool(name: string): boolean {
   return name === "browser_execute" || name.startsWith("browser_vault_");
 }
 const encoder = new TextEncoder();
 
-/**
- * Normalized outcomes always begin with {"status": and late receipts with
- * {"type":"result", so this reserved prefix can never be a retained outcome.
- */
+
+
+
+
 const ARCHIVE_REFERENCE_PREFIX = '{"hosted_tool_archive":';
-/** One in-flight archive write bounds large-result bytes held for storage. */
+
 const ARCHIVE_WRITE_CONCURRENCY = 1;
-/** Received large frames that may wait; more are refused before ACK with a transient close. */
+
 const ARCHIVE_WRITE_WAITERS = 2;
 const ARCHIVE_READ_CONCURRENCY = 1;
 const ARCHIVE_READ_WAITERS = 8;
-/** Archived values keep the remaining row (input, other terminal column) below the 2 MB SQLite row limit. */
+
 const ARCHIVE_ROW_BUDGET_BYTES = 1_800_000;
 const ARCHIVE_ROW_OVERHEAD_BYTES = 4096;
 
 type ArchiveDigest = Readonly<{ sha256: string; utf8Bytes: number }>;
 type ArchiveReference = Readonly<{ version: 1; field: "result" | "receipt"; key: string; sha256: string; utf8_bytes: number }>;
-/** The exact normalized outcome text, plus its archive identity and durable references once written. */
+
 type StoredOutcome = Readonly<{
   text: string;
   archive?: ArchiveDigest;
   references?: Readonly<{ result: string; receipt: string }>;
 }>;
 
-/** Byte-identical to JSON.stringify({ type: "result", outcome }) for the outcome serialized as outcomeText. */
+
 function receiptText(outcomeText: string): string {
   return '{"type":"result","outcome":' + outcomeText + "}";
 }
@@ -88,11 +88,11 @@ function parseArchiveReference(text: string | null | undefined): ArchiveReferenc
       && typeof value.utf8_bytes === "number" && Number.isSafeInteger(value.utf8_bytes) && value.utf8_bytes >= 0) {
       return value as ArchiveReference;
     }
-  } catch { /* A malformed reference never matches and never resolves. */ }
+  } catch {   }
   return undefined;
 }
 
-/** Small row value: archive identity plus the status fields owner statistics read with json_extract. */
+
 function archiveReference(field: "result" | "receipt", key: string, digest: ArchiveDigest, outcome: HostedToolCallOutcome): string {
   const summary: Record<string, unknown> = {
     hosted_tool_archive: { version: 1, field, key, sha256: digest.sha256, utf8_bytes: digest.utf8Bytes },
@@ -108,7 +108,7 @@ function archiveReference(field: "result" | "receipt", key: string, digest: Arch
   return JSON.stringify(summary);
 }
 
-/** UTF-8 length without allocating an encoded copy. */
+
 function utf8Length(text: string): number {
   let bytes = 0;
   for (let index = 0; index < text.length; index++) {
@@ -122,7 +122,7 @@ function utf8Length(text: string): number {
   return bytes;
 }
 
-/** Local archive capacity is exhausted; the frame was not stored or acknowledged. */
+
 class ArchiveBusyError extends Error {
   constructor() { super("Hosted Tools result archive is busy"); }
 }
@@ -131,7 +131,7 @@ class ArchiveSlots {
   #free: number;
   readonly #waiters: (() => void)[] = [];
   constructor(permits: number, readonly maxWaiters: number) { this.#free = permits; }
-  /** Rejects instead of queueing beyond maxWaiters, so waiting large frames stay bounded. */
+
   async acquire(): Promise<void> {
     if (this.#free > 0) { this.#free--; return; }
     if (this.#waiters.length >= this.maxWaiters) throw new ArchiveBusyError();
@@ -143,13 +143,13 @@ class ArchiveSlots {
   }
 }
 
-/**
- * Marks the one case where an attached source is known to be absent before a
- * durable admission. The unified ToolRouter may then select the exact
- * same-name cloud contract. It must never infer this from an outcome message:
- * every other unavailable, cancellation, timeout, and ambiguous outcome is
- * pinned to the attached source and is final.
- */
+
+
+
+
+
+
+
 export const HOSTED_TOOLS_PRE_ADMISSION_UNAVAILABLE = Symbol.for(
   "nanocodex.tool.preDispatchUnavailable",
 );
@@ -179,7 +179,7 @@ export type HostedToolsCallRow = {
   call_id: string;
   session_id: string;
   source_call_id: string;
-  /** Private managed thread correlation; never included in a Hand request. */
+
   thread_id?: string | null;
   turn_id?: string | null;
   host_id: string;
@@ -282,13 +282,13 @@ export type HostedToolsInvokeRequest = Readonly<{
 export type HostedToolsReceiptRequest = Readonly<{
   sessionId: string;
   callId: string;
-  /** Exposed definition name, or the canonical machine primitive when machineId is set. */
+
   name: string;
   machineId?: string;
   waitMs: number;
-  /** The caller's pinned route token; must equal the route the row was admitted under. */
+
   routeToken: string;
-  /** The caller's authorization context; receipts are never broader than invocation. */
+
   context?: HostedToolsAuthorizationContext;
 }>;
 
@@ -340,9 +340,9 @@ export type HostedToolsCatalogValidator = (
 export type HostedToolsCodeTool = Readonly<{
   name: string;
   parallelSafe: boolean;
-  /** The admitted provider declaration, before namespace routing. */
+
   definition?: HostedToolsCodeDefinition;
-  /** Opaque immutable route identity for trusted broker-to-broker relays. */
+
   routeToken?: string;
   processSessionKey?: string;
   endTurn?(sessionId: string, turnId: string, event: "Stop" | "Interrupt" | "SubagentStop"): Promise<void>;
@@ -366,11 +366,11 @@ export interface HostedToolsDynamicProvider {
   endTurn?(sessionId: string, turnId: string, event: "Stop" | "Interrupt" | "SubagentStop"): Promise<void>;
   definitions(): readonly HostedToolsCodeDefinition[];
   resolve(name: string): HostedToolsCodeTool | undefined;
-  /** Installed by the owning ToolRouter to reject non-parity catalogs before ACK. */
+
   setCatalogValidator(validator: HostedToolsCatalogValidator | undefined): void;
 }
 
-/** One synchronous discovery view; never retain it as an authority cache. */
+
 export type HostedToolsCatalogSnapshot = Readonly<{
   machines(): readonly Readonly<{ machine: HostedMachine; online: boolean }>[];
   definitions(): readonly HostedToolsCodeDefinition[];
@@ -382,7 +382,7 @@ export type HostedToolsCatalogSnapshot = Readonly<{
   ): HostedToolsCodeTool | undefined;
 }>;
 
-/** Injectable durable call ledger boundary; the production default is Durable Object SQLite. */
+
 export interface HostedToolsBrokerPersistence {
   initialize(now: number): readonly HostedToolsStateRow[];
   transaction<T>(callback: () => T): T;
@@ -406,28 +406,28 @@ export interface HostedToolsBrokerPersistence {
   markGenerationAmbiguous(leaseId: string, generation: number, resultJson: string, now: number): void;
   activeCallCount(leaseId: string, generation: number): number;
   generationCallCount(leaseId: string, generation: number): number;
-  /**
-   * Required for command recovery; enumerates this generation's unsettled
-   * `dispatched` calls without resending commands. Settled history must stay
-   * in storage: a resumed generation accumulates it for the Hand's lifetime.
-   */
+
+
+
+
+
   generationCalls?(leaseId: string, generation: number): readonly HostedToolsCallRow[];
 }
 
-/**
- * Optional immutable store for terminal outcomes too large for one ledger row.
- * The broker stores the complete normalized outcome bytes here before the
- * compare-and-set that records a small reference, and acknowledges a result
- * only after that commit. Nothing is expired or truncated.
- */
+
+
+
+
+
+
 export interface HostedToolsResultArchive {
-  /** Outcomes whose normalized UTF-8 encoding exceeds this stay out of the row. */
+
   readonly inlineLimitBytes: number;
-  /** Synchronous lowercase hex SHA-256 of exactly these bytes. */
+
   digest(bytes: Uint8Array): string;
-  /** Durably stores exactly these bytes under a content-addressed key and returns it; idempotent for the same content. */
+
   put(callId: string, bytes: Uint8Array, sha256: string): Promise<string>;
-  /** Returns exactly the stored text after verifying its size and SHA-256, or rejects. */
+
   load(key: string, sha256: string, utf8Bytes: number): Promise<string>;
 }
 
@@ -450,7 +450,7 @@ export type HostedToolsCallObservation = Readonly<{
   transport_call_id?: string;
   connection_id?: string;
   lease_id?: string;
-  /** Compatibility field: retained runtime ownership epoch, not a socket counter. */
+
   connection_generation?: number;
   runtime_generation?: number;
   host_connection_id?: string;
@@ -459,7 +459,7 @@ export type HostedToolsCallObservation = Readonly<{
   host_stage?: HostedToolDiagnosticStage;
   host_elapsed_ms?: number;
   reason_code?: HostedToolsDiagnosticReason;
-  /** Fixed schema field names only; never retained/proposed values. */
+
   conflict_fields?: readonly ImmutableCallField[];
   outcome?: HostedToolCallOutcome["status"] | "failed";
   success?: boolean;
@@ -467,23 +467,23 @@ export type HostedToolsCallObservation = Readonly<{
   admission_ms?: number;
   roundtrip_ms?: number;
   settlement_ms?: number;
-  /** Broker handler entry is not a transport-level arrival timestamp. */
+
   dispatch_to_message_ms?: number;
   frame_decode_ms?: number;
   lease_validation_ms?: number;
   message_to_handler_ms?: number;
   host_timing?: HostedToolReceiptTiming;
-  /** Combined transit, return, and unmeasured socket/serialization overhead. */
+
   transit_return_overhead_ms?: number;
 }>;
 
 export type HostedToolsConnectionObservation = Readonly<{
   stage: "accepted" | "ready" | "resumed" | "closed" | "error" | "replaced" | "draining" | "lease_expired" | "fenced" | "heartbeat" | "snapshot";
   reason_code?: HostedToolsDiagnosticReason;
-  /** Broker-generated socket identity; host_connection_id identifies the client attempt. */
+
   connection_id?: string;
   lease_id?: string;
-  /** Compatibility field: retained runtime ownership epoch, not a socket counter. */
+
   connection_generation?: number;
   runtime_generation?: number;
   host_connection_id?: string;
@@ -502,33 +502,33 @@ export type HostedToolsConnectionObservation = Readonly<{
 export type HostedToolsBrokerCoreOptions = Readonly<{
   now?: () => number;
   randomUUID?: () => string;
-  /** Optional operator resource limit; ordinary attachments have no fixed call cap. */
+
   maxInFlight?: number;
   maxCallsPerGeneration?: number;
-  /**
-   * Bounded wait for a recoverable route's exact lease/generation to resume
-   * after transient transport loss before reporting a new call unavailable.
-   * Only never-admitted calls wait; nothing is dispatched until the same
-   * runtime epoch is routable again. Defaults to 0 (report immediately).
-   */
+
+
+
+
+
+
   reconnectAdmissionWaitMs?: number;
   persistence: HostedToolsBrokerPersistence;
-  /** Complete storage for large terminal outcomes; absent keeps every outcome inline. */
+
   resultArchive?: HostedToolsResultArchive;
-  /** Resume exact live hibernated sockets instead of forcing every route to reconnect. */
+
   resumeRetainedSockets?: boolean;
-  /** Correlated call boundaries only; inputs, outputs, and credentials are omitted. */
+
   onCallTiming?: (timing: Readonly<{ session_id: string; source_call_id: string; transport_call_id: string; admission_ms: number; roundtrip_ms: number; settlement_ms: number }>) => void;
   onCallObservation?: (observation: HostedToolsCallObservation) => void;
   onConnectionObservation?: (observation: HostedToolsConnectionObservation) => void;
-  /** @deprecated Control frames are handled by the WebSocket platform. */
+
   heartbeatObservationIntervalMs?: number;
   onCatalogChanged?: (definitions: readonly HostedToolsProviderDefinition[]) => void;
-  /**
-   * Admit a fully validated candidate before it becomes visible. A returned
-   * synchronous guard must still authorize publication immediately before ready;
-   * owners can use it to fence an admission superseded during asynchronous I/O.
-   */
+
+
+
+
+
   beforeCatalogPublish?: (candidate: Readonly<{
     routeId: string;
     attachmentId: string | undefined;
@@ -563,7 +563,7 @@ export type HostedToolsLeasedAttachmentRenewal = Readonly<{
   renewalToken: string;
 }>;
 
-/** Owns one reverse-tool attachment over an injected socket and durable ledger. */
+
 export class HostedToolsBrokerCore {
   readonly #provider: HostedToolsDynamicProvider;
   readonly #pending = new Map<string, PendingCall>();
@@ -581,7 +581,7 @@ export class HostedToolsBrokerCore {
   readonly #archiveWrites = new Map<string, Promise<string>>();
   readonly #archiveWriteSlots = new ArchiveSlots(ARCHIVE_WRITE_CONCURRENCY, ARCHIVE_WRITE_WAITERS);
   readonly #archiveReadSlots = new ArchiveSlots(ARCHIVE_READ_CONCURRENCY, ARCHIVE_READ_WAITERS);
-  /** Call IDs whose result frames were refused for local archive capacity, oldest first. */
+
   readonly #deferredResults = new Map<string, HostedToolsSocket>();
   readonly #onCatalogChanged: ((definitions: readonly HostedToolsProviderDefinition[]) => void) | undefined;
   readonly #beforeCatalogPublish: HostedToolsBrokerCoreOptions["beforeCatalogPublish"];
@@ -630,8 +630,8 @@ export class HostedToolsBrokerCore {
     const now = this.#now();
     const sockets = this.context.sockets();
     const retainHosts = options.resumeRetainedSockets === true && sockets.length > 0;
-    // Initialization settles unproven legacy calls. Capture their public correlation
-    // before that transition; a fresh database can legitimately have no tables.
+
+
     const interruptedCalls: HostedToolsCallRow[] = [];
     if (this.#onCallObservation && this.#persistence.generationCalls) {
       try {
@@ -640,7 +640,7 @@ export class HostedToolsBrokerCore {
           interruptedCalls.push(...this.#persistence.generationCalls(state.lease_id, state.generation)
             .filter(row => row.state === "dispatched"));
         }
-      } catch { /* First initialization or an unavailable diagnostic read. */ }
+      } catch {   }
     }
     const retained = this.#persistence.initialize(now);
     for (const row of interruptedCalls) {
@@ -679,9 +679,9 @@ export class HostedToolsBrokerCore {
     }
     this.#provider = Object.freeze({
       endTurn: (session: string, turn: string, event: "Stop" | "Interrupt" | "SubagentStop") => this.endTurn(session, turn, event),
-      // ToolRouter owns the one aggregate tool_search. This provider exposes
-      // only the current attached definitions, which stay deferred and can be
-      // overlaid onto exact cloud contracts by that router.
+
+
+
       definitions: () => {
         return this.#publicCatalogBindings()
           .filter((binding) => this.#entryAllowed(
@@ -709,7 +709,7 @@ export class HostedToolsBrokerCore {
     });
   }
 
-  /** Trusted owner HTTP facade. Retains the same lease, deadline, schema and result-conflict checks as WebSocket delivery. */
+
   completeHttpResult(callId: string, outcome: unknown): void {
     const frame = parseHostedToolsHostFrame(JSON.stringify({ type: "result", call_id: callId, outcome }));
     if (frame.type !== "result") throw new HostedToolsProtocolError("invalid_result", "expected a tool result");
@@ -740,12 +740,12 @@ export class HostedToolsBrokerCore {
     for (const state of this.#persistence.states()) this.#retireState(state, reason, "owner_shutdown");
   }
 
-  /**
-   * Retire the current route without prohibiting a later ownership admission.
-   * Dispatched calls remain ambiguous in the ledger; they are never reassigned
-   * to a successor. Owners must separately fence pending asynchronous admissions
-   * with the beforeCatalogPublish guard, including routes not yet published.
-   */
+
+
+
+
+
+
   retireRoute(routeId: string, reason: string, closeCode: 1000 | 1008 | 1012 = 1008): boolean {
     const state = this.#persistence.state(routeId) ?? emptyState(routeId);
     const active = state.lease_id !== null;
@@ -754,8 +754,8 @@ export class HostedToolsBrokerCore {
       if (socket) this.#fence(socket, reason, closeCode, "route_revoked");
       else this.#retireState(state, reason, "route_revoked");
     }
-    // clearHost retains discovery metadata for transient reconnects. Explicit
-    // retirement must remove it even when the retained route has no live lease.
+
+
     const retired = this.#persistence.state(routeId) ?? state;
     const catalogChanged = retired.catalog_json !== null || retired.machines_json !== null;
     this.#persistence.replaceHost({
@@ -770,12 +770,12 @@ export class HostedToolsBrokerCore {
     return active;
   }
 
-  /** Permanently revoke this exact route, including pending admissions. */
+
   revokeRoute(routeId: string, reason: string): boolean {
     const active = this.retireRoute(routeId, reason);
-    // Revocation can race ahead of catalog publication in another Durable
-    // Object. Retain an exact route tombstone so a previously validated socket
-    // cannot publish after its control-plane fence has completed.
+
+
+
     const retired = this.#persistence.state(routeId) ?? emptyState(routeId);
     this.#persistence.replaceHost({
       ...retired,
@@ -792,7 +792,7 @@ export class HostedToolsBrokerCore {
 
   hasPendingCalls(): boolean { return this.#pending.size > 0; }
 
-  /** Safe current liveness without renewing leases or producing journal events. */
+
   connectionDiagnostics(): readonly HostedToolsConnectionObservation[] {
     const observations: HostedToolsConnectionObservation[] = [];
     for (const socket of this.context.sockets()) {
@@ -807,19 +807,19 @@ export class HostedToolsBrokerCore {
             && state.lease_id === attachment.leaseId && state.generation === attachment.generation
             && state.lease_expires_at > this.#now(),
         }, state));
-      } catch { /* An unavailable diagnostic read must not change a connection. */ }
+      } catch {   }
     }
     return Object.freeze(observations);
   }
 
   provider(): HostedToolsDynamicProvider { return this.#provider; }
 
-  /**
-   * Materialize and index the admitted catalog once for a synchronous request.
-   * Admission still rechecks grants, durable ownership, renewal and generation
-   * in the prepared handler; the view is discovery, not cached authority.
-   */
-  /** Names reserved by live attachments and retained native catalogs, without discovery filtering. */
+
+
+
+
+
+
   reservedToolNames(): readonly string[] {
     return this.#publicCatalogBindings(undefined, true).map(binding => binding.entry.definition.name);
   }
@@ -838,9 +838,9 @@ export class HostedToolsBrokerCore {
           tools = new Map();
           machineBindings.set(binding.machine.id, tools);
         }
-        // Match the existing sorted find-first machine lookup. Ambiguous
-        // exposed names were already removed by #catalogBindings, not hidden
-        // by a last-writer-wins index.
+
+
+
         if (!tools.has(binding.wireName)) tools.set(binding.wireName, binding);
       }
     }
@@ -856,9 +856,9 @@ export class HostedToolsBrokerCore {
     };
     return Object.freeze({
       machines: () => {
-        // Keep retained identity (including duplicate-ID fail-closed behavior)
-        // separate from live dispatch ownership. Scan routes once, not once
-        // per retained machine. Nothing escapes into a persistent cache.
+
+
+
         const machines = this.machines();
         if (machines.length === 0) return [];
         const onlineIds = new Set<string>();
@@ -885,7 +885,7 @@ export class HostedToolsBrokerCore {
     });
   }
 
-  /** Resolves one canonical machine primitive against its exact admitted attachment generation. */
+
   machineTool(
     machineId: string,
     name: HostedMachineToolName,
@@ -906,7 +906,7 @@ export class HostedToolsBrokerCore {
     return this.#codeTool(name, prepared);
   }
 
-  /** Resolves one canonical machine primitive only on the named durable route. */
+
   machineToolOnRoute(
     routeId: string,
     machineId: string,
@@ -930,7 +930,7 @@ export class HostedToolsBrokerCore {
     return this.#codeTool(name, prepared);
   }
 
-  /** Returns one live machine only when its exact durable route still owns it. */
+
   machineOnRoute(routeId: string, machineId: string): HostedMachine | undefined {
     const state = this.#persistence.state(routeId);
     if (state === undefined) return undefined;
@@ -941,12 +941,12 @@ export class HostedToolsBrokerCore {
     return attachment?.machines?.find(({ id }) => id === machineId);
   }
 
-  /** Transport presence is separate from the retained machine identity. */
+
   machineOnline(machineId: string): boolean {
     return this.#sortedStates().some((state) => this.machineOnRoute(state.route_id, machineId) !== undefined);
   }
 
-  /** Machine identity survives transport loss; dispatch still requires its live route. */
+
   machines(): readonly HostedMachine[] {
     const machines = new Map<string, HostedMachine>();
     for (const state of this.#sortedStates()) {
@@ -1055,7 +1055,7 @@ export class HostedToolsBrokerCore {
     closeSocket(socket, 1011, "Hosted Tools WebSocket failed");
   }
 
-  /** May be called by an owning alarm; normal reads and call timers also expire leases lazily. */
+
   expire(): void {
     for (const state of this.#persistence.states()) {
       if (!state.lease_id || state.lease_expires_at > this.#now()) continue;
@@ -1072,23 +1072,23 @@ export class HostedToolsBrokerCore {
     const key = JSON.stringify([sessionId, turnId]);
     const sockets = this.#turnSockets.get(key) ?? new Set<HostedToolsSocket>();
     this.#turnSockets.delete(key);
-    // Only the original live socket may receive cleanup; a restored broker has
-    // no such ownership and must not reconstruct it from a reconnectable ledger.
+
+
     for (const socket of sockets) {
       const attachment = this.#attachment(socket);
-      // Never move cleanup to a replacement runtime, reconnect, or unadvertised host.
+
       if (!attachment?.active || !attachment.turnLifecycle || socket.readyState !== OPEN) continue;
       this.#send(socket, { type: "turn_ended", session_id: sessionId, turn_id: turnId, hook_event_name: hookEventName });
     }
   }
 
-  /**
-   * Receipt-only reconciliation for one exact source call identity. This is a
-   * ledger lookup: it never admits, dispatches, cancels or repins a call, so a
-   * missing row stays missing. A dispatched call is awaited only through its
-   * original pinned lease/generation/runtime, bounded by the caller's wait and
-   * the call's original admitted deadline.
-   */
+
+
+
+
+
+
+
   async receipt(request: HostedToolsReceiptRequest): Promise<HostedToolsReceipt> {
     for (let attempt = 0; ; attempt++) {
       let authority = this.#receiptAuthority(request);
@@ -1097,10 +1097,10 @@ export class HostedToolsBrokerCore {
       const before = authority.row;
       const retained = before.state === "ambiguous" && before.receipt_json ? before.receipt_json : before.result_json;
       if (!isArchiveReference(retained)) return this.#settleReceipt(request, before, authority.binding);
-      // The row stays retained: an unreadable archive is unresolved, never missing or re-run.
+
       const archived = await this.#loadArchived(retained);
       if (!archived) return { state: "unresolved" };
-      // Authority, routing and the retained row are rechecked after the asynchronous read.
+
       authority = this.#receiptAuthority(request);
       if (!authority || authority === "missing") return { state: "unresolved" };
       const after = authority.row;
@@ -1120,16 +1120,16 @@ export class HostedToolsBrokerCore {
       ? candidate.machine === undefined && candidate.entry.definition.name === request.name
       : candidate.machine?.id === request.machineId && candidate.wireName === request.name)
       && candidate.hostId === row.host_id);
-    // Authorize and attribute only from the row's own pinned route. A
-    // reconnect of the same Hand runtime may carry it under a later
-    // generation; a replacement runtime never resolves this receipt.
+
+
+
     const exact = candidates.find(candidate => candidate.leaseId === row.lease_id && candidate.generation === row.generation);
     const binding = exact ?? (row.host_runtime_id
       ? candidates.find(candidate => candidate.runtimeId === row.host_runtime_id) : undefined);
     if (!binding || row.name !== binding.wireName
       || (request.machineId !== undefined && row.hand_id !== request.machineId)
       || request.routeToken !== JSON.stringify(row.name === "write_stdin" && binding.machine && row.host_runtime_id
-        // The caller must present the route this exact row was admitted under.
+
         ? [binding.routeId, "process-runtime", row.host_runtime_id, row.name]
         : [binding.routeId, row.generation, row.lease_id, row.name])
       || !this.#entryAllowed(binding.entry, binding.connectGrantId, binding.appToolCatalogDigest, request.context)) {
@@ -1146,13 +1146,13 @@ export class HostedToolsBrokerCore {
   ): Promise<HostedToolsReceipt> {
     this.#observe("receipt_lookup", row);
     let outcome: HostedToolCallOutcome | undefined = archived;
-    if (outcome) { /* verified archived receipt */ }
+    if (outcome) {   }
     else if (row.state === "ambiguous" && row.receipt_json) {
-      // A terminal result that arrived after the deadline is real evidence.
+
       const late = JSON.parse(row.receipt_json) as { outcome?: HostedToolCallOutcome };
       outcome = late.outcome;
     }
-    if (outcome) { /* late receipt */ }
+    if (outcome) {   }
     else if (row.result_json) outcome = JSON.parse(row.result_json) as HostedToolCallOutcome;
     else if (row.state === "dispatched") {
       const owner = this.#stateForLease(row.lease_id, row.generation);
@@ -1160,7 +1160,7 @@ export class HostedToolsBrokerCore {
         ?? (owner && this.#canRecover(owner) && owner.runtime_id === row.host_runtime_id ? this.#restorePending(row) : undefined);
       if (!pending) outcome = hostedToolsAmbiguous("Hosted Tools call has no retained terminal receipt");
       else {
-        // Never attach a signal: a receipt read cannot cancel the call.
+
         const waitMs = Math.max(0, Math.min(request.waitMs, row.deadline_at - this.#now()));
         let timer: ReturnType<typeof setTimeout> | undefined;
         const settled = await Promise.race([
@@ -1178,8 +1178,8 @@ export class HostedToolsBrokerCore {
     const sessionBound = structured !== null && typeof structured === "object" && "session_id" in structured;
     let processRouteToken: string | undefined;
     if (row.name === "exec_command" && request.machineId !== undefined && sessionBound) {
-      // A process session belongs to the runtime that started it. Only bind
-      // the write_stdin route of that exact lease/generation/runtime.
+
+
       const stdin = this.#catalogBindings(undefined, true).find(candidate => candidate.machine?.id === request.machineId
         && candidate.wireName === "write_stdin" && candidate.leaseId === row.lease_id
         && candidate.generation === row.generation && candidate.runtimeId === row.host_runtime_id);
@@ -1198,11 +1198,11 @@ export class HostedToolsBrokerCore {
     return this.cancelDelivery(callId) !== false;
   }
 
-  /**
-   * Requests cancellation and reports how far it got: "sent" when the cancel
-   * frame was written to the live Hand socket, "queued" when it is only
-   * persisted for redelivery once the same runtime reconnects.
-   */
+
+
+
+
+
   cancelDelivery(callId: string): "sent" | "queued" | false {
     const row = this.#persistence.call(callId);
     if (!row || row.state !== "dispatched") return false;
@@ -1246,8 +1246,8 @@ export class HostedToolsBrokerCore {
       lease_validation_ms: Math.max(0, handlerStarted - validationStarted),
       message_to_handler_ms: Math.max(0, handlerStarted - receivedAt) };
     if (frame.type === "ping") {
-      // Older publishers do not advertise command recovery and still expect
-      // JSON pongs. Preserve ownership/authority checks without a liveness TTL.
+
+
       this.#activeAttachment(socket);
       this.#send(socket, { type: "pong", nonce: frame.nonce });
     } else if (frame.type === "status") this.#recoverStatus(socket, frame);
@@ -1267,8 +1267,8 @@ export class HostedToolsBrokerCore {
     if (!row || row.lease_id !== attachment.leaseId || row.generation !== attachment.generation) {
       throw new HostedToolsProtocolError("unknown_call", "diagnostic does not match an admitted pinned call");
     }
-    // A result can settle before queued progress arrives. Same-generation terminal
-    // rows retain identity and remain observable without changing their outcome.
+
+
     this.#observe("host_progress", row, { host_stage: frame.stage, host_elapsed_ms: frame.elapsed_ms,
       ...this.#frameObservation(frame.call_id, timing) });
   }
@@ -1399,7 +1399,7 @@ export class HostedToolsBrokerCore {
     socket: HostedToolsSocket,
     frame: Extract<HostedToolsHostFrame, { type: "catalog" }>,
   ): Promise<void> {
-    // Keep exec and CUA available when an older Hand still advertises browser tools.
+
     frame = { ...frame, tools: frame.tools.filter((entry) => !disabledBrowserTool(entry.definition.name)) };
     const initial = this.#attachment(socket);
     if (!initial || initial.leaseId || initial.generation !== undefined || initial.active) {
@@ -1604,8 +1604,8 @@ export class HostedToolsBrokerCore {
         );
       }
     }
-    // Only this route's ownership matters. An unrelated attachment may have
-    // retired while admission awaited its owner directory.
+
+
     const current = this.#persistence.state(routeId) ?? emptyState(routeId);
     if ((current.lease_id === null && current.lease_expires_at === REVOKED_ROUTE_LEASE_EXPIRES_AT)
       || current.lease_id !== state.lease_id || current.generation !== state.generation
@@ -1627,8 +1627,8 @@ export class HostedToolsBrokerCore {
       const old = this.#attachment(existing);
       return existing !== socket && old?.active && old.leaseId === state.lease_id && old.generation === state.generation;
     });
-    // Publications are queued within this broker, but admission may await an
-    // external owner. Recheck exposed names before committing that admission.
+
+
     const currentExposedNames = new Set(this.#publicCatalogBindings(routeId, true)
       .map(binding => binding.entry.definition.name));
     const conflictingDefinition = candidateDefinitions.find(entry => currentExposedNames.has(entry.definition.name));
@@ -1638,11 +1638,11 @@ export class HostedToolsBrokerCore {
         `tool name ${conflictingDefinition.definition.name} is already exposed by another attachment`,
       );
     }
-    // No asynchronous work may occur between this owner fence and publication.
+
     if (commitGuard && !commitGuard()) {
       throw new HostedToolsProtocolError("route_revoked", "tool attachment admission was superseded before publication");
     }
-    // Fence the physical attachment before ready; the ownership epoch may stay unchanged.
+
     for (const old of oldSockets) this.context.writeAttachment(old, { ...this.#attachment(old), active: false });
     try { this.#send(socket, { type: "ready" }); }
     catch (error) {
@@ -1704,7 +1704,7 @@ export class HostedToolsBrokerCore {
       throw new HostedToolsProtocolError("already_draining", "socket is already draining");
     }
     const state = this.#persistence.state(attachment.routeId!)!;
-    // Visibility is removed before the peer is told that draining began.
+
     this.#persistence.clearCatalog(state.lease_id!, state.generation);
     this.context.writeAttachment(
       socket,
@@ -1735,8 +1735,8 @@ export class HostedToolsBrokerCore {
       throw new HostedToolsProtocolError("unknown_call", "result does not match an admitted pinned call");
     }
     const stored = prepared ?? this.#storedOutcome(frame.outcome, row);
-    // An archived outcome records its small reference only after its complete
-    // bytes are durable; every check below then runs again (see #archiveThenComplete).
+
+
     const archiveFirst = (): Promise<void> | undefined => {
       if (!stored.archive || stored.references) return undefined;
       if (!allowAsync) throw new HostedToolsProtocolError("broker_failure", "an archived Hosted Tools result requires the WebSocket result path");
@@ -1813,11 +1813,11 @@ export class HostedToolsBrokerCore {
         this.#onCallTiming({ session_id: row.session_id, source_call_id: row.source_call_id,
           transport_call_id: row.call_id, admission_ms: pending.dispatchedAt - pending.receivedAt,
           roundtrip_ms: resultAt - pending.dispatchedAt, settlement_ms: performance.now() - resultAt });
-      } catch { /* Diagnostics must never change a durable call outcome. */ }
+      } catch {   }
     }
   }
 
-  /** Normalized outcome text; large outcomes also carry the digest of their exact UTF-8 bytes. */
+
   #storedOutcome(outcome: HostedToolCallOutcome, row: HostedToolsCallRow): StoredOutcome {
     const text = JSON.stringify(outcome);
     const archive = this.#resultArchive;
@@ -1835,11 +1835,11 @@ export class HostedToolsBrokerCore {
     return { sha256: archive.digest(bytes), utf8Bytes: bytes.byteLength };
   }
 
-  /**
-   * Exact normalized-byte identity: an inline value compares its complete
-   * text; an archive reference compares the field, UTF-8 length and SHA-256
-   * of the candidate's complete normalized bytes.
-   */
+
+
+
+
+
   #sameStored(retained: string | null, stored: StoredOutcome, field: "result" | "receipt"): boolean {
     if (!isArchiveReference(retained)) {
       return retained === (field === "result" ? stored.text : receiptText(stored.text));
@@ -1863,14 +1863,14 @@ export class HostedToolsBrokerCore {
       key = await this.#archiveWrite(frame.call_id, stored.text, digest);
     } catch (error) {
       if (error instanceof ArchiveBusyError && this.#deferArchivedResult(socket, frame.call_id, attachment)) return;
-      // Nothing was recorded or acknowledged. A transient close keeps a
-      // command-recovery epoch, so the same Hand resends this retained result.
+
+
       this.#retire(socket, "Hosted Tools result storage failed: " + errorMessage(error), "result_store_failed");
       closeSocket(socket, 1011, "Hosted Tools result storage failed");
       return;
     }
-    // Ownership, lease, deadline, cancellation and call state may have changed
-    // during the write: re-run every check and the compare-and-set before ACK.
+
+
     const prepared: StoredOutcome = {
       text: stored.text,
       archive: digest,
@@ -1887,13 +1887,13 @@ export class HostedToolsBrokerCore {
     }
   }
 
-  /**
-   * The socket lost ownership while the complete bytes were being stored. It
-   * is fenced exactly as a stale frame would be and receives no ACK. If that
-   * left the pinned call ambiguous without proof, the result authenticated on
-   * its pinned socket is retained as the late receipt instead of being dropped.
-   */
-  /** Commits an archived result for its exact pinned call without acknowledging it. */
+
+
+
+
+
+
+
   #settleReleasedArchive(
     frame: Extract<HostedToolsHostFrame, { type: "result" }>,
     attachment: HostedToolsSocketAttachment,
@@ -1934,15 +1934,15 @@ export class HostedToolsBrokerCore {
     const sameEpoch = !!state && state.lease_id === attachment.leaseId && state.generation === attachment.generation;
     const live = sameEpoch ? this.#socketForState(state) : undefined;
     const unexpired = !!state && sameEpoch && state.lease_expires_at > this.#now();
-    // An expired lease never settles here, even with another live socket: it
-    // follows the fence and late-receipt path below like any expired route.
+
+
     if (unexpired && live !== socket && (live !== undefined || (!!state && this.#canRecover(state)))) {
-      // The epoch outlives this socket: the same runtime resumed it on a newer
-      // socket, or it is an unexpired command-recovery epoch awaiting reconnect.
-      // Retiring here would make that generation ambiguous, so only release the
-      // old socket. The durable result is still committed for its exact pinned
-      // call without an ACK, like a lost acknowledgement: the Hand's resend on
-      // its current socket then matches the retained reference and is acked.
+
+
+
+
+
+
       const current = this.#attachment(socket);
       if (current) this.context.writeAttachment(socket, { ...current, active: false });
       closeSocket(socket, 1012, "Hosted Tools attachment resumed on another socket");
@@ -1956,8 +1956,8 @@ export class HostedToolsBrokerCore {
     if (!row || row.lease_id !== attachment.leaseId || row.generation !== attachment.generation
       || row.host_id !== attachment.sessionId
       || (row.host_runtime_id != null && row.host_runtime_id !== attachment.runtimeId)) return;
-    // Fencing an already inactive socket cannot retire its epoch. Preserve the
-    // authenticated archived evidence even if expiry preceded that retirement.
+
+
     if (expired && row.state === "dispatched") {
       this.#finishAmbiguous(row, "Hosted Tools lease expired before the archived result was recorded", "lease_expired");
     }
@@ -1969,12 +1969,12 @@ export class HostedToolsBrokerCore {
     }
   }
 
-  /**
-   * Local archive backpressure: the frame is dropped without ACK and only its
-   * call ID is kept. The socket and its epoch stay open, so accepted writes
-   * and other calls continue; each freed write slot asks the same live socket
-   * to resend one deferred retained result with a recovery frame.
-   */
+
+
+
+
+
+
   #deferArchivedResult(socket: HostedToolsSocket, callId: string, attachment: HostedToolsSocketAttachment): boolean {
     const state = attachment.routeId === undefined ? undefined : this.#persistence.state(attachment.routeId);
     if (!state || !this.#canRecover(state) || this.#socketForState(state) !== socket) return false;
@@ -1989,8 +1989,8 @@ export class HostedToolsBrokerCore {
       const attachment = this.#attachment(socket);
       const state = attachment?.routeId === undefined ? undefined : this.#persistence.state(attachment.routeId);
       const row = this.#persistence.call(callId);
-      // A reconnect replays every unacknowledged result itself; only the same
-      // live socket's still-unsettled pinned call is asked again.
+
+
       if (!attachment?.active || !state || this.#socketForState(state) !== socket || !row
         || row.lease_id !== attachment.leaseId || row.generation !== attachment.generation
         || !(row.state === "dispatched" || (row.state === "ambiguous" && row.receipt_json === null))) continue;
@@ -2004,7 +2004,7 @@ export class HostedToolsBrokerCore {
     }
   }
 
-  /** Coalesces identical writes; at most ARCHIVE_WRITE_CONCURRENCY encoded payloads exist at once. */
+
   async #archiveWrite(callId: string, text: string, digest: ArchiveDigest): Promise<string> {
     const archive = this.#resultArchive;
     if (!archive) throw new Error("result archive is not configured");
@@ -2027,7 +2027,7 @@ export class HostedToolsBrokerCore {
     finally { if (this.#archiveWrites.get(identity) === write) this.#archiveWrites.delete(identity); }
   }
 
-  /** Verified complete outcome, or undefined when the archive is unavailable, missing or corrupt. */
+
   async #loadArchived(text: string): Promise<HostedToolCallOutcome | undefined> {
     const reference = parseArchiveReference(text);
     const archive = this.#resultArchive;
@@ -2044,7 +2044,7 @@ export class HostedToolsBrokerCore {
 
   #ackResult(socket: HostedToolsSocket, frame: Extract<HostedToolsHostFrame, { type: "result" }>): void {
     let row: HostedToolsCallRow | undefined;
-    try { row = this.#persistence.call(frame.call_id); } catch { /* Passive correlation read. */ }
+    try { row = this.#persistence.call(frame.call_id); } catch {   }
     if (row) this.#observe("ack_attempt", row);
     try {
       this.#send(socket, {
@@ -2072,8 +2072,8 @@ export class HostedToolsBrokerCore {
 
   #preparedTool(binding: HostedToolsCatalogBinding): HostedToolsPreparedTool {
     return Object.freeze({
-      // Process IDs belong to the executor runtime, not its WebSocket lease.
-      // Keep commands/CUA generation-pinned and fence legacy hosts on reconnect.
+
+
       routeToken: JSON.stringify(binding.machine && binding.wireName === "write_stdin" && binding.runtimeId
         ? [binding.routeId, "process-runtime", binding.runtimeId, binding.wireName]
         : [binding.routeId, binding.generation, binding.leaseId, binding.wireName]),
@@ -2122,9 +2122,9 @@ export class HostedToolsBrokerCore {
           ...(context.turnId === undefined ? {} : { turnId: context.turnId }),
           model: context.model ?? "unknown",
           input: input as Record<string, unknown> | string,
-          // This adapter generates the budget; replay must retain the admitted
-          // default across releases. Explicit invoke budgets and input remain
-          // subject to the strict immutable-call comparison below.
+
+
+
           outputTokenBudget: this.#persistence.callBySource(context.sessionId, context.callId)
             ?.output_token_budget ?? Number.MAX_SAFE_INTEGER,
           ...(context.signal === undefined ? {} : { signal: context.signal }),
@@ -2179,7 +2179,7 @@ export class HostedToolsBrokerCore {
           outcome: outcome.status, duration_ms: Math.max(0, performance.now() - started),
           ...(outcome.status === "completed" ? { success: outcome.output.success } : {}),
         });
-      } catch { /* A diagnostic ledger read must not change a settled outcome. */ }
+      } catch {   }
       return outcome;
     } catch (error) {
       this.#observe("terminal", identity, { outcome: "failed", duration_ms: Math.max(0, performance.now() - started) });
@@ -2213,7 +2213,7 @@ export class HostedToolsBrokerCore {
           hand_id: handId,
           host_connection_id: row.host_connection_id, host_runtime_id: row.host_runtime_id }),
       }));
-    } catch { /* Passive diagnostics cannot alter admission or settlement. */ }
+    } catch {   }
   }
 
   #observeConnection(
@@ -2225,7 +2225,7 @@ export class HostedToolsBrokerCore {
     if (!this.#onConnectionObservation) return;
     try {
       this.#onConnectionObservation(this.#connectionObservation(stage, attachment, fields, retainedState));
-    } catch { /* Connection diagnostics cannot alter lease ownership. */ }
+    } catch {   }
   }
 
   #connectionObservation(
@@ -2273,7 +2273,7 @@ export class HostedToolsBrokerCore {
       }
       for (const row of rows.values()) this.#observe(stage, row, { reason_code: reasonCode,
         ...(stage === "transport_lost" ? { outcome: "ambiguous" as const } : {}) });
-    } catch { /* Diagnostic enumeration cannot change generation retirement. */ }
+    } catch {   }
   }
 
   async #invokeCall(
@@ -2283,9 +2283,9 @@ export class HostedToolsBrokerCore {
     const receivedAt = performance.now();
     const rebindProcess = () => {
       if (!binding.machine || binding.wireName !== "write_stdin" || !binding.runtimeId) return;
-      // Rebind only the transport of the exact process-owning runtime. A new
-      // runtime can reuse numeric process IDs and must never receive this poll
-      // or stdin. Already-admitted calls still resolve through their ledger.
+
+
+
       const current = this.#catalogBindings().find(candidate => candidate.routeId === binding.routeId
         && candidate.machine?.id === binding.machine!.id && candidate.wireName === binding.wireName
         && candidate.runtimeId === binding.runtimeId);
@@ -2294,9 +2294,9 @@ export class HostedToolsBrokerCore {
     rebindProcess();
     let retained = this.#persistence.callBySource(request.sessionId, request.callId);
     if (!retained && !this.#routingSocketForState(this.#persistence.state(binding.routeId))) {
-      // A never-admitted call may wait (bounded) for the same runtime epoch to
-      // resume after transient transport loss. Replacement or retirement ends
-      // the wait at once; the caller then refreshes with ledger evidence.
+
+
+
       await this.#awaitRouteResume(binding, request);
       rebindProcess();
       retained = this.#persistence.callBySource(request.sessionId, request.callId);
@@ -2379,8 +2379,8 @@ export class HostedToolsBrokerCore {
         "Hosted Tools attachment was absent before durable admission",
       ));
     }
-    // The default limit is unreachable; skip counting the generation's whole
-    // retained ledger on every admission unless a finite limit is configured.
+
+
     if (this.#maxCallsPerGeneration < Number.MAX_SAFE_INTEGER
       && this.#persistence.generationCallCount(leaseId, binding.generation) >= this.#maxCallsPerGeneration) {
       const state = this.#persistence.state(binding.routeId);
@@ -2541,10 +2541,10 @@ export class HostedToolsBrokerCore {
     if (pending && existing.state === "dispatched") this.#attachAbort(existing.call_id, pending, signal);
     const outcome = existing.result_json
       ? isArchiveReference(existing.result_json)
-        // A retained receipt is never re-run; an unreadable archive stays retryable by the same call ID.
+
         ? await this.#loadArchived(existing.result_json).then(loaded => !loaded
           ? hostedToolsAmbiguous("The retained Hosted Tools receipt archive is temporarily unreadable. The call was not re-run; retry the same call ID.")
-          // The resolve-time authority check runs again after the asynchronous read.
+
           : this.#entryAllowed(binding.entry, binding.connectGrantId, binding.appToolCatalogDigest)
             ? loaded
             : hostedToolsAmbiguous("Hosted Tools authority changed while the retained receipt was read. The call was not re-run."))
@@ -2560,9 +2560,9 @@ export class HostedToolsBrokerCore {
       && outcome.output.structured_result !== null
       && typeof outcome.output.structured_result === "object"
       && "session_id" in outcome.output.structured_result) {
-      // Old receipts retain their transport lease, not their process runtime.
-      // Never attach an old numeric process ID to the caller's refreshed route.
-      // Already-bound sessions use their original runtime token independently.
+
+
+
       return hostedToolsAmbiguous("The retained command receipt belongs to an earlier Hand connection and cannot prove process ownership. Use its original saved process session if available. The command was not resent.");
     }
     return outcome;
@@ -2594,7 +2594,7 @@ export class HostedToolsBrokerCore {
   async #checkCachedLease(socket: HostedToolsSocket): Promise<void> {
     try { await this.#validateLeasedAttachment(socket); }
     catch (error) {
-      // A successor socket may have taken over while the authority was queried.
+
       if (error instanceof HostedToolsProtocolError && error.code === "stale_socket") return;
       this.#fence(socket, errorMessage(error),
         error instanceof HostedToolsProtocolError && error.code === "route_revoked" ? 1008 : 1011,
@@ -2622,7 +2622,7 @@ export class HostedToolsBrokerCore {
 
   #armExpiry(callId: string, pending: PendingCall): void {
     if (pending.timeout !== undefined) clearTimeout(pending.timeout);
-    // The admitted deadline has its own timer: authority I/O must never delay it.
+
     pending.timeout = setTimeout(() => {
       if (this.#pending.get(callId) !== pending) return;
       if (pending.deadlineAt > this.#now()) { this.#armExpiry(callId, pending); return; }
@@ -2666,9 +2666,9 @@ export class HostedToolsBrokerCore {
     this.context.writeAttachment(socket, { ...attachment, active: false });
     if (state && this.#canRecover(state) && reasonCode === "lease_validation_unavailable" && !attachment.draining
       && state.lease_id === attachment.leaseId && state.generation === attachment.generation) {
-      // Unavailable authority is not proof of revocation. Settle current waiters
-      // finitely, but retain the epoch so later validated reconnects can ACK
-      // journal receipts without issuing the command again.
+
+
+
       const outcome = hostedToolsAmbiguous("Hosted Tools authorization could not be validated after dispatch");
       this.#persistence.markGenerationAmbiguous(state.lease_id!, state.generation, JSON.stringify(outcome), this.#now());
       this.#resolveGeneration(state.lease_id!, state.generation, outcome);
@@ -2805,9 +2805,9 @@ export class HostedToolsBrokerCore {
       const savedMachines = state.machines_json ? JSON.parse(state.machines_json) as HostedMachine[] : [];
       if (!socket && savedMachines.length === 0) continue;
       const attachment = socket ? this.#attachment(socket) : undefined;
-      // The live lookup already checked exact lease/generation ownership.
-      // A draining active socket still supplies its grant/digest, as before,
-      // even though it is no longer eligible for new dispatch.
+
+
+
       const activeSocket = socket ?? this.#socketForState(state);
       const activeAttachment = attachment
         ?? (activeSocket === undefined ? undefined : this.#attachment(activeSocket));
@@ -3168,7 +3168,7 @@ function errorMessage(error: unknown): string {
 
 function closeSocket(socket: HostedToolsSocket, code: number, reason: string): void {
   try { socket.close(code, websocketCloseReason(reason)); }
-  catch { /* The socket is already closed or never reached an open state. */ }
+  catch {   }
 }
 
 function websocketCloseReason(reason: string): string {

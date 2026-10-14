@@ -1,12 +1,3 @@
-//! Persistent tools from an official external Sky MCP provider.
-//!
-//! Each conversation owns its JavaScript process. Conversations execute in
-//! parallel; calls within one persistent JavaScript scope remain ordered.
-//! Protocol and cancellation failures discard only the affected
-//! transport process. This does not prove upstream/native input stopped; effects
-//! may be uncertain and input must not be replayed. Model arguments cannot choose
-//! an executable, inherit credentials, or change trusted runtime configuration.
-
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use nanocode_tools::{
@@ -45,7 +36,6 @@ const PROVIDER_ENVIRONMENT: &[&str] = &[
     "SKY_ENABLE_AUDIO",
 ];
 
-/// Trusted launch configuration, supplied by the embedding application.
 #[derive(Clone, Debug)]
 pub struct ComputerConfig {
     pub executable: PathBuf,
@@ -55,7 +45,6 @@ pub struct ComputerConfig {
 }
 
 impl ComputerConfig {
-    /// Use the installed ChatGPT Node REPL and Codex Sky service on macOS.
     pub fn installed() -> Result<Self, ToolError> {
         if !cfg!(target_os = "macos") {
             return Err(
@@ -108,16 +97,13 @@ impl ComputerConfig {
         }
     }
 
-    /// Configure an external CUA MCP provider with its exact host-supplied args.
     pub fn mcp(executable: impl Into<PathBuf>) -> Self {
         Self::new(executable)
     }
 }
 
-/// An upstream execution capability bound by the host to one actual computer.
 #[async_trait]
 pub trait ComputerExecutor: Send + Sync + 'static {
-    /// Finish a previously used turn without creating or recovering a session.
     async fn end_turn(
         &self,
         _session_id: &str,
@@ -135,13 +121,12 @@ pub trait ComputerExecutor: Send + Sync + 'static {
     ) -> ToolResult;
 }
 
-/// An MCP tool declaration. The provider owns its schema and documentation.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct ProviderTool {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// Optional MCP metadata, including annotations, outputSchema and UI visibility.
+
     #[serde(flatten)]
     pub metadata: BTreeMap<String, Value>,
     #[serde(rename = "inputSchema")]
@@ -164,10 +149,6 @@ pub struct ComputerTools {
     catalog: Arc<Vec<ProviderTool>>,
 }
 impl ComputerTools {
-    /// Discover the exact upstream catalog. Each execution process checks
-    /// its live catalog before invoking any tool.
-    /// A trusted 120-second deadline bounds initialization and complete catalog
-    /// discovery together, independently of provider tool arguments.
     pub async fn connect(mut config: ComputerConfig) -> Result<Self, ToolError> {
         let process = Process::start(&config).await?;
         config.provider_catalog = Some(process.catalog.clone());
@@ -187,18 +168,18 @@ impl ComputerTools {
             catalog,
         }
     }
-    /// Bind a remote transport to its discovered upstream catalog.
+
     pub fn new(executor: impl ComputerExecutor, catalog: Vec<ProviderTool>) -> Self {
         Self {
             executor: Arc::new(executor),
             catalog: Arc::new(catalog),
         }
     }
-    /// Complete provider catalog, including tools reserved for trusted lifecycle hooks.
+
     pub fn catalog(&self) -> &[ProviderTool] {
         &self.catalog
     }
-    /// Model-visible tools only. Hidden hooks remain available through `tool`.
+
     pub fn tools(&self) -> impl Iterator<Item = ComputerTool> + '_ {
         self.catalog
             .iter()
@@ -219,7 +200,7 @@ impl ComputerTools {
                 definition,
             })
     }
-    /// Notify the retained upstream process once for a turn that used it.
+
     pub async fn end_turn(
         &self,
         session_id: &str,
@@ -341,10 +322,6 @@ impl ComputerExecutor for LocalComputer {
         arguments: Value,
         context: ToolContext<'_>,
     ) -> ToolResult {
-        // Provider arguments (including timeout_ms) are opaque. Queueing and
-        // startup must not consume the provider's execution budget. Dropping
-        // this caller future still closes the receiver and discards only its
-        // owned transport; it cannot establish that native input has stopped.
         let session = context.session_id().to_owned();
         let (response, result) = oneshot::channel();
         self.dispatch
@@ -363,9 +340,6 @@ impl ComputerExecutor for LocalComputer {
     }
 }
 
-/// Route only by conversation identity. Each spawned owner has its own process
-/// and queue, so an unrelated long-running cell never blocks this map or any
-/// other conversation.
 async fn route_sessions(
     config: ComputerConfig,
     mut requests: mpsc::UnboundedReceiver<SessionRequest>,
@@ -386,8 +360,6 @@ async fn route_sessions(
             })
             .clone();
         if let Err(error) = owner.send(request) {
-            // A panicked owner must not permanently poison the route. Replace
-            // the dead mailbox and let the request observe a fresh owner.
             if error.0.lifecycle {
                 let _ = error.0.response.send(Ok(ToolOutput::text("")));
                 sessions.remove(&session);
@@ -401,12 +373,10 @@ async fn route_sessions(
     }
 }
 
-/// Forward session metadata without replacing upstream policy documentation.
 fn call_meta(session: &str, turn: Option<&str>, call: &str, model: &str) -> Value {
     json!({"x-codex-turn-metadata": turn_metadata(session, turn, call, model)})
 }
 
-// Forward host context; never fabricate a turn from a per-call identifier.
 fn turn_metadata(session: &str, turn: Option<&str>, call: &str, model: &str) -> Value {
     let mut metadata =
         json!({"session_id":session,"thread_id":session,"call_id":call,"model":model});
@@ -435,12 +405,11 @@ async fn run_session(
             mut response,
             ..
         } = request;
-        // A caller cancelled while queued never owned the active scope.
+
         if response.is_closed() {
             continue;
         }
         if lifecycle {
-            // Remove before dispatch: an uncertain cleanup must never be replayed.
             let retained = turn_id.as_ref().and_then(|turn| turns.remove(turn));
             let Some((previous_call, previous_model)) = retained else {
                 let _ = response.send(Ok(ToolOutput::text("")));
@@ -461,9 +430,7 @@ async fn run_session(
             let _ = response.send(Err("CUA session interrupted by caller cancellation or transport failure. Upstream/native input may still be running and effects are uncertain; do not replay uncertain input. Call cua_repl.js_reset, then inspect the surface before continuing. Reset does not prove earlier input stopped.".into()));
             continue;
         }
-        // Taking ownership ensures cancellation drops only this transport process.
-        // Upstream/native work may outlive it. The interrupted flag requires
-        // explicit recovery instead of continuation in a silently fresh scope.
+
         let previous = process.take();
         if !lifecycle && let Some(turn) = &turn_id {
             turns.insert(turn.clone(), (call_id.clone(), model.clone()));
@@ -499,9 +466,6 @@ async fn run_session(
                     interrupted = false;
                 }
                 if response.send(Ok(output)).is_err() {
-                    // The caller disappeared at the completion boundary. Its
-                    // state transition is ambiguous, so discard the process
-                    // instead of silently retaining a mutated realm.
                     process = None;
                     turns.clear();
                     interrupted = true;
@@ -525,9 +489,6 @@ struct Process {
 }
 impl Process {
     async fn start(config: &ComputerConfig) -> Result<Self, ToolError> {
-        // Startup has a trusted cumulative deadline; tool execution does not.
-        // Dropping this future discards its owned transport, not proof that any
-        // upstream/native work has stopped. No startup or input is replayed.
         tokio::time::timeout(PROVIDER_STARTUP_TIMEOUT, Self::start_and_discover(config))
             .await
             .map_err(|_| "CUA provider startup timed out after 120 seconds during initialization or catalog discovery; owned transport discarded. Upstream/native work may continue.")?
@@ -536,8 +497,7 @@ impl Process {
     async fn start_and_discover(config: &ComputerConfig) -> Result<Self, ToolError> {
         let mut command = Command::new(&config.executable);
         command.args(&config.args).env_clear();
-        // Desktop connection and OS home variables only. Account/API tokens do
-        // not cross into a model-controlled JavaScript process.
+
         for name in PROVIDER_ENVIRONMENT {
             if let Some(value) = std::env::var_os(name) {
                 command.env(name, value);
@@ -678,8 +638,6 @@ fn validate_catalog(catalog: &[ProviderTool]) -> Result<(), ToolError> {
     Ok(())
 }
 
-/// Translate MCP content into the same multimodal function output used by
-/// Nanocodex's Codex/OAuth and Responses API paths.
 pub fn output(value: Value) -> ToolResult {
     let mut content = Vec::new();
     for item in value["content"]

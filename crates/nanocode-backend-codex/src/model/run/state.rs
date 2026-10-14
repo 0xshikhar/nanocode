@@ -133,11 +133,6 @@ impl ConversationState {
         self.managed.set_previous_response_id(response_id);
     }
 
-    #[allow(dead_code, reason = "consumed by the native rollout boundary only")]
-    pub(super) const fn history_revision(&self) -> u64 {
-        self.managed.history_revision()
-    }
-
     pub(super) fn install_pre_turn_compaction(
         &mut self,
         item: ResponseItem,

@@ -36,7 +36,6 @@ pub(crate) struct ConnectionMetadata {
     pub turn_state: Option<String>,
 }
 
-/// Persistent `OpenAI` Responses WebSocket connection.
 pub(crate) struct ResponsesSocket {
     pump: SocketPump,
     turn_state: Option<String>,
@@ -68,11 +67,6 @@ enum SocketCommand {
 }
 
 impl ResponsesSocket {
-    /// Opens a Responses WebSocket with stable session and cache headers.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for invalid configuration, timeout, or handshake failure.
     pub(crate) async fn connect(
         endpoint: &str,
         auth: &OpenAiAuthSnapshot,
@@ -169,11 +163,6 @@ impl ResponsesSocket {
         ))
     }
 
-    /// Sends an encoded request within the configured send timeout.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the socket closes, sending fails, or times out.
     pub(crate) async fn send(&self, request: EncodedRequest) -> Result<(), ResponsesError> {
         let message = Message::Text(request.into_string().into());
         timeout(SEND_TIMEOUT, self.pump.send(message))
@@ -185,11 +174,6 @@ impl ResponsesSocket {
         Ok(())
     }
 
-    /// Receives the next text event while handling control frames in the pump.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for socket failure, closure, or an unexpected frame.
     pub(crate) async fn next_text(&mut self) -> Result<ReceivedText, ResponsesError> {
         loop {
             let received = self

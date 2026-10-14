@@ -66,10 +66,6 @@ cleanup() {
 trap cleanup EXIT
 
 cache_helper="js/scripts/wasm-output-cache.mjs"
-# The check also proves turbo.json hashes every WASM input into nanocodex#build,
-# so cached downstream Worker bundles cannot replay stale WASM after a Rust edit.
-# Exit 1 is a cache miss; any other failure means the input set is unresolvable
-# or not covered by Turbo.
 cache_status=0
 node "$cache_helper" check "$build_mode" || cache_status=$?
 if [[ "$cache_status" -eq 0 ]]; then
@@ -107,10 +103,6 @@ if [[ "$build_mode" == release ]]; then
   if [[ -n "$native_binaryen" && -x "$native_binaryen" ]] \
     && [[ "$("$native_binaryen" --version 2>/dev/null)" == "$binaryen_version" ]]; then
     binaryen="$native_binaryen"
-    # wasm-opt runs after Cargo, while dependent JS tasks wait on it. Use half
-    # the online CPUs (3..8) to leave room for concurrent builds and interactive
-    # use; output is identical for any worker count. Callers can explicitly
-    # choose a different positive native Binaryen worker count.
     if [[ -z "${BINARYEN_CORES:-}" ]]; then
       online_cpus="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 6)"
       [[ "$online_cpus" =~ ^[1-9][0-9]*$ ]] || online_cpus=6
@@ -132,7 +124,6 @@ fingerprint="$({
   wasm-bindgen --version
   printf 'build-mode=%s\n' "$build_mode"
   printf 'worker-bundler-v1-simd\n'
-  # A source-cache miss must not bless bindings made by older generation policy.
   for generator in "$script_path" "$cache_helper" \
     js/scripts/native-binaryen.mjs \
     js/scripts/wasm-memory-views.mjs \
@@ -165,8 +156,6 @@ fi
 generated_dir="$(mktemp -d)"
 worker_bindings="$generated_dir/worker"
 mkdir "$worker_bindings"
-# The targets write disjoint directories. Join every generator before
-# validating or publishing a stamp, including when one of them fails.
 bindgen_pids=()
 wasm-bindgen "$wasm_artifact" \
   --target nodejs \

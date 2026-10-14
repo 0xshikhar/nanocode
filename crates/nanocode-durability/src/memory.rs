@@ -37,18 +37,13 @@ enum Command {
     },
 }
 
-/// Process-local store useful for tests and ephemeral native or WASM sessions.
-///
-/// One spawned task owns all state maps. Clones are command handles, allowing
-/// a new [`crate::DurableSession`] driver to reopen the same process-local data
-/// without exposing shared mutable state.
 #[derive(Clone)]
 pub struct MemoryStore {
     commands: mpsc::Sender<Command>,
 }
 
 impl MemoryStore {
-    /// Creates an empty in-memory store and spawns its owning task.
+
     pub fn new() -> crate::Result<Self> {
         let (commands, mut receiver) = mpsc::channel(COMMAND_CAPACITY);
         let driver = async move {

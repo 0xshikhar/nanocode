@@ -2,7 +2,7 @@ import { retryAfterAdvice } from "../runtime/retry-after.mjs";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
-/** Open Nanocodex's same-origin Responses proxy and consume its setup frame. */
+
 export function openHostManagedWebSocket(endpoint, sessionId, options = {}) {
   if (typeof sessionId !== "string" || !sessionId) {
     throw new TypeError("host-managed WebSocket requires a session ID");
@@ -79,7 +79,7 @@ function waitForProxyHandshake(socket, timeoutMs) {
         const advice = retryAfterAdvice(
           typeof message.retryAfter === "number" ? String(message.retryAfter) : message.retryAfter,
         );
-        // The proxy may already have captured advice before draining its rejection body.
+
         if (Number.isSafeInteger(message.retry_after_deadline_ms) && message.retry_after_deadline_ms >= 0) {
           advice.retry_after_deadline_ms = message.retry_after_deadline_ms;
         }

@@ -10,7 +10,7 @@ export function normalizeHostedMachines(
   machines?: readonly HostedMachine[],
 ): readonly HostedMachine[];
 
-/** Host-reported sample; bytes are host memory and the workspace filesystem, not a reservation. */
+
 export type HandResourceObservation = Readonly<{
   observed_at_ms: number;
   cpu_logical_count?: number;

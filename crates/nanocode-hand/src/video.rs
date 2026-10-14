@@ -1,24 +1,20 @@
-//! Shared H.264 output geometry, limits, and level selection.
 use crate::Error;
 type Result<T> = std::result::Result<T, Error>;
 fn error(message: &str) -> Error {
     std::io::Error::other(message.to_owned()).into()
 }
 
-/// Bounded, aspect-preserving video settings for a 60 Hz display source.
 #[derive(Debug)]
 pub struct VideoSettings {
-    /// Encoded width, even and never larger than the source.
     pub width: u32,
-    /// Encoded height, even and never larger than the source.
+
     pub height: u32,
-    /// Target H.264 bitrate in kilobits per second.
+
     pub bitrate_kbps: u32,
-    /// H.264 level covering the output's macroblock rate and bitrate.
+
     pub level: &'static str,
 }
 impl VideoSettings {
-    /// Apply common validated environment overrides to platform defaults.
     pub fn from_environment(
         width: u32,
         height: u32,
@@ -32,9 +28,7 @@ impl VideoSettings {
             7680,
         )?;
         let mut settings = Self::new(width, height, maximum, default_bitrate)?;
-        // Budget the default for the pixels actually sent. 24 Mbps is useful
-        // for 4K, but at 1080p it can needlessly queue video on a WAN uplink.
-        // An explicit bitrate remains an exact override.
+
         let suggested = default_bitrate_for(&settings, default_max_dimension, default_bitrate);
         settings.bitrate_kbps =
             video_setting("NANOCODEX_SCREEN_BITRATE_KBPS", suggested, 1000, 100000)?;
@@ -57,7 +51,6 @@ impl VideoSettings {
     }
 }
 fn default_bitrate_for(settings: &VideoSettings, max_dimension: u32, bitrate: u32) -> u32 {
-    // Platform defaults describe a 16:9 frame at the default longest side.
     let reference_pixels = u64::from(max_dimension) * u64::from(max_dimension) * 9 / 16;
     let pixels = u64::from(settings.width) * u64::from(settings.height);
     (u64::from(bitrate) * pixels / reference_pixels)

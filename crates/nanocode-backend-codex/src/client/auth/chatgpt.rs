@@ -37,66 +37,52 @@ const REFRESH_EARLY_SECONDS: i64 = 5 * 60;
 const LOGIN_TIMEOUT: Duration = Duration::from_mins(5);
 const AUTH_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Non-secret information about a stored `ChatGPT` authorization.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChatGptAuthStatus {
-    /// Stable account identifier attached to API requests.
     pub account_id: String,
-    /// Account email decoded from the stored identity token, when present.
+
     pub email: Option<String>,
-    /// Subscription plan decoded from the stored identity token, when present.
+
     pub plan: Option<String>,
-    /// Whether this credential targets the `FedRAMP` service boundary.
+
     pub fedramp: bool,
 }
 
-/// Failure while logging in, loading, persisting, or removing `ChatGPT` credentials.
 #[derive(Debug, thiserror::Error)]
 pub enum ChatGptAuthError {
-    /// A credential file could not be read, written, or removed.
     #[error("failed to access ChatGPT authorization file {path}: {source}")]
     Storage {
-        /// Credential file involved in the failed operation.
         path: PathBuf,
-        /// Underlying filesystem failure.
+
         #[source]
         source: io::Error,
     },
-    /// A credential file was readable but did not contain a valid session.
+
     #[error("ChatGPT authorization file {path} is invalid: {detail}")]
-    InvalidStore {
-        /// Invalid credential file.
-        path: PathBuf,
-        /// Validation failure without token contents.
-        detail: String,
-    },
-    /// The authorization server returned a token that could not be validated.
+    InvalidStore { path: PathBuf, detail: String },
+
     #[error("ChatGPT OAuth response was invalid: {0}")]
     InvalidToken(String),
-    /// Neither supported loopback callback port could be bound.
+
     #[error("could not listen for the OAuth callback on localhost ports 1455 or 1457")]
     CallbackUnavailable,
-    /// The browser did not return to the loopback callback before its deadline.
+
     #[error("timed out waiting for the ChatGPT OAuth callback")]
     CallbackTimeout,
-    /// The callback state did not match the login attempt.
+
     #[error("the OAuth callback did not match this login attempt")]
     StateMismatch,
-    /// The authorization request was rejected or returned an invalid callback.
+
     #[error("ChatGPT login was rejected: {0}")]
     LoginRejected(String),
-    /// Authorization-code or refresh-token exchange failed.
+
     #[error("ChatGPT token exchange failed: {0}")]
     TokenExchange(String),
-    /// Persistent access-token metadata could not be resolved.
+
     #[error("ChatGPT access-token metadata request failed: {0}")]
     AccessTokenMetadata(String),
 }
 
-/// An in-progress authorization-code login using PKCE and a loopback callback.
-///
-/// Start the login, open [`authorization_url`](Self::authorization_url) in the user's browser,
-/// then await [`complete`](Self::complete). Completion persists the credentials before returning.
 pub struct ChatGptLogin {
     issuer: String,
     authorization_url: String,
@@ -123,12 +109,6 @@ impl fmt::Debug for ChatGptLogin {
 }
 
 impl ChatGptLogin {
-    /// Starts a loopback OAuth login and returns the browser authorization URL.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when secure random data cannot be generated or neither callback port can
-    /// be bound.
     pub async fn start(auth_file: impl Into<PathBuf>) -> Result<Self, ChatGptAuthError> {
         Self::start_with_issuer(auth_file.into(), AUTH_ISSUER).await
     }
@@ -157,18 +137,11 @@ impl ChatGptLogin {
         })
     }
 
-    /// Returns the URL that the user must open to authorize this login.
     #[must_use]
     pub fn authorization_url(&self) -> &str {
         &self.authorization_url
     }
 
-    /// Waits for the callback, exchanges the code, and atomically persists the credentials.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the callback is invalid, the exchange fails, or credentials cannot
-    /// be persisted.
     pub async fn complete(self) -> Result<ChatGptAuthStatus, ChatGptAuthError> {
         let callback = timeout(LOGIN_TIMEOUT, receive_callback(&self.listener))
             .await
@@ -254,16 +227,6 @@ impl OAuthCallback {
     }
 }
 
-/// Loads a persisted `ChatGPT` credential as shared authorization for an agent family.
-///
-/// The file uses Codex's `auth.json` format and can be shared with Codex and other Nanocodex
-/// processes. OAuth handles reload same-account rotations before refreshing, serialize refreshes,
-/// and atomically preserve unknown fields. Persistent access tokens resolve account metadata once
-/// and never enter the OAuth refresh path.
-///
-/// # Errors
-///
-/// Returns an error when the credential file cannot be read or is invalid.
 pub fn load_chatgpt_auth(auth_file: impl Into<PathBuf>) -> Result<OpenAiAuth, ChatGptAuthError> {
     let auth_file = auth_file.into();
     let document = read_document(&auth_file)?;
@@ -287,31 +250,12 @@ pub fn load_chatgpt_auth(auth_file: impl Into<PathBuf>) -> Result<OpenAiAuth, Ch
     Ok(OpenAiAuth::managed_chatgpt(Arc::new(manager)))
 }
 
-/// Creates `ChatGPT` authorization from a persistent Business or Enterprise access token.
-///
-/// The token must use Codex's `at-` prefix. Account routing metadata is resolved lazily from the
-/// ChatGPT authorization service on the first request and reused for the lifetime of the handle.
-/// Persistent access tokens do not participate in OAuth refresh.
-///
-/// # Errors
-///
-/// Returns an error when the token is empty, has the wrong credential type, or the authorization
-/// client cannot be constructed.
 pub fn chatgpt_access_token(
     access_token: impl Into<Arc<str>>,
 ) -> Result<OpenAiAuth, ChatGptAuthError> {
     personal_access_token_auth(access_token.into(), &auth_api_base_url())
 }
 
-/// Resolves non-secret account information for any supported Codex `auth.json` credential.
-///
-/// Unlike [`chatgpt_auth_status`], this async variant also supports persistent access tokens,
-/// whose account metadata must be fetched from the authorization service.
-///
-/// # Errors
-///
-/// Returns an error when the credential file cannot be read, is invalid, or its access-token
-/// metadata cannot be resolved.
 pub async fn resolve_chatgpt_auth_status(
     auth_file: impl AsRef<Path>,
 ) -> Result<ChatGptAuthStatus, ChatGptAuthError> {
@@ -330,13 +274,6 @@ pub async fn resolve_chatgpt_auth_status(
     Ok(credentials.status())
 }
 
-/// Inspect a stored `ChatGPT` OAuth authorization without exposing its tokens.
-///
-/// Use [`resolve_chatgpt_auth_status`] when the file may contain a persistent access token.
-///
-/// # Errors
-///
-/// Returns an error when the credential file cannot be read or is invalid.
 pub fn chatgpt_auth_status(
     auth_file: impl AsRef<Path>,
 ) -> Result<ChatGptAuthStatus, ChatGptAuthError> {
@@ -346,11 +283,6 @@ pub fn chatgpt_auth_status(
     Ok(credentials.status())
 }
 
-/// Remove locally stored `ChatGPT` credentials. Missing files are treated as logged out.
-///
-/// # Errors
-///
-/// Returns an error when the credential file exists but cannot be removed.
 pub fn logout_chatgpt(auth_file: impl AsRef<Path>) -> Result<bool, ChatGptAuthError> {
     let auth_file = auth_file.as_ref();
     match std::fs::remove_file(auth_file) {
@@ -759,9 +691,6 @@ impl ManagedChatGptAuth {
             let detail: Arc<str> =
                 Arc::from(code.unwrap_or_else(|| format!("token endpoint returned HTTP {status}")));
             if permanent {
-                // A different process can rotate the shared refresh token while this request is
-                // in flight. Adopt that same-account record before treating this credential as
-                // permanently rejected.
                 if self.reload_if_changed()? {
                     return Ok(());
                 }
@@ -996,7 +925,6 @@ fn rfc3339_utc(timestamp: i64) -> String {
     let minute = (seconds % 3_600) / 60;
     let second = seconds % 60;
 
-    // Howard Hinnant's civil-from-days transform, with day zero at 1970-01-01.
     let shifted_days = days + 719_468;
     let era = if shifted_days >= 0 {
         shifted_days

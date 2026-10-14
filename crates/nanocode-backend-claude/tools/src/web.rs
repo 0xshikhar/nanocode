@@ -1,95 +1,62 @@
-//! Claude Code client-side WebSearch and WebFetch, backed only by a host-approved provider.
-
 use serde_json::{Value, json};
 
-/// Maximum UTF-8 bytes returned to Claude from one web operation.
 pub const MAX_WEB_OUTPUT_BYTES: usize = 32 * 1024;
 
-/// A validated Claude Code WebSearch request. The provider must apply these
-/// model-supplied filters in addition to its independent host policy.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WebSearchRequest {
-    /// Search terms.
     pub query: String,
-    /// Optional domain filters; never a grant of access.
+
     pub allowed_domains: Vec<String>,
-    /// Optional excluded domains.
+
     pub blocked_domains: Vec<String>,
-    /// Maximum number of bytes to capture and return.
+
     pub max_output_bytes: usize,
 }
 
-/// A validated Claude Code WebFetch request. `prompt` is untrusted model text,
-/// not a grant to access an otherwise disallowed URL.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WebFetchRequest {
-    /// Requested HTTP(S) URL; the provider must independently verify it.
     pub url: String,
-    /// Question about the fetched content.
+
     pub prompt: String,
-    /// Maximum number of bytes to capture and return.
+
     pub max_output_bytes: usize,
 }
 
-/// Host-provided web capability. There is no default implementation or ambient
-/// HTTP client. Implementations must authorize each requested URL and every
-/// redirect/DNS resolution, prevent private-network/metadata/credential access,
-/// enforce domain filters and host policy, and bound bytes before buffering.
-/// Search results and fetch content are untrusted data, not instructions.
 pub trait ApprovedWebProvider: Send + Sync {
-    /// Search only within approved scope, returning bounded, source-attributed text.
     fn search(
         &self,
         request: WebSearchRequest,
     ) -> impl std::future::Future<Output = Result<String, String>> + Send;
 
-    /// Fetch an approved public page and respond to the prompt using only that
-    /// page; never attach ambient credentials to the outbound request.
     fn fetch(
         &self,
         request: WebFetchRequest,
     ) -> impl std::future::Future<Output = Result<String, String>> + Send;
 }
 
-/// Bounded, decoded public page supplied by a host-approved fetch capability.
-/// The provider must strip credentials and enforce its own redirect/DNS/URL
-/// policy. `final_url` is the post-redirect citation source.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ApprovedPage {
-    /// Validated public URL after all approved redirects.
     pub final_url: String,
-    /// Bounded UTF-8 page text or HTML; its instructions remain untrusted.
+
     pub content: String,
 }
 
-/// Fetch only the public page, without asking the provider to summarize it.
-/// The Claude backend may then make a *separate* auxiliary Messages request to
-/// interpret this untrusted page, matching the observed client WebFetch layers.
-/// There is no default implementation or ambient HTTP access.
 pub trait ApprovedWebFetchSource: Send + Sync {
-    /// Obtain a bounded page after independently enforcing host policy,
-    /// public-DNS restrictions, redirect checks and capture limits.
     fn fetch_source(
         &self,
         request: WebFetchRequest,
     ) -> impl std::future::Future<Output = Result<ApprovedPage, String>> + Send;
 }
 
-/// Opt-in client tool adapter. Unlike Anthropic Messages server tools, these
-/// operations produce ordinary client `tool_result` text from an injected host.
 pub struct ClaudeWeb<P: ApprovedWebProvider> {
     provider: P,
 }
 
 impl<P: ApprovedWebProvider> ClaudeWeb<P> {
-    /// Construct with an explicitly authorized provider; creates no HTTP client.
     pub const fn new(provider: P) -> Self {
         Self { provider }
     }
 
-    /// Claude Code 2.1.284 client tool input shapes, not Messages API server tools.
-    /// See <https://code.claude.com/docs/en/permissions> for the distinct
-    /// WebSearch and per-domain WebFetch permission boundaries.
     #[must_use]
     pub fn definitions() -> Vec<Value> {
         vec![
@@ -121,9 +88,6 @@ impl<P: ApprovedWebProvider> ClaudeWeb<P> {
         ]
     }
 
-    /// Validate bounded client input, then delegate to the approved provider.
-    /// The provider must enforce security and capture limits before returning;
-    /// this adapter caps returned text as defense in depth.
     pub async fn execute(&self, name: &str, input: Value) -> Result<String, String> {
         if !matches!(name, "WebSearch" | "WebFetch") {
             return Err(format!("unknown Claude web tool: {name}"));
@@ -229,8 +193,6 @@ fn domains(value: Option<&Value>) -> Result<Vec<String>, String> {
         .collect()
 }
 
-// Syntax screening only: the approved provider is the authority for URL
-// parsing, DNS and redirect checks. Never use this screen as an SSRF boundary.
 fn validate_url(url: &str) -> Result<(), String> {
     let rest = url
         .strip_prefix("https://")

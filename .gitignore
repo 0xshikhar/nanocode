@@ -59,7 +59,6 @@ __pycache__/
 /apple/build*/
 /macos/build*/
 
-# Generated outputs left at former workspace paths.
 /js/bindings/pkg-node/
 /js/bindings/pkg-web/
 /web/dist/
@@ -67,27 +66,20 @@ __pycache__/
 
 /js/managed/.media-build/
 
-# Per-run production release inputs.
 .ci-release-plan.json
 /js/managed/wrangler.ci.jsonc
 
-# Local measurements and review evidence; publish shared runs as CI artifacts.
 /output/
 
-# Standalone Wrangler ES module generated from the pinned just-bash/browser package.
 /js/managed/.shell-module/
 /js/managed/src/just-bash-lazy.mjs
 /js/managed/src/just-bash-lazy.d.mts
 
-
-# Materialized by third_party/codex-voice/patches/webrtc-sys/prepare.py
 third_party/codex-voice/vendor/
 
-# Deterministic Workers Baileys bundle and pinned upstream scalar WASM.
 js/egress/src/whatsapp-generated/
 js/egress/output/
 
-# SDK binding outputs after package relocation
 /js/pkg-node/
 /js/pkg-web/
 **/output/

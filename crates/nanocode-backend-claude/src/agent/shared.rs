@@ -1,6 +1,3 @@
-//! Native Claude callbacks for tools written against the shared nanocode
-//! [`Tool`] contract, so one implementation serves Responses and Claude agents.
-
 use std::sync::Arc;
 
 use nanocode_agent::{NanocodexError, Result};
@@ -10,7 +7,6 @@ use serde_json::Value;
 use super::{ClaudeToolInvocation, ClaudeToolReply, Handler};
 use crate::{ToolDefinition, ToolResultContent};
 
-/// Converts a shared function tool into a Claude definition and callback.
 pub(super) fn bridge<T: Tool>(tool: T) -> Result<(ToolDefinition, Handler)> {
     bridge_shared(Arc::new(tool))
 }
@@ -23,9 +19,7 @@ pub(super) fn bridge_shared(tool: Arc<dyn Tool>) -> Result<(ToolDefinition, Hand
             shared.name()
         ))
     })?;
-    // Claude definitions have no output-schema field, and Code Mode shows
-    // nested tools only through their description. Without the result shape,
-    // models guess field types.
+
     let mut description = shared.description().to_owned();
     if let Some(schema) = shared.output_schema() {
         description.push_str("\nOutput schema: ");
@@ -45,8 +39,6 @@ pub(super) fn bridge_shared(tool: Arc<dyn Tool>) -> Result<(ToolDefinition, Hand
     Ok((definition, handler))
 }
 
-/// Runs one invocation with the Claude call's identities. Claude keeps its own
-/// transcript, so the tool sees no Responses history and no output budget.
 async fn execute<T: Tool + ?Sized>(
     tool: &T,
     input: Value,

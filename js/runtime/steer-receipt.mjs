@@ -1,4 +1,4 @@
-/** Fingerprint the browser Prompt representation accepted by Rust's serde contract. */
+
 export async function steerInputKey(input) {
   const instruction = typeof input === "string" ? input : input.map((item) => {
     switch (item.type) {

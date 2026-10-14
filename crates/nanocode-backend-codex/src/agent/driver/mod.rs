@@ -16,7 +16,6 @@ use control::{
 };
 use telemetry::{ReasoningSettings, agent_compact_span, agent_turn_span, emit_replayed_terminal};
 
-/// Sole owner of mutable run state and the Responses service stack.
 pub(super) struct AgentDriver<S> {
     pub(super) commands: mpsc::Receiver<Command>,
     pub(super) events: EventSink,
@@ -29,7 +28,7 @@ pub(super) struct AgentDriver<S> {
     pub(super) origin: AgentOrigin,
     pub(super) checkpoints: Arc<CheckpointSource>,
     pub(super) execution: Execution,
-    /// Reports when a durable child's first checkpoint is persisted.
+
     pub(super) initial_persisted: Option<oneshot::Sender<Result<()>>>,
 }
 
@@ -39,11 +38,6 @@ where
     S::Error: Into<ResponseError> + AgentSend + 'static,
     S::Future: AgentSend,
 {
-    /// Drives queued turns until explicit shutdown or every command handle is dropped.
-    ///
-    /// # Errors
-    ///
-    /// Returns an infrastructure error while receiving or starting a command.
     #[allow(clippy::too_many_lines)]
     pub(super) async fn run(mut self) -> Result<()> {
         let session_id = self.events.request_id().to_owned();
@@ -107,9 +101,6 @@ where
         let mut commands_open = true;
         let mut shutdown_failures = Vec::new();
         if let Some(persisted) = self.initial_persisted.take() {
-            // A durable child is listed and resumable from creation, before
-            // its first turn: a fork or restored child from the boundary it
-            // inherited, a fresh subagent from its recorded identity alone.
             let child = match self.origin.start {
                 crate::session::SessionStart::New(origin) => !matches!(origin, crate::Origin::Root),
                 crate::session::SessionStart::Restore => true,
@@ -287,9 +278,7 @@ where
                         }
                     }
                 }
-                // Standalone checkpoints cannot overtake any admitted turn, including
-                // cancelled turns awaiting settlement. Retryable operations keep this
-                // barrier closed even after their in-memory queue has drained.
+
                 if developer_checkpoint_ready && !pending_developer_messages.is_empty() {
                     let mut developer_messages = pending_developer_messages.drain(..);
                     while let Some((text, message_result)) = developer_messages.next() {
@@ -796,8 +785,7 @@ where
                                                             .await,
                                                         true,
                                                     ),
-                                                    // Queued behind its predecessor, a recovered
-                                                    // operation usually never began an attempt.
+
                                                     Some(operation) => (
                                                         Ok(()),
                                                         self.execution
@@ -871,7 +859,7 @@ where
                                         drop(result.send(outcome));
                                     }
                                     Some(Command::SetServiceTier { service_tier, result }) => {
-                                        let outcome = crate::HarnessModel::Codex(thread_model)
+                                        let outcome = crate::ModelSelection::Codex(thread_model)
                                             .capabilities(crate::ModelTransport::Native)
                                             .check_service_tier(service_tier)
                                             .map(|()| default_service_tier = service_tier);
@@ -1457,8 +1445,7 @@ where
                                                         .await,
                                                     true,
                                                 ),
-                                                // Queued behind its predecessor, a recovered
-                                                // operation usually never began an attempt.
+
                                                 Some(operation) => (
                                                     Ok(()),
                                                     self.execution
@@ -1549,7 +1536,7 @@ where
                                 drop(result.send(outcome));
                             }
                             Some(Command::SetServiceTier { service_tier, result }) => {
-                                let outcome = crate::HarnessModel::Codex(thread_model)
+                                let outcome = crate::ModelSelection::Codex(thread_model)
                                     .capabilities(crate::ModelTransport::Native)
                                     .check_service_tier(service_tier)
                                     .map(|()| default_service_tier = service_tier);
@@ -1750,9 +1737,7 @@ where
                 .execution
                 .recover_failure(execution_operation.as_deref(), outcome)
                 .await;
-            // A run terminal describes durable settlement, never an attempt.
-            // Classify recovery first so consumers cannot mistake a retry/reopen
-            // for a completed turn and abandon its still-running tools.
+
             let terminal = match &outcome {
                 Ok(_) => Some("completed"),
                 Err(NanocodexError::TurnCancelled) => Some("cancelled"),
@@ -1917,8 +1902,7 @@ async fn accept_turn_steer(
     if !capacity_available && (id.is_none() || !execution_turn.supports_steer_receipts()) {
         return Err(NanocodexError::SteerQueueFull);
     }
-    // Holding the boundary lock through persistence makes acceptance linearize
-    // before either this model-call drain or the following one.
+
     let call_index = model_call_index.lock().await;
     let Some(steer) = execution_turn
         .accept_steer(prompt.clone(), id.clone(), *call_index, capacity_available)
@@ -2014,11 +1998,6 @@ where
     model
 }
 
-/// Retires a queued turn whose cancellation was just durably committed while
-/// another turn runs. Its operation is already terminal, so its caller must
-/// not wait behind the active turn (which may hold a long tool call).
-/// Otherwise recovered operations keep their ordered reconciliation and
-/// ephemeral turns their queue position, as before.
 fn settle_cancelled_queued_turn(
     queued_turns: &mut VecDeque<QueuedTurn>,
     target: TurnKey,
@@ -2444,7 +2423,10 @@ pub(super) fn agent_session_context(
         .map(|checkpoint| checkpoint.model().workspace().to_owned())
         .or_else(|| configured_workspace.map(str::to_owned))
         .map_or_else(|| context_source.resolve_workspace(None), Ok)?;
-    Ok(AgentSessionContext::from_backend(workspace, checkpoint.map_or_else(Vec::new, |checkpoint| checkpoint.model().snapshot_history())))
+    Ok(AgentSessionContext::from_backend(
+        workspace,
+        checkpoint.map_or_else(Vec::new, |checkpoint| checkpoint.model().snapshot_history()),
+    ))
 }
 
 use crate::ErrorExt as _;

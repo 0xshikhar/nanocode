@@ -14,18 +14,15 @@ use serde_json::Value;
 #[cfg(all(not(target_family = "wasm"), feature = "code-mode"))]
 use std::ffi::OsString;
 
-/// Nanocodex's model-visible tool exposure policy.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ToolExposure {
-    /// Expose normal tools only through Code Mode's `exec` entrypoint.
     #[default]
     CodeModeOnly,
-    /// Expose `exec` and `wait` before ordinary direct tools, while retaining
-    /// the same handlers for calls composed through Code Mode.
+
     DirectAndCodeMode,
-    /// Expose a tool directly without making it callable from Code Mode.
+
     DirectOnly,
-    /// Keep a tool registered for dispatch without exposing it to the model.
+
     Hidden,
 }
 
@@ -48,71 +45,35 @@ pub(crate) struct RegisteredTool {
     pub(crate) exposure: Option<ToolExposure>,
 }
 
-/// A lazily populated family of Code Mode tools.
-///
-/// Providers start with the agent driver, advertise only their small direct
-/// tool surface initially, and may make additional tools callable at runtime.
 #[cfg(all(not(target_family = "wasm"), feature = "code-mode"))]
 #[async_trait]
 pub trait DynamicToolProvider: Send + Sync {
-    /// Starts background discovery or connection work. Implementations must be idempotent.
     fn start(&self);
 
-    /// Receives the identity of the session about to start this provider.
-    ///
-    /// Called before [`Self::start`] whenever the starting tool selection is
-    /// bound with [`Tools::for_session`](crate::Tools::for_session).
-    /// Providers that launch processes export it to them (see
-    /// [`crate::SessionEnvironment`]); a provider shared by several sessions
-    /// keeps the first identity it receives.
     fn bind_session(&self, _session: &crate::SessionEnvironment) {}
 
-    /// Returns the provider's always-visible tools, such as `tool_search`.
     fn direct_tools(&self) -> Vec<Arc<dyn Tool>>;
 
-    /// Returns the provider's direct tools for one model exposure policy.
-    ///
-    /// Providers normally expose the same tools under either policy. In
-    /// particular, discovery entrypoints such as `tool_search` remain visible
-    /// while the tools they discover stay deferred.
     fn direct_tools_for_exposure(&self, _exposure: ToolExposure) -> Vec<Arc<dyn Tool>> {
         self.direct_tools()
     }
 
-    /// Returns deferred tools currently callable from new Code Mode cells.
     fn available_definitions(&self) -> Vec<ToolDefinition>;
 
-    /// Returns compact, stable guidance for provider tools that should be
-    /// discoverable before the model starts its first Code Mode cell.
-    ///
-    /// The complete definitions remain runtime-only and available through
-    /// `ALL_TOOLS`; summaries keep large dynamic schemas out of the model
-    /// request prefix.
     fn code_mode_tool_summaries(&self) -> Vec<(String, String)> {
         Vec::new()
     }
 
-    /// Returns whether this provider currently exposes `name`.
     fn contains(&self, name: &str) -> bool {
         self.available_definitions()
             .iter()
             .any(|definition| definition.name() == name)
     }
 
-    /// Returns whether a callable deferred tool is safe to execute in parallel.
-    ///
-    /// Providers are conservative by default. Implementations must return
-    /// `true` only for a currently callable tool with explicit safety
-    /// metadata.
     fn supports_parallel_tool_calls(&self, _name: &str) -> bool {
         false
     }
 
-    /// Executes a callable deferred tool, or returns `None` when this provider
-    /// does not currently expose `name`.
-    ///
-    /// The owning runtime converts handler panics into a failed `aborted`
-    /// output; they never unwind through the runtime owner.
     async fn execute(
         &self,
         name: &str,
@@ -133,10 +94,6 @@ mod source_sealed {
     impl Sealed for crate::mcp::Mcp {}
 }
 
-/// One capability source accepted by [`ToolsBuilder::add`].
-///
-/// The sealed implementations cover fixed [`Tool`] values, workspace tools,
-/// and native MCP families when those features are enabled.
 pub trait ToolSource: source_sealed::Sealed + Sized {
     #[doc(hidden)]
     fn install(self, builder: ToolsBuilder) -> ToolsBuilder;
@@ -174,7 +131,6 @@ impl ToolSource for crate::mcp::Mcp {
     }
 }
 
-/// Declarative selection of the built-in tools installed for an agent.
 #[derive(Clone)]
 pub struct Tools {
     exposure: ToolExposure,
@@ -314,14 +270,11 @@ impl fmt::Debug for Tools {
 }
 
 impl Tools {
-    /// Starts a builder with all standard tools enabled.
     #[must_use]
     pub fn builder() -> ToolsBuilder {
         ToolsBuilder::default()
     }
 
-    /// Resumes configuring this tool selection while preserving its built-ins,
-    /// registered tools, and dynamic providers.
     #[must_use]
     pub const fn into_builder(self) -> ToolsBuilder {
         ToolsBuilder {
@@ -330,38 +283,26 @@ impl Tools {
         }
     }
 
-    /// Returns the model-visible tool exposure policy.
     #[must_use]
     pub const fn exposure(&self) -> ToolExposure {
         self.exposure
     }
 
-    /// Returns whether the standard workspace tools are enabled.
     #[must_use]
     pub const fn workspace_enabled(&self) -> bool {
         self.workspace
     }
 
-    /// Returns whether the standard web-search tool is enabled.
     #[must_use]
     pub const fn web_search_enabled(&self) -> bool {
         self.web_search
     }
 
-    /// Returns whether the standard image-generation tool is enabled.
     #[must_use]
     pub const fn image_generation_enabled(&self) -> bool {
         self.image_generation
     }
 
-    /// Returns this tool selection bound to one agent session.
-    ///
-    /// An embedded execution host receives the session ID directly. Every
-    /// native tool subprocess (shell and `exec_command` sessions, Code Mode
-    /// commands, and MCP stdio servers started by this selection) receives the
-    /// session's [`SessionEnvironment`](crate::SessionEnvironment) variables,
-    /// overriding same-named caller or ambient values. This binding does not
-    /// mutate other clones of the tool selection.
     #[must_use]
     #[cfg(feature = "code-mode")]
     pub fn for_session(mut self, session: &crate::SessionEnvironment) -> Self {
@@ -376,7 +317,6 @@ impl Tools {
         self
     }
 
-    /// Returns the session this selection is bound to, if any.
     #[must_use]
     #[cfg(not(target_family = "wasm"))]
     pub const fn session(&self) -> Option<&crate::SessionEnvironment> {
@@ -396,12 +336,11 @@ impl Tools {
     }
 
     #[cfg(all(not(target_family = "wasm"), feature = "code-mode"))]
-    /// Returns the host-provided client for backend-owned HTTP tools.
+
     pub fn remote_http_client(&self) -> Option<reqwest::Client> {
         self.remote_http_client.clone()
     }
 
-    /// Starts all dynamic providers without waiting for their handshakes.
     #[cfg(feature = "code-mode")]
     #[cfg(not(target_family = "wasm"))]
     pub fn start_providers(&self) {
@@ -413,7 +352,6 @@ impl Tools {
         }
     }
 
-    /// Starts all dynamic providers without waiting for their handshakes.
     #[cfg(all(feature = "code-mode", target_family = "wasm"))]
     pub const fn start_providers(&self) {}
 
@@ -442,7 +380,6 @@ impl Tools {
     }
 }
 
-/// Builder for the built-in tool selection.
 #[derive(Default)]
 pub struct ToolsBuilder {
     tools: Tools,
@@ -452,10 +389,6 @@ pub struct ToolsBuilder {
 pub use nanocode_tools::ToolsBuildError;
 
 impl ToolsBuilder {
-    /// Adds one capability source to this recipe.
-    ///
-    /// Fixed tools, workspace tools, and MCP use this same composition path;
-    /// execution placement is selected only after the recipe is built.
     #[must_use]
     #[allow(
         clippy::should_implement_trait,
@@ -465,18 +398,12 @@ impl ToolsBuilder {
         source.install(self)
     }
 
-    /// Selects whether registered tools are also exposed directly to the model.
-    ///
-    /// The default is [`ToolExposure::CodeModeOnly`]. This changes only the
-    /// model-visible declaration set; all registered handlers remain callable
-    /// from Code Mode.
     #[must_use]
     pub const fn exposure(mut self, exposure: ToolExposure) -> Self {
         self.tools.exposure = exposure;
         self
     }
 
-    /// Starts from an empty built-in tool set.
     #[must_use]
     pub const fn without_defaults(mut self) -> Self {
         self.tools.workspace = false;
@@ -485,7 +412,6 @@ impl ToolsBuilder {
         self
     }
 
-    /// Enables or disables the standard command, patch, plan, and file tools.
     #[must_use]
     #[cfg(not(target_family = "wasm"))]
     #[allow(clippy::missing_const_for_fn)]
@@ -498,7 +424,6 @@ impl ToolsBuilder {
         self
     }
 
-    /// Enables or disables the standard command, patch, plan, and file tools.
     #[must_use]
     #[cfg(target_family = "wasm")]
     pub const fn workspace(mut self, enabled: bool) -> Self {
@@ -506,21 +431,18 @@ impl ToolsBuilder {
         self
     }
 
-    /// Enables or disables the built-in direct web-search tool.
     #[must_use]
     pub const fn web_search(mut self, enabled: bool) -> Self {
         self.tools.web_search = enabled;
         self
     }
 
-    /// Enables or disables the built-in image-generation tool.
     #[must_use]
     pub const fn image_generation(mut self, enabled: bool) -> Self {
         self.tools.image_generation = enabled;
         self
     }
 
-    /// Overrides the default working directory described to the model.
     #[must_use]
     #[cfg(all(not(target_family = "wasm"), feature = "code-mode"))]
     pub fn working_directory(mut self, directory: impl Into<Arc<str>>) -> Self {
@@ -528,7 +450,6 @@ impl ToolsBuilder {
         self
     }
 
-    /// Overrides the default shell described to the model.
     #[must_use]
     #[cfg(all(not(target_family = "wasm"), feature = "code-mode"))]
     pub fn default_shell(mut self, shell: impl Into<Arc<str>>) -> Self {
@@ -536,10 +457,6 @@ impl ToolsBuilder {
         self
     }
 
-    /// Adds explicit environment overrides to workspace-tool child processes.
-    ///
-    /// Overrides are scoped to commands spawned by this tool selection and do
-    /// not mutate the embedding process. A later value for the same name wins.
     #[must_use]
     #[cfg(all(not(target_family = "wasm"), feature = "code-mode"))]
     pub fn process_environment<I, K, V>(mut self, variables: I) -> Self
@@ -555,7 +472,6 @@ impl ToolsBuilder {
         self
     }
 
-    /// Overrides the HTTP client used by in-process remote tools.
     #[must_use]
     #[cfg(all(not(target_family = "wasm"), feature = "code-mode"))]
     pub fn remote_http_client(mut self, client: reqwest::Client) -> Self {
@@ -563,7 +479,6 @@ impl ToolsBuilder {
         self
     }
 
-    /// Adds a function or freeform tool to the runtime.
     #[must_use]
     pub fn tool<T: Tool + 'static>(mut self, tool: T) -> Self {
         self.tools.registered.push(RegisteredTool {
@@ -574,7 +489,6 @@ impl ToolsBuilder {
         self
     }
 
-    /// Adds a function or freeform tool with an explicit model-facing exposure.
     #[must_use]
     pub fn tool_with_exposure<T: Tool + 'static>(
         mut self,
@@ -591,7 +505,6 @@ impl ToolsBuilder {
         self
     }
 
-    /// Adds a dynamic family of Code Mode tools.
     #[must_use]
     #[cfg(all(not(target_family = "wasm"), feature = "code-mode"))]
     pub fn provider<P: DynamicToolProvider + 'static>(mut self, provider: P) -> Self {
@@ -601,11 +514,6 @@ impl ToolsBuilder {
         self
     }
 
-    /// Validates tool names and finishes the runtime configuration.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for empty, duplicate, or enabled built-in tool names.
     #[allow(unused_mut, reason = "native provider refresh mutates this builder")]
     pub fn build(mut self) -> Result<Tools, ToolsBuildError> {
         if self.duplicate_workspace {
@@ -864,4 +772,18 @@ fn enabled_built_in_names(tools: &Tools) -> impl Iterator<Item = &'static str> {
     ]
     .into_iter()
     .filter_map(|(enabled, name)| enabled.then_some(name))
+}
+
+impl nanocode_tools::ToolCollection for Tools {
+    type Error = ToolsBuildError;
+
+    fn add_shared_tool(self, tool: Arc<dyn Tool>) -> Result<Self, Self::Error> {
+        let mut builder = self.into_builder();
+        builder.tools.registered.push(RegisteredTool {
+            handler: tool,
+            #[cfg(feature = "code-mode")]
+            exposure: None,
+        });
+        builder.build()
+    }
 }

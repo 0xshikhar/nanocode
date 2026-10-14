@@ -1,4 +1,3 @@
-//! Default render-endpoint WASAPI loopback. Never opens a microphone endpoint.
 #![allow(unsafe_code)]
 use crate::Error;
 use std::{
@@ -55,8 +54,7 @@ struct Loopback {
 impl Loopback {
     fn open() -> Result<Self> {
         crate::ensure_interactive_session()?;
-        // SAFETY: this synchronous function owns the calling MTA thread for the
-        // capture lifetime, and balances every successful CoInitializeEx.
+
         win(
             unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.ok(),
             "initialize MTA",
@@ -140,7 +138,7 @@ impl Loopback {
         let mut data = std::ptr::null_mut();
         let mut frames = 0;
         let mut flags = 0;
-        // The typed GetBuffer wrapper discards successful BUFFER_EMPTY status.
+
         let status = unsafe {
             (self.capture.vtable().GetBuffer)(
                 self.capture.as_raw(),
@@ -162,7 +160,7 @@ impl Loopback {
             }
             let length = frames as usize * FRAME_BYTES;
             if flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY.0 as u32 != 0 {
-                queue.bytes.clear(); // Never replay old buffered audio across a discontinuity.
+                queue.bytes.clear();
             }
             if flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32 != 0 {
                 queue.silence(length);
@@ -170,8 +168,7 @@ impl Loopback {
                 if data.is_null() {
                     return Err(error("Windows audio packet has no PCM data"));
                 }
-                // SAFETY: WASAPI owns exactly frames * block-align bytes until
-                // ReleaseBuffer; copy into bounded owned storage before releasing.
+
                 queue.push(unsafe { std::slice::from_raw_parts(data, length) });
             }
             Ok(true)
@@ -224,10 +221,7 @@ impl PcmQueue {
         output
     }
 }
-/// Write 48 kHz stereo signed 16-bit little-endian system audio on a dedicated
-/// blocking thread. Silent periods produce PCM zeros on the same 20 ms clock.
-/// The caller must unblock/close its writer when stopping; arbitrary Write
-/// implementations can otherwise block independently of WASAPI cancellation.
+
 pub fn capture_audio(mut writer: impl Write, stop: Arc<AtomicBool>) -> Result<()> {
     if stop.load(Ordering::Acquire) {
         return Ok(());
@@ -236,7 +230,6 @@ pub fn capture_audio(mut writer: impl Write, stop: Arc<AtomicBool>) -> Result<()
     let mut queue = PcmQueue::default();
     let mut next = Instant::now() + PERIOD;
     while !stop.load(Ordering::Acquire) {
-        // A bounded drain prevents a pathological device from starving stop.
         for _ in 0..32 {
             if stop.load(Ordering::Acquire) {
                 return Ok(());
@@ -248,8 +241,7 @@ pub fn capture_audio(mut writer: impl Write, stop: Arc<AtomicBool>) -> Result<()
         let now = Instant::now();
         if now >= next {
             writer.write_all(&queue.chunk())?;
-            // Never burst to catch up after downstream backpressure. One 20 ms
-            // sample per real period bounds combined real + synthesized PCM.
+
             next += PERIOD;
             let after_write = Instant::now();
             if next <= after_write {

@@ -166,7 +166,7 @@ class InvalidArtifactDocumentError extends Error {
   }
 }
 
-/** Viem-style factory returning a named tool ready for array composition. */
+
 export function artifact(options) {
   const value = exactRecord(options, "artifact options", [
     "workspace", "onArtifact", "directory", "validateSource",

@@ -28,7 +28,7 @@ type BrowserWebSocketMetadata = {
 export type BrowserWebSocketRequest = BrowserWebSocketMetadata & (
   | {
     authorization: "bearer";
-    /** Resolved credential for this handshake. Do not retain or log it. */
+
     bearerToken: string;
   }
   | {
@@ -36,13 +36,13 @@ export type BrowserWebSocketRequest = BrowserWebSocketMetadata & (
       bearerToken?: never;
     }
   | {
-      /** Credential-free eager connection; the later model connect consumes this exact socket. */
+
       authorization: "preconnect";
       bearerToken?: never;
     }
 );
 
-/** One streaming HTTPS Responses request. The host must preserve cancellation. */
+
 export type BrowserHttpRequest = Exclude<BrowserWebSocketRequest, { authorization: "preconnect" }> & {
   body: string;
   signal: AbortSignal;
@@ -52,14 +52,14 @@ export type BrowserWebSocketConnection = {
   socket: WebSocket;
   status?: number | undefined;
   requestId?: string | undefined;
-  /** @internal Correlation with the separately deployed credential egress. */
+
   egressRequestId?: string | undefined;
   serverModel?: string | undefined;
   reasoningIncluded?: boolean | undefined;
   turnState?: string | undefined;
 };
 
-/** @internal Passive lifecycle metadata; never provider frames or request content. */
+
 export type BrowserSocketObservation = {
   event: "socket.connecting" | "socket.connect_waiting" | "socket.opened" | "socket.closed" | "socket.error"
     | "request.send_started" | "request.send_waiting" | "request.sent" | "request.waiting" | "request.first_message"
@@ -83,7 +83,7 @@ export type BrowserSocketObservation = {
   first_reasoning_delta_ms?: number;
   first_answer_delta_ms?: number;
   first_tool_delta_ms?: number;
-  /** Fixed protocol name, or unclassified for oversized/unknown envelopes. */
+
   provider_event_type?: string;
   output_kind?: "item" | "reasoning" | "answer" | "tool";
   last_message_age_ms?: number;
@@ -101,7 +101,7 @@ export type BrowserSocketObservation = {
 };
 
 export function createBrowserHost(options?: {
-  /** @internal Trusted runtime configuration carried by nanocodex.browser.internalRuntime. */
+
   [key: symbol]: {
     traceTool?: <T>(
       name: string,
@@ -123,22 +123,22 @@ export function createBrowserHost(options?: {
   onEvent?: (eventJson: string) => void;
   tools?: ToolMap;
   mpp?: MppSession;
-  /** Remote MCP servers discovered through tools.tool_search inside exec. */
+
   mcp?: McpServers;
   codeEvaluator?: CodeEvaluator;
-  /** @internal Trusted durable effect receipts, not available inside guest code. */
+
   codeEffectJournal?: CodeEffectJournal;
-  /** Code Mode by default; direct exposes host tools without evaluation and rejects MCP. */
+
   toolMode?: "code-only";
-  /** @internal Live host lifecycle for Rust-owned subagents. */
+
   subagentRouting?: Pick<import('../runtime/subagent-routing.mjs').SubagentRouting, 'resolve' | 'bind'>;
   subagentSessions?: {
     bindingDescriptor?(sessionId: string, descriptor: SubagentToolContext, hostContextRef?: string): SubagentToolContext;
     bind(sessionId: string, descriptor: SubagentToolContext, hostContextRef?: string): void;
-    /** detach releases live resources while preserving durable bindings for restoration. */
+
     release(sessionId: string, hostContextRef?: string, options?: { detach?: boolean }): void;
   };
-  /** @internal Content-free summary, once when ownership closes; no public transport option. */
+
   onSocketTiming?: (timing: {
     message_count: number;
     delivered_message_count: number;
@@ -153,7 +153,7 @@ export function createBrowserHost(options?: {
       engine_service_ttft_total_ms?: number;
     }>;
   }) => void;
-  /** @internal Live observations while an owned request waits; does not cancel it. */
+
   onSocketEvent?: (event: BrowserSocketObservation) => void;
   maxQueuedMessages?: number;
   maxQueuedBytes?: number;

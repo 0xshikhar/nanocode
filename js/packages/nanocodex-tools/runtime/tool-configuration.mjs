@@ -1,7 +1,7 @@
 import { toolRouterBrand, toolRouterRuntime } from "./tool-router.mjs";
 
 export const subagentsBrand = Symbol("nanocodex.subagents");
-// Omit the wire limit to use the runtime's unlimited default.
+
 export const defaultSubagentMaxConcurrency = undefined;
 
 const DEFAULT_SUBAGENTS = Object.freeze({});

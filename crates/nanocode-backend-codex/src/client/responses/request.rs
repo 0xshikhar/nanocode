@@ -1,5 +1,3 @@
-//! Byte-stable request profiles, persistent history, and wire serialization.
-
 use std::{borrow::Cow, collections::BTreeMap, sync::Arc};
 
 use serde::{Serialize, Serializer, ser::SerializeSeq};
@@ -7,7 +5,6 @@ use serde::{Serialize, Serializer, ser::SerializeSeq};
 use super::ResponseItem;
 use crate::client::{ModelConfig, Thinking, pricing::ServiceTier, responses::StrictJsonSchema};
 
-/// Stable request metadata and prefix shared by every operation in a session.
 #[derive(Clone)]
 pub struct RequestProfile {
     session_id: String,
@@ -28,7 +25,6 @@ struct RetainedRequestConfig {
 }
 
 impl RequestProfile {
-    /// Creates stable session metadata and an immutable request prefix.
     #[must_use]
     pub fn new(
         session_id: impl Into<String>,
@@ -50,25 +46,21 @@ impl RequestProfile {
         profile
     }
 
-    /// Returns the client-owned session identity used in request metadata.
     #[must_use]
     pub fn session_id(&self) -> &str {
         &self.session_id
     }
 
-    /// Returns the current agent thread identity.
     #[must_use]
     pub fn thread_id(&self) -> &str {
         &self.thread_id
     }
 
-    /// Returns the stable turn identity sent in provider request metadata.
     #[must_use]
     pub fn turn_id(&self) -> String {
         format!("{}:{}", self.thread_id(), self.logical_turn)
     }
 
-    /// Uses a fresh thread identity while retaining the provider session.
     #[must_use]
     pub fn with_thread_id(mut self, thread_id: impl Into<String>) -> Self {
         self.thread_id = thread_id.into();
@@ -80,19 +72,16 @@ impl RequestProfile {
         self
     }
 
-    /// Returns the stable prompt-cache identity.
     #[must_use]
     pub fn prompt_cache_key(&self) -> &str {
         &self.prompt_cache_key
     }
 
-    /// Returns immutable instructions and tool definitions.
     #[must_use]
     pub fn prefix(&self) -> &[ResponseItem] {
         &self.prefix
     }
 
-    /// Shares the byte-stable request prefix with an internal checkpoint.
     #[doc(hidden)]
     #[must_use]
     pub fn shared_prefix(&self) -> Arc<[ResponseItem]> {
@@ -162,11 +151,6 @@ impl CodeModeToolName {
     }
 }
 
-/// Persistent, immutable-segment Responses history.
-///
-/// Cloning or checkpointing this value shares all committed segments. Only the
-/// active tail is mutable, so a branch allocates for its own new items without
-/// copying the retained prefix.
 #[derive(Clone, Default)]
 pub struct ResponseHistory {
     head: Option<Arc<HistorySegment>>,
@@ -180,7 +164,6 @@ struct HistorySegment {
 }
 
 impl ResponseHistory {
-    /// Creates history with one mutable tail and no committed segments.
     #[must_use]
     pub fn new(items: Vec<ResponseItem>) -> Self {
         Self {
@@ -189,41 +172,34 @@ impl ResponseHistory {
         }
     }
 
-    /// Returns the total item count across committed segments and the tail.
     #[must_use]
     pub fn len(&self) -> usize {
         self.head.as_ref().map_or(0, |segment| segment.len) + self.tail.len()
     }
 
-    /// Returns whether the history contains no items.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    /// Returns the current uncommitted tail.
     #[must_use]
     pub fn tail(&self) -> &[ResponseItem] {
         &self.tail
     }
 
-    /// Shares the current tail allocation.
     #[must_use]
     pub fn shared_tail(&self) -> Arc<Vec<ResponseItem>> {
         Arc::clone(&self.tail)
     }
 
-    /// Appends an item to the copy-on-write tail.
     pub fn push(&mut self, item: ResponseItem) {
         Arc::make_mut(&mut self.tail).push(item);
     }
 
-    /// Returns mutable access to the copy-on-write tail.
     pub fn tail_mut(&mut self) -> &mut Vec<ResponseItem> {
         Arc::make_mut(&mut self.tail)
     }
 
-    /// Seals the active tail into one shared segment and starts an empty tail.
     pub fn commit_tail(&mut self) {
         if self.tail.is_empty() {
             return;
@@ -237,17 +213,11 @@ impl ResponseHistory {
         }));
     }
 
-    /// Replaces complete history with one new mutable tail.
     pub fn replace(&mut self, items: Vec<ResponseItem>) {
         self.head = None;
         self.tail = Arc::new(items);
     }
 
-    /// Replaces every item from `start` onward while sharing complete prefix
-    /// segments.
-    ///
-    /// This is an internal COW primitive used when a transport operation needs
-    /// to rewrite a trailing portion of retained history.
     #[doc(hidden)]
     pub fn replace_suffix(&mut self, start: usize, replacement: Vec<ResponseItem>) {
         let start = start.min(self.len());
@@ -273,19 +243,16 @@ impl ResponseHistory {
         Arc::make_mut(&mut self.tail).extend(replacement);
     }
 
-    /// Iterates over all items from oldest to newest.
     #[must_use]
     pub fn iter(&self) -> ResponseHistoryIter<'_> {
         ResponseHistoryIter::new(self, 0)
     }
 
-    /// Iterates from an absolute item index without flattening history.
     #[must_use]
     pub fn iter_from(&self, start: usize) -> ResponseHistoryIter<'_> {
         ResponseHistoryIter::new(self, start)
     }
 
-    /// Iterates over all items from newest to oldest.
     #[must_use]
     pub fn iter_rev(&self) -> ResponseHistoryRevIter<'_> {
         ResponseHistoryRevIter {
@@ -295,7 +262,6 @@ impl ResponseHistory {
             remaining: self.len(),
         }
     }
-
 }
 
 impl<'a> IntoIterator for &'a ResponseHistory {
@@ -307,7 +273,6 @@ impl<'a> IntoIterator for &'a ResponseHistory {
     }
 }
 
-/// Forward iterator across persistent history segments.
 pub struct ResponseHistoryIter<'a> {
     segments: Vec<&'a HistorySegment>,
     segment_index: usize,
@@ -380,7 +345,6 @@ impl<'a> Iterator for ResponseHistoryIter<'a> {
 
 impl ExactSizeIterator for ResponseHistoryIter<'_> {}
 
-/// Reverse iterator across persistent history segments.
 pub struct ResponseHistoryRevIter<'a> {
     tail: std::iter::Rev<std::slice::Iter<'a, ResponseItem>>,
     segment: Option<&'a HistorySegment>,
@@ -414,7 +378,6 @@ impl<'a> Iterator for ResponseHistoryRevIter<'a> {
 
 impl ExactSizeIterator for ResponseHistoryRevIter<'_> {}
 
-/// Borrowed, allocation-free composition of request input sources.
 #[derive(Clone, Copy)]
 pub struct ResponsesInput<'a> {
     first: &'a [ResponseItem],
@@ -425,7 +388,6 @@ pub struct ResponsesInput<'a> {
 }
 
 impl<'a> ResponsesInput<'a> {
-    /// Concatenates two slices and an optional terminal item.
     #[must_use]
     pub const fn new(
         first: &'a [ResponseItem],
@@ -441,7 +403,6 @@ impl<'a> ResponsesInput<'a> {
         }
     }
 
-    /// Concatenates a slice, complete persistent history, and a terminal item.
     #[must_use]
     pub const fn history(
         first: &'a [ResponseItem],
@@ -457,7 +418,6 @@ impl<'a> ResponsesInput<'a> {
         }
     }
 
-    /// Concatenates a slice, a persistent-history suffix, and a terminal item.
     #[must_use]
     pub const fn history_suffix(
         first: &'a [ResponseItem],
@@ -474,7 +434,6 @@ impl<'a> ResponsesInput<'a> {
         }
     }
 
-    /// Iterates over the composed input in wire order.
     #[must_use]
     pub fn iter(self) -> ResponsesInputIter<'a> {
         ResponsesInputIter {
@@ -487,7 +446,6 @@ impl<'a> ResponsesInput<'a> {
         }
     }
 
-    /// Returns the exact composed item count.
     #[must_use]
     pub fn len(self) -> usize {
         self.first.len()
@@ -498,14 +456,12 @@ impl<'a> ResponsesInput<'a> {
             + usize::from(self.tail.is_some())
     }
 
-    /// Returns whether the composed input has no items.
     #[must_use]
     pub fn is_empty(self) -> bool {
         self.len() == 0
     }
 }
 
-/// Iterator over a borrowed [`ResponsesInput`].
 pub struct ResponsesInputIter<'a> {
     first: std::slice::Iter<'a, ResponseItem>,
     second: std::slice::Iter<'a, ResponseItem>,
@@ -553,8 +509,6 @@ impl Serialize for RequestInput<'_> {
     where
         S: serde::Serializer,
     {
-        // As in codex-rs, unsupported models never receive effort updates.
-        // Filter only the wire view, leaving retained conversation untouched.
         let supported = |item: &&ResponseItem| {
             self.reasoning_effort_updates
                 || !matches!(item, ResponseItem::ConfigurationUpdate { .. })
@@ -596,7 +550,6 @@ impl Serialize for RequestResponseItem<'_> {
     }
 }
 
-/// Fully typed wire request for `response.create` or WebSocket warmup.
 #[derive(Serialize)]
 pub(crate) struct ResponseCreate<'a> {
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
@@ -621,7 +574,6 @@ pub(crate) struct ResponseCreate<'a> {
 }
 
 impl<'a> ResponseCreate<'a> {
-    /// Builds a non-generating WebSocket warmup request.
     #[must_use]
     pub(crate) fn warmup(
         config: &'a ModelConfig,
@@ -675,7 +627,10 @@ impl<'a> ResponseCreate<'a> {
         profile: &'a RequestProfile,
         turn_state: Option<&'a str>,
     ) -> Self {
-        let websocket = matches!(policy.transport, crate::client::ResponsesTransport::WebSocket);
+        let websocket = matches!(
+            policy.transport,
+            crate::client::ResponsesTransport::WebSocket
+        );
         let retained = profile.retained_config.as_ref();
         let model = retained.map_or_else(
             || config.wire_model_id(policy.model),
@@ -702,17 +657,15 @@ impl<'a> ResponseCreate<'a> {
                     }),
                 strip_image_detail: matches!(
                     policy.model,
-                    crate::client::Model::Sol | crate::client::Model::Luna | crate::client::Model::Astra
+                    crate::client::Model::Sol
+                        | crate::client::Model::Luna
+                        | crate::client::Model::Astra
                 ),
             },
             tool_choice: "auto",
-            // GPT-6 uses Responses Lite. Codex disables the provider
-            // parallel-call request bit for Lite even though the client-side
-            // scheduler still accepts multi-call responses and replays.
+
             parallel_tool_calls: false,
             reasoning: ReasoningControls {
-                // Custom service factories can bypass configuration validation,
-                // so unsupported modes are omitted at the wire boundary.
                 mode: policy
                     .model
                     .supports_reasoning_mode(reasoning_mode)
@@ -730,10 +683,7 @@ impl<'a> ResponseCreate<'a> {
                 verbosity: "low",
                 format: config.strict_json_schema.as_ref(),
             },
-            // The API accepts both `fast` and `priority`. Codex currently uses
-            // `priority` as the compatibility request value for Fast mode.
-            // As in codex-rs, explicit Fast-off is retained in session policy,
-            // but the default tier is omitted from the provider request.
+
             service_tier: policy.service_tier.request_value(policy.model),
             generate,
             client_metadata: ClientMetadata {
@@ -843,9 +793,6 @@ impl Serialize for SerializedTurnMetadata<'_> {
     }
 }
 
-// Codex replaced the legacy flat inventory with effective namespace exposure.
-// Construct it from the same immutable catalog and normalized Code Mode map
-// used by dispatch, so metadata cannot advertise a different tool surface.
 fn tool_namespaces_info(profile: &RequestProfile) -> BTreeMap<String, serde_json::Value> {
     use super::ToolDefinition;
     use serde_json::json;

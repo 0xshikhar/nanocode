@@ -53,7 +53,7 @@ export function toClaudeConfig(options = {}) {
       if (!['installId','accountUuid','userId','platform','arch','version'].includes(key) || typeof value !== 'string' || !value || value.length > 8192 || /[\u0000-\u001f\u007f]/.test(value)) throw new TypeError('invalid subscriptionIdentity');
     }
   }
-  // Both backends always expose exec/wait.
+
   const config = { toolMode: options.toolMode ?? 'code-only' };
   for (const key of OPTION_KEYS) if (!['codeEvaluator', 'auth', 'fetch', 'tools', 'module', 'durability', 'compatibilityProfile', 'harness', 'harnesses', 'subagents'].includes(key) && options[key] !== undefined) config[key] = options[key];
   if (options.compatibilityProfile !== undefined) {
@@ -64,11 +64,11 @@ export function toClaudeConfig(options = {}) {
     if (typeof process?.arch === 'string') config.subscriptionIdentity.arch ??= process.arch;
     if (typeof process?.env?.PI_AI_CLAUDE_CODE_VERSION === 'string' && process.env.PI_AI_CLAUDE_CODE_VERSION) config.subscriptionIdentity.version ??= process.env.PI_AI_CLAUDE_CODE_VERSION;
   }
-  // Snapshot caller-owned nested native definitions before any asynchronous loading.
+
   return JSON.parse(JSON.stringify(config));
 }
 
-/** Shared host lifecycle; loader selects the Nanocodex WASM class for this host. */
+
 export async function createClaude(options, load, type, harnessDefaults) {
   const codeEvaluator = options?.codeEvaluator ?? harnessDefaults?.codeEvaluator;
   const reservation = options?.[CLOUDFLARE_SESSION_RESERVATION];
@@ -93,22 +93,22 @@ export async function createClaude(options, load, type, harnessDefaults) {
   config.codexHarness = harnesses.codex;
   config.subagentRouting = internalRuntime?.subagentRouting !== undefined;
   if (options.subagents !== undefined) config.subagents = options.subagents.maxConcurrency === undefined ? {} : { max_concurrency: options.subagents.maxConcurrency };
-  options = undefined; // Do not retain caller credentials in runtime lifecycle closures.
-  // Retain the durable owner so a reconstructed Cloudflare runtime can replace
-  // this host without weakening the cross-owner session guard.
+  options = undefined;
+
+
   const hostDefinitionId = registerDefinitionHost(host, reservation);
   config.hostDefinitionId = hostDefinitionId;
   config.authHostId = hostDefinitionId;
   config.tools = JSON.parse(host.toolDefinitions());
-  // Tools that declare supportsParallelToolCalls overlap in consecutive runs;
-  // every other call keeps the serial, ordered default.
+
+
   const parallelSafeTools = host.parallelSafeTools();
   if (parallelSafeTools.length) config.parallelSafeTools = parallelSafeTools;
   let owner;
   let cleaned = false;
-  // Every live handle (root, forks, side conversations, spawned siblings)
-  // shares this host. The host is released only after the last one detaches
-  // and every accepted turn has settled.
+
+
+
   const live = new Set();
   const detachedRaws = new Set();
   const pending = new Set();
@@ -125,7 +125,7 @@ export async function createClaude(options, load, type, harnessDefaults) {
       finishDetached();
     });
     pending.add(result);
-    // Lifecycle observation must not introduce an unhandled rejection when callers detach.
+
     void result.catch(() => {});
     return result;
   };
@@ -152,12 +152,12 @@ export async function createClaude(options, load, type, harnessDefaults) {
         const Nanocodex = await load(module);
         activateHost(host);
         if (typeof Nanocodex?.createClaude !== 'function') throw new Error('this WASM build does not expose the Claude harness');
-        // Construction acquires the durable fence before adoption replaces
-        // the live host route, matching the Codex lifecycle.
+
+
         let raw;
         if (harnesses.codexSubscription === undefined) raw = await Nanocodex.createClaude(JSON.stringify(config));
         else {
-          // Codex children share the Rust-owned ChatGPT credential lifecycle.
+
           if (typeof Nanocodex.createClaudeWithChatGpt !== 'function') throw new Error('this WASM build cannot route Codex children through a ChatGPT subscription');
           raw = await Nanocodex.createClaudeWithChatGpt(JSON.stringify(config), harnesses.codexSubscription);
         }
@@ -171,7 +171,7 @@ export async function createClaude(options, load, type, harnessDefaults) {
     },
     adopt(raw) {
       const root = raw.sessionId === config.sessionId;
-      // Derived handles are ephemeral and do not own the root durable store.
+
       if (root) owner?.retain();
       try { bindHostSession(host, raw.sessionId, reservation); events.addSource(raw); live.add(raw); adopted = true; }
       catch (error) {
@@ -191,7 +191,7 @@ export async function createClaude(options, load, type, harnessDefaults) {
       finishDetached();
     },
     dispose(raw) {
-      // Accepted work owns host/auth/durability routes until it settles.
+
       if (pending.size) detachedRaws.add(raw);
       else raw.free();
     },
@@ -201,8 +201,8 @@ export async function createClaude(options, load, type, harnessDefaults) {
       const own = (turn) => {
         const identity = getTurnHostId(turn);
         void identity.catch(() => {});
-        // Observe every issued turn, even if the caller never requests its result.
-        // Accepted work owns host/auth/durability routes until its terminal receipt settles.
+
+
         const result = track(turn.result().finally(async () => {
           const id = await identity.catch(() => undefined);
           if (id !== undefined) host.releaseTurn(raw.sessionId, id);
@@ -213,17 +213,17 @@ export async function createClaude(options, load, type, harnessDefaults) {
           dispose: () => { if (!disposed) { disposed = true; turn.dispose(); } },
           cancel: async () => {
             if (disposed) throw new Error('the Nanocodex turn has been disposed');
-            // A durable request ID is optional; the Rust lifecycle ID is not.
-            // Never guess using the current active turn: this may be a queued prompt.
+
+
             const id = await identity;
             if (id !== undefined) host.cancelCodeTurn(raw.sessionId, id);
             return turn.cancel();
           },
         });
       };
-      // Turns started by the internal live-input route own host routes too.
+
       ownRoutedTurns(agent, own);
-      // The shared Agent actions; Claude only adds host-route ownership of turns.
+
       return agent.extend(agentActions()).extend(() => ({
         session: { compact: () => track(compact(agent)), cancel: () => { host.cancelCodeTurn(raw.sessionId); return raw.cancel(); }, shutdown: () => shutdown(agent) },
         turn: {

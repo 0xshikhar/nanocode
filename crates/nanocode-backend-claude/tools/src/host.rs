@@ -1,23 +1,8 @@
-//! Opt-in Claude orchestration adapters for embedding-owned capabilities.
-//!
-//! These adapters validate a bounded subset of Claude Code inputs. They never
-//! create a child, answer a question, grant plan approval, switch directories,
-//! or synthesize a task receipt. The host owns those effects and their durable
-//! lifecycle. See <https://code.claude.com/docs/en/tools-reference>.
-//!
-//! Register only [`ClaudeHostTools::definitions`] and dispatch each call with
-//! its real [`HostContext`]. A host must persist effect admission and results
-//! keyed by session, turn and call identity, authorize resume/task IDs, and
-//! reconcile cancellation or restart before accepting another effect. This
-//! module has no default host and does not provide full Claude Code parity.
-
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
-/// Invocation identity and capture budget supplied by the Claude caller.
-/// This is not a Responses context: it carries no provider wire history.
 #[derive(Clone, Copy, Debug)]
 pub struct HostContext<'a> {
     model: &'a str,
@@ -27,7 +12,6 @@ pub struct HostContext<'a> {
     max_output_tokens: usize,
 }
 impl<'a> HostContext<'a> {
-    /// Construct from the actual invocation; the host must enforce capture bounds.
     #[must_use]
     pub const fn new(
         model: &'a str,
@@ -43,84 +27,78 @@ impl<'a> HostContext<'a> {
             max_output_tokens,
         }
     }
-    /// Attach the actual turn identity before dispatch.
+
     #[must_use]
     pub const fn with_turn_id(mut self, turn_id: Option<&'a str>) -> Self {
         self.turn_id = turn_id;
         self
     }
-    /// Current Claude model.
+
     #[must_use]
     pub const fn model(self) -> &'a str {
         self.model
     }
-    /// Host session identity.
+
     #[must_use]
     pub const fn session_id(self) -> &'a str {
         self.session_id
     }
-    /// Host turn identity, required for orchestration effects.
+
     #[must_use]
     pub const fn turn_id(self) -> Option<&'a str> {
         self.turn_id
     }
-    /// Admitted tool call identity.
+
     #[must_use]
     pub const fn call_id(self) -> &'a str {
         self.call_id
     }
-    /// Host-enforced output token budget, not permission to buffer unbounded data.
+
     #[must_use]
     pub const fn max_output_tokens(self) -> usize {
         self.max_output_tokens
     }
 }
 
-/// Claude image source, without OpenAI image URLs/detail wire fields.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ImageSource {
-    /// Base64 image bytes; the caller validates supported image MIME types.
     Base64 { media_type: String, data: String },
-    /// Remote image URL, which the Claude driver replaces with a note to the model.
+
     Url { url: String },
 }
-/// Native result blocks. Unsupported media remains explicit, never silently lost.
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolResultBlock {
-    /// Claude-native text block.
     Text { text: String },
-    /// Claude-native image block.
+
     Image { source: ImageSource },
-    /// Inline PDF or UTF-8 text document, encoded as a base64 data URL.
+
     Document { file_data: String },
-    /// Media not representable by the current Claude client result adapter.
+
     UnsupportedMedia { media_type: String },
 }
-/// A result body is text or Claude-native blocks, never Responses input_* items.
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ToolContent {
-    /// Plain text result.
     Text(String),
-    /// Ordered native content blocks.
+
     Blocks(Vec<ToolResultBlock>),
 }
-/// Caller-owned result with native error semantics and separate event data.
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ToolOutput {
-    /// Native text/image result body.
     pub content: ToolContent,
-    /// True for an actual failed host/remote result.
+
     pub is_error: bool,
-    /// Structured result preserved on the tool event, not invented wire content.
+
     pub structured_result: Option<Value>,
-    /// Host metadata preserved on the tool event.
+
     pub metadata: Option<Value>,
 }
 impl ToolOutput {
-    /// Successful text result, with the text retained as structured data.
     #[must_use]
     pub fn text(text: impl Into<String>) -> Self {
         let text = text.into();
@@ -131,7 +109,7 @@ impl ToolOutput {
             metadata: None,
         }
     }
-    /// Failed text result; this remains a failure even when returned through Ok.
+
     #[must_use]
     pub fn error(text: impl Into<String>) -> Self {
         Self {
@@ -139,7 +117,7 @@ impl ToolOutput {
             ..Self::text(text)
         }
     }
-    /// Successful ordered native blocks. Hosts attach structured data explicitly.
+
     #[must_use]
     pub const fn content(blocks: Vec<ToolResultBlock>) -> Self {
         Self {
@@ -149,13 +127,13 @@ impl ToolOutput {
             metadata: None,
         }
     }
-    /// Attach exact structured data, independently of the text/image wire body.
+
     #[must_use]
     pub fn with_structured_result(mut self, result: Value) -> Self {
         self.structured_result = Some(result);
         self
     }
-    /// Attach exact host metadata without raw JSON or provider DTO conversion.
+
     #[must_use]
     pub fn with_metadata(mut self, metadata: Value) -> Self {
         self.metadata = Some(metadata);
@@ -163,31 +141,27 @@ impl ToolOutput {
     }
 }
 
-/// Maximum serialized arguments admitted at this boundary.
 pub const MAX_HOST_INPUT_BYTES: usize = 64 * 1024;
 
-/// Capabilities explicitly installed by an embedding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum HostTool {
-    /// Start or resume a host-owned child agent.
     Agent,
-    /// Observe or wait for a host-owned background task.
+
     TaskOutput,
-    /// Stop a host-owned background task.
+
     TaskStop,
-    /// Await structured user answers in the host UI.
+
     AskUserQuestion,
-    /// Enter the host's restricted planning mode.
+
     EnterPlanMode,
-    /// Request the host's approval to leave planning mode.
+
     ExitPlanMode,
-    /// Enter an authorized isolated worktree.
+
     EnterWorktree,
-    /// Leave a host-owned worktree.
+
     ExitWorktree,
 }
 impl HostTool {
-    /// All adapter capabilities; listing one never supplies its implementation.
     pub const ALL: [Self; 8] = [
         Self::Agent,
         Self::TaskOutput,
@@ -199,7 +173,6 @@ impl HostTool {
         Self::ExitWorktree,
     ];
 
-    /// Claude-visible tool name.
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
@@ -215,39 +188,26 @@ impl HostTool {
     }
 }
 
-/// Validated requests passed to the actual host lifecycle.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HostRequest {
-    /// Start/resume a child. Background requests require output and stop capabilities.
     Agent(AgentRequest),
-    /// Retrieve actual task output/status, optionally waiting.
+
     TaskOutput(TaskOutputRequest),
-    /// Stop an actual host task; success must mean the host observed the stop.
+
     TaskStop(TaskStopRequest),
-    /// Await a user response without flattening options or selecting defaults.
+
     AskUserQuestion(QuestionsRequest),
-    /// Enforce host planning restrictions before reporting entry.
+
     EnterPlanMode,
-    /// Await real approval; requested permissions do not grant themselves.
+
     ExitPlanMode(ExitPlanRequest),
-    /// Create/enter and update host execution context before reporting success.
+
     EnterWorktree(EnterWorktreeRequest),
-    /// Return to the original execution context; authorize removals separately.
+
     ExitWorktree(ExitWorktreeRequest),
 }
 
-/// Actual embedding capability, with no permissive or synthetic default.
-///
-/// Implementations must enforce authorization, input-dependent capability
-/// support, capture limits, child/task ownership, and cancellation. In
-/// particular, unknown subagent types/models/isolation modes must fail before
-/// spawning; questions must remain pending until answered or cancelled; plan
-/// approval must come from the user/host policy, never model-supplied fields.
-/// The host should reuse its existing agent, task, approval and workspace
-/// services. Returning an acknowledgement is not proof an effect completed.
 pub trait ClaudeHost: Send + Sync {
-    /// Execute once through the host's admitted lifecycle and preserve actual
-    /// result/error/media using this crate's Claude-native output contract.
     fn execute(
         &self,
         request: HostRequest,
@@ -255,13 +215,11 @@ pub trait ClaudeHost: Send + Sync {
     ) -> impl std::future::Future<Output = Result<ToolOutput, String>> + Send;
 }
 
-/// Validated Claude inputs backed by an explicitly installed host.
 pub struct ClaudeHostTools<H: ClaudeHost> {
     host: H,
     enabled: BTreeSet<HostTool>,
 }
 impl<H: ClaudeHost> ClaudeHostTools<H> {
-    /// Install only capabilities the host actually implements and authorizes.
     pub fn new(host: H, enabled: impl IntoIterator<Item = HostTool>) -> Self {
         Self {
             host,
@@ -269,15 +227,11 @@ impl<H: ClaudeHost> ClaudeHostTools<H> {
         }
     }
 
-    /// Definitions for this host's explicit capability subset. No native Codex
-    /// tool definitions are loaded. Unsupported fields fail during execution.
     #[must_use]
     pub fn definitions(&self) -> Vec<Value> {
         self.enabled.iter().map(|tool| definition(*tool)).collect()
     }
 
-    /// Validate all fields before host admission and forward the real context.
-    /// No retries or lifecycle receipts are generated by this adapter.
     pub async fn execute(
         &self,
         name: &str,
@@ -451,60 +405,55 @@ fn definition(tool: HostTool) -> Value {
     json!({"name":tool.name(), "description":description, "input_schema":input_schema})
 }
 
-/// Supported Agent request subset. Team/bypass/fork options are rejected.
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct AgentRequest {
-    /// Complete task instructions, preserved as text.
     pub prompt: String,
-    /// Short purpose shown by the host.
+
     pub description: String,
-    /// A host-configured agent type; the host validates availability.
+
     pub subagent_type: String,
-    /// Optional model choice; the host must reject unavailable models.
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<AgentModel>,
-    /// Existing authorized host agent ID to resume.
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume: Option<String>,
-    /// Return a real task identity while execution continues in the host.
+
     #[serde(default)]
     pub run_in_background: bool,
-    /// Optional positive turn limit enforced by the host.
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_turns: Option<u32>,
-    /// Request isolated worktree execution; never silently ignored.
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isolation: Option<AgentIsolation>,
 }
-/// Recognized Claude model selectors; availability belongs to the host.
+
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum AgentModel {
-    /// Host-configured Sonnet model.
     Sonnet,
-    /// Host-configured Opus model.
+
     Opus,
-    /// Host-configured Haiku model.
+
     Haiku,
 }
-/// Supported child isolation request.
+
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum AgentIsolation {
-    /// A separate host-authorized worktree.
     Worktree,
 }
-/// Background output request; timeout bounds waiting, not the task lifetime.
+
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct TaskOutputRequest {
-    /// Host task identity, scoped and authorized by the host.
     pub task_id: String,
-    /// Wait for completion if true; poll if false.
+
     #[serde(default = "default_block")]
     pub block: bool,
-    /// Maximum wait in milliseconds, from zero through 600000.
+
     #[serde(default = "default_timeout")]
     pub timeout: u64,
 }
@@ -514,102 +463,90 @@ const fn default_block() -> bool {
 const fn default_timeout() -> u64 {
     30_000
 }
-/// Stop a task by its actual host identity.
+
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct TaskStopRequest {
-    /// Task/agent identity accepted by the host; never a local checklist ID.
     pub task_id: String,
 }
-/// Questions displayed together, with no model-supplied answers accepted.
+
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct QuestionsRequest {
-    /// One to four distinct questions.
     pub questions: Vec<UserQuestion>,
 }
-/// A structured host UI question.
+
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct UserQuestion {
-    /// Full question text.
     pub question: String,
-    /// Short UI label, at most twelve characters.
+
     pub header: String,
-    /// Two to four distinct answer choices.
+
     pub options: Vec<QuestionOption>,
-    /// Whether the user may select multiple options.
+
     #[serde(rename = "multiSelect")]
     pub multi_select: bool,
 }
-/// A question choice, retained without flattening.
+
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct QuestionOption {
-    /// Displayed choice label.
     pub label: String,
-    /// Explanation of the choice.
+
     pub description: String,
-    /// Optional preview content, untrusted UI data.
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub markdown: Option<String>,
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct EmptyRequest {}
-/// Exit planning with permissions requested for host review, not preapproved.
+
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ExitPlanRequest {
-    /// Requested actions to present with the host's stored plan.
     #[serde(default, rename = "allowedPrompts")]
     pub allowed_prompts: Vec<PlanPrompt>,
 }
-/// One action whose permission the host must decide.
+
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct PlanPrompt {
-    /// Currently supported permission-request target.
     pub tool: PlanTool,
-    /// Natural-language description of the requested action.
+
     pub prompt: String,
 }
-/// Supported tool named in a plan permission request.
+
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 pub enum PlanTool {
-    /// Shell action; this adapter never executes the prompt as a command.
     Bash,
 }
-/// Create a worktree or enter an existing path; authorization is host-owned.
+
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct EnterWorktreeRequest {
-    /// Optional new worktree name; mutually exclusive with path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// Optional existing worktree location, verified by the host.
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
 }
-/// Leave a host-owned worktree; a remove request is not removal approval.
+
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ExitWorktreeRequest {
-    /// Explicit preservation/removal choice; no destructive default.
     pub action: WorktreeAction,
 }
-/// What to do with the worktree after leaving it.
+
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum WorktreeAction {
-    /// Preserve the worktree and its changes.
     Keep,
-    /// Ask the host to remove it subject to its own authorization policy.
+
     Remove,
 }
 
-/// Convert an original MCP tools/call result into native Claude result blocks.
-/// Unknown media fails explicitly; the complete remote result and metadata are retained.
 pub fn mcp_tool_output(result: Value) -> Result<ToolOutput, String> {
     let content = result
         .get("content")
@@ -653,8 +590,7 @@ pub fn mcp_tool_output(result: Value) -> Result<ToolOutput, String> {
                 let resource = item
                     .get("resource")
                     .ok_or("MCP resource omitted resource body")?;
-                // Resource URIs are remote data, never authorization to fetch them.
-                // Binary resources must reach the model as media, not base64 in text.
+
                 if let Some(blob) = resource.get("blob") {
                     let data = blob.as_str().ok_or("MCP resource blob must be a string")?;
                     let media_type = resource
@@ -710,18 +646,15 @@ pub fn mcp_tool_output(result: Value) -> Result<ToolOutput, String> {
     Ok(output)
 }
 
-/// Exact Claude-visible definition supplied by a caller-owned MCP catalog.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct McpToolDefinition {
-    /// Namespaced MCP tool name (mcp__server__tool).
     pub name: String,
-    /// Remote tool description, treated as untrusted data.
+
     pub description: String,
-    /// Exact native input JSON schema; no inferred function schema.
+
     pub input_schema: Value,
 }
 impl McpToolDefinition {
-    /// Construct a catalog entry; the adapter checks namespace and schema shape.
     #[must_use]
     pub fn new(
         name: impl Into<String>,
@@ -736,20 +669,11 @@ impl McpToolDefinition {
     }
 }
 
-/// Explicit embedding-owned MCP discovery and execution contract.
-///
-/// The embedding implements this interface against its authorized MCP service.
-/// Connections, authentication, remote validation, ownership, cancellation and
-/// capture bounds stay in that service; this crate never installs a default.
-/// Native results retain errors, structured data, metadata and ordered media.
-/// No Responses DynamicToolProvider or tool_search interface is required.
 pub trait ClaudeMcpProvider: Send + Sync {
-    /// Begin the host's idempotent discovery lifecycle (not a grant of access).
     fn start(&self);
-    /// Read the current catalog at every request boundary, including removals.
+
     fn available_definitions(&self) -> Vec<McpToolDefinition>;
-    /// Execute an authorized tool; None means it disappeared after discovery.
-    /// An Err remains a provider failure, not an invented successful receipt.
+
     fn execute(
         &self,
         name: &str,
@@ -758,25 +682,19 @@ pub trait ClaudeMcpProvider: Send + Sync {
     ) -> impl std::future::Future<Output = Result<Option<ToolOutput>, String>> + Send;
 }
 
-/// Claude view over an explicitly supplied, caller-implemented MCP provider.
-/// Query definitions at each model request boundary; never freeze a startup
-/// catalog. MCP resources and WaitForMcpServers are not implemented here.
 pub struct ClaudeMcp<P: ClaudeMcpProvider + ?Sized> {
     provider: std::sync::Arc<P>,
 }
 impl<P: ClaudeMcpProvider + ?Sized> ClaudeMcp<P> {
-    /// Install the caller's authorized provider without starting connections.
     #[must_use]
     pub const fn new(provider: std::sync::Arc<P>) -> Self {
         Self { provider }
     }
 
-    /// Start the existing host's idempotent discovery lifecycle.
     pub fn start(&self) {
         self.provider.start();
     }
 
-    /// Read exact schemas, rejecting duplicate/non-MCP names and malformed schemas.
     pub fn definitions(&self) -> Result<Vec<Value>, String> {
         let mut names = BTreeSet::new();
         self.provider.available_definitions().into_iter().map(|definition| {
@@ -789,8 +707,6 @@ impl<P: ClaudeMcpProvider + ?Sized> ClaudeMcp<P> {
         }).collect()
     }
 
-    /// Pass intact input to a currently available remote tool. Both removed and
-    /// racing removals fail closed; no retry or synthetic lifecycle is performed.
     pub async fn execute(
         &self,
         name: &str,

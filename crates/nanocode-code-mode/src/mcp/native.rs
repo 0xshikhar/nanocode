@@ -1,4 +1,3 @@
-//! Transport access for native harnesses. No Responses results or Code Mode calls.
 use std::time::Duration;
 
 use rmcp::model::CallToolRequestParams;
@@ -16,8 +15,6 @@ fn definition(entry: &ToolEntry) -> Value {
 }
 
 impl McpHandle {
-    /// Current native catalog. Hidden and CodeModeOnly policies are preserved.
-    /// The owning provider must have been started and retained by the embedding.
     #[must_use]
     pub fn native_definitions(&self) -> Vec<Value> {
         self.state
@@ -27,15 +24,12 @@ impl McpHandle {
             .collect()
     }
 
-    /// Discover tools using the existing ranked catalog, or exact `select:name,...`.
-    /// Schemas use native name/description/input_schema fields.
     pub async fn native_search(&self, query: &str, max_results: usize) -> Result<Value, String> {
         if max_results == 0 {
             return Err("max_results must be at least 1".into());
         }
         self.state.wait_for_startup().await;
-        // Search is an explicit discovery boundary: observe remote additions and
-        // removals over the existing connections before returning references.
+
         for configured in self
             .servers
             .iter()
@@ -119,15 +113,11 @@ impl McpHandle {
         Ok(json!({"tools": selected, "servers": self.state.native_status()}))
     }
 
-    /// Wait for actual discovery completion, bounded by the caller's timeout.
-    /// Pending and failed servers are reported independently; timeout is not readiness.
     pub async fn native_wait(&self, timeout: Duration) -> Value {
         let _ = tokio::time::timeout(timeout, self.state.wait_for_startup()).await;
         self.state.native_status()
     }
 
-    /// Call a native-visible tool once, returning the original MCP protocol result.
-    /// Authentication, payment policy, connection ownership and timeout remain transport-owned.
     pub async fn native_call(
         &self,
         name: &str,
@@ -137,8 +127,6 @@ impl McpHandle {
         self.native_call_checked(name, input, metadata, None).await
     }
 
-    /// Execute only if the current name, description and input schema still
-    /// match the definition admitted by the native harness.
     pub async fn native_call_admitted(
         &self,
         name: &str,
@@ -183,8 +171,7 @@ impl McpHandle {
                 .insert("nanocode/invocation".into(), metadata);
         }
         entry.client.refresh_oauth().await?;
-        // OAuth can yield while a host removes/reconnects the server. Do not
-        // dispatch through a superseded client after that authorization wait.
+
         let current = self
             .state
             .ready_entry(name)
@@ -208,8 +195,6 @@ impl McpHandle {
         serde_json::to_value(result).map_err(|e| e.to_string())
     }
 
-    /// List resources and resource templates, following bounded protocol pagination.
-    /// Omitting a server lists every configured, resource-capable native server.
     pub async fn native_list_resources(&self, server: Option<&str>) -> Result<Value, String> {
         self.state.wait_for_startup().await;
         if let Some(name) = server {
@@ -266,7 +251,6 @@ impl McpHandle {
         )
     }
 
-    /// Read a URI through its configured MCP server. Never fetches the URI locally.
     pub async fn native_read_resource(&self, server: &str, uri: &str) -> Result<Value, String> {
         let configured = self.native_server(server)?;
         if uri.is_empty() || uri.len() > 64 * 1024 || uri.contains('\0') {

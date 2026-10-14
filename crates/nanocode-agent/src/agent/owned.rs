@@ -1,33 +1,19 @@
-//! Host ownership of an agent lifecycle and every lifecycle created from it.
-
 use super::backend::{
     BackendFuture, BackendPrompt, BackendPromptRoute, BackendTurn, BackendTurnKey, LifecycleBackend,
 };
 use super::*;
 
-/// Embedding-owned registry that retains agents until they are explicitly
-/// shut down. Implemented by reusable runtimes; not a provider contract.
 #[doc(hidden)]
 pub trait AgentOwner: Send + Sync + 'static {
-    /// Admits one construction, failing with [`NanocodexError::AgentStopped`]
-    /// once the owner stopped admitting new agents.
     fn admit(&self) -> Result<()>;
-    /// Ends one admitted construction, whether or not it produced an agent.
+
     fn finish(&self);
-    /// Retains an owning handle under `key`, returning `false` after the
-    /// owner already stopped every agent it held.
+
     fn adopt(&self, key: usize, agent: Nanocodex) -> bool;
-    /// Drops the retained handle after the agent's explicit shutdown.
+
     fn release(&self, key: usize);
 }
 
-/// Places a freshly constructed agent under `owner`.
-///
-/// The returned handle shares the agent's lifecycle; agents created from it
-/// through `spawn` or `fork` are owned as well. A shut-down agent is
-/// released. The owner is held weakly, so a dropped owner leaves the agent
-/// running under its remaining handles. An owner that already stopped its
-/// agents rejects adoption: the agent is shut down and `AgentStopped` returned.
 #[doc(hidden)]
 pub async fn adopt(agent: Nanocodex, owner: &Arc<dyn AgentOwner>) -> Result<Nanocodex> {
     let key = Arc::as_ptr(&agent.backend).cast::<()>() as usize;
@@ -47,13 +33,11 @@ pub async fn adopt(agent: Nanocodex, owner: &Arc<dyn AgentOwner>) -> Result<Nano
     if owner.adopt(key, owned.clone()) {
         return Ok(owned);
     }
-    // The owner already stopped its agents: stop this one too, reporting a
-    // failed cleanup rather than hiding it behind the rejection.
+
     agent.backend.shutdown().await?;
     Err(NanocodexError::AgentStopped)
 }
 
-/// Ends an admitted construction even when its future is dropped mid-await.
 struct Admitted(Arc<dyn AgentOwner>);
 
 impl Drop for Admitted {
@@ -62,8 +46,6 @@ impl Drop for Admitted {
     }
 }
 
-/// Runs one admitted construction and adopts its result. The backend
-/// operation starts only after admission succeeds.
 async fn adopt_created(
     owner: std::sync::Weak<dyn AgentOwner>,
     create: impl FnOnce() -> BackendFuture<Result<(Nanocodex, AgentEvents)>>,
@@ -118,7 +100,7 @@ impl LifecycleBackend for Owned {
     fn cancel(&self, key: BackendTurnKey) -> BackendFuture<Result<()>> {
         self.inner.cancel(key)
     }
-    fn set_harness_model(&self, model: crate::HarnessModel) -> BackendFuture<Result<()>> {
+    fn set_harness_model(&self, model: crate::ModelSelection) -> BackendFuture<Result<()>> {
         self.inner.set_harness_model(model)
     }
     fn set_thinking(&self, thinking: Thinking) -> BackendFuture<Result<()>> {

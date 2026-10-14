@@ -5,13 +5,11 @@ use tokio::sync::Mutex;
 
 use super::{StandardTool, Tool, ToolContext, ToolInput, ToolOutput, ToolResult};
 
-/// Host-owned standard plan tool for runtimes that replace workspace effects.
 pub struct UpdatePlanTool {
     current: Mutex<Option<UpdatePlanArgs>>,
 }
 
 impl UpdatePlanTool {
-    /// Creates an empty retained plan.
     #[must_use]
     pub const fn new() -> Self {
         Self {

@@ -1,4 +1,3 @@
-//! Explicit host-owned branching of settled historical checkpoints.
 use crate::state::RetainedCheckpoint;
 use crate::{
     DurableState, EncodedPayload, Error, OperationStatus, OwnerId, OwnerToken, Result, StateStore,
@@ -6,21 +5,14 @@ use crate::{
 };
 use serde::Serialize;
 
-/// A retained operation eligible for an explicit history selection.
 #[derive(Clone, Debug, Serialize)]
 pub struct BranchTurn {
-    /// Original durable operation identity.
+
     pub id: String,
-    /// Original host input. This is reference data, never executable work.
+
     pub input: serde_json::Value,
 }
 
-/// An owned, settled source journal for a recoverable branch.
-///
-/// Acquiring this handle fences older owners through the normal store contract.
-/// Pending operations are rejected; branching never imports execution receipts
-/// as pending work or calls an external handler. The original journal remains
-/// intact. Callers must separately validate provider-native checkpoint semantics.
 pub struct CheckpointBranch<S> {
     store: S,
     source_id: String,
@@ -31,7 +23,7 @@ pub struct CheckpointBranch<S> {
     state: DurableState,
 }
 impl<S: StateStore> CheckpointBranch<S> {
-    /// Acquires the source with the standard owner protocol and rejects pending work.
+
     pub async fn open(mut store: S, source_id: impl Into<String>) -> Result<Self> {
         let source_id = source_id.into();
         let acquired = store.acquire(&source_id, OwnerId::new()).await?;
@@ -62,15 +54,10 @@ impl<S: StateStore> CheckpointBranch<S> {
         })
     }
 
-    /// Reserved fresh UUID, so the host can prepare required policy and routing
-    /// state before making the conversation journal resumable. No target state
-    /// is created until publication.
     pub fn branch_id(&self) -> &str {
         &self.branch_id
     }
 
-    /// Lists retained operations in submission order, with resolved original input.
-    /// Old operations removed by the caller's retention policy cannot be selected.
     pub async fn turns(&mut self) -> Result<Vec<BranchTurn>> {
         let mut operations: Vec<_> = self.state.operations().iter().collect();
         operations.sort_by_key(|(_, op)| op.accepted_order);
@@ -89,7 +76,6 @@ impl<S: StateStore> CheckpointBranch<S> {
         Ok(turns)
     }
 
-    /// Loads the latest provider checkpoint without recovering or executing any work.
     pub async fn latest(&mut self) -> Result<EncodedPayload> {
         self.state
             .latest_checkpoint()
@@ -98,9 +84,6 @@ impl<S: StateStore> CheckpointBranch<S> {
             .await
     }
 
-    /// Loads the terminal checkpoint immediately before the selected user operation.
-    /// `None` means the selected operation was the first operation of a fresh journal.
-    /// Missing retained history and unsafe cancelled boundaries fail closed.
     pub async fn before(&mut self, turn_id: &str) -> Result<Option<EncodedPayload>> {
         let selected = self
             .state
@@ -122,8 +105,6 @@ impl<S: StateStore> CheckpointBranch<S> {
         ))
     }
 
-    /// Checks owner/revision atomically through the store. No provider content changes.
-    /// Use before any associated host mutation; a conflicting owner fails closed.
     pub async fn verify_source(&mut self) -> Result<()> {
         self.revision = self
             .store
@@ -138,8 +119,6 @@ impl<S: StateStore> CheckpointBranch<S> {
         Ok(())
     }
 
-    /// Publishes a new UUID journal containing only a checkpoint, with no pending work.
-    /// The caller must not automatically retry an uncertain store error.
     pub async fn publish<T: Serialize + ?Sized>(mut self, checkpoint: &T) -> Result<String> {
         self.verify_source().await?;
         let id = self.branch_id.clone();

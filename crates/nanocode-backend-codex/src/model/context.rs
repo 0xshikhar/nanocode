@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use chrono::{Local, Utc};
 use crate::client::responses::{ContentItem, MessageRole, ResponseItem};
+use chrono::{Local, Utc};
 
 use crate::agent::ExecutionEnvironment;
 pub(crate) use crate::session::{
@@ -164,7 +164,7 @@ impl ContextSnapshot {
         }
         if let Some(environment) = &self.environment {
             content.push(ContentItem::InputText {
-                text: render_environment(environment, /*full*/ true).into_boxed_str(),
+                text: render_environment(environment, true).into_boxed_str(),
             });
         }
         ResponseItem::message(MessageRole::User, content)
@@ -196,7 +196,7 @@ impl ContextSnapshot {
                 }
             }
             (_, Some(after)) => content.push(ContentItem::InputText {
-                text: render_environment(after, /*full*/ true).into_boxed_str(),
+                text: render_environment(after, true).into_boxed_str(),
             }),
             (Some(_), None) | (None, None) => {}
         }
@@ -333,9 +333,7 @@ fn push_filesystem(output: &mut String, cwd: &str) {
 }
 
 #[cfg(target_family = "wasm")]
-fn push_filesystem(_output: &mut String, _cwd: &str) {
-    // The host supplies its actual grant; WASM has no unrestricted filesystem.
-}
+fn push_filesystem(_output: &mut String, _cwd: &str) {}
 
 fn push_xml_line(output: &mut String, tag: &str, value: &str) {
     output.push_str("  <");

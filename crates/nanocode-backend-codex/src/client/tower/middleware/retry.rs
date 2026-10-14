@@ -18,7 +18,6 @@ use crate::client::{
 
 use super::delay::{RetryDelay, RetryFuture};
 
-/// Retry policy for the SDK-owned Responses transport stack.
 #[derive(Clone, Debug)]
 pub struct ResponsesRetryPolicy {
     max_attempts: NonZeroU32,
@@ -27,10 +26,8 @@ pub struct ResponsesRetryPolicy {
 }
 
 impl ResponsesRetryPolicy {
-    /// Default number of total attempts, including the initial request.
     pub const DEFAULT_MAX_ATTEMPTS: NonZeroU32 = NonZeroU32::new(5).unwrap();
 
-    /// Creates a retry policy with a fixed total-attempt limit.
     #[must_use]
     pub const fn new(max_attempts: NonZeroU32) -> Self {
         Self {
@@ -40,9 +37,6 @@ impl ResponsesRetryPolicy {
         }
     }
 
-    // Hosted targets retain an `Arc` to the selected host, so this cannot be
-    // const across every supported target even though the native adapter is
-    // zero-sized.
     #[allow(clippy::missing_const_for_fn)]
     pub(crate) fn for_config(max_attempts: NonZeroU32, config: &ModelConfig) -> Self {
         Self {
@@ -136,7 +130,8 @@ impl Policy<ResponsesAttempt, ResponsesServiceResponse, ResponsesServiceError>
                     failure_phase: failure.phase,
                     error_class: "websocket_fallback",
                     delay_ns: duration_ns(
-                        server_deadline.map_or(Duration::ZERO, crate::client::RetryAfter::remaining_delay),
+                        server_deadline
+                            .map_or(Duration::ZERO, crate::client::RetryAfter::remaining_delay),
                     ),
                     server_requested_delay: server_deadline.is_some(),
                     opens_new_socket: false,
@@ -253,8 +248,6 @@ impl Policy<ResponsesAttempt, ResponsesServiceResponse, ResponsesServiceError>
     }
 }
 
-// Observers and future scheduling may consume part of the original deadline.
-// Record actual waiting for both ordinary retries and transport fallback.
 fn wait_for_retry(
     runtime: RetryDelay,
     thread_id: String,
@@ -276,7 +269,6 @@ fn wait_for_retry(
     })
 }
 
-/// Standard stateful Responses transport wrapped in the SDK-owned retry policy.
 pub type DefaultResponsesService = Retry<ResponsesRetryPolicy, ResponsesService>;
 
 fn retry_delay(attempt: u32, call_index: Option<u32>) -> Duration {

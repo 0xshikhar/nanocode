@@ -1,4 +1,3 @@
-//! Session-owned Bash jobs shared by Bash, TaskOutput and TaskStop.
 use nanocode_claude_tools::{BashExecution, BashExecutor, BashRequest, BashResult, ClaudeBash};
 use nanocode_code_mode::{
     SessionEnvironment, Tool, ToolContext, ToolDefinition, ToolInput, ToolOutput, ToolResult,
@@ -37,8 +36,6 @@ pub(super) struct Jobs {
 }
 impl Jobs {
     pub(super) async fn shutdown(&self) {
-        // Keep entries until all callers have joined cleanup. Repeated shutdowns
-        // wait on the same task handles rather than acknowledging an empty store.
         let jobs = self
             .entries
             .lock()
@@ -131,7 +128,7 @@ impl BashExecutor for LocalBash {
             entries.insert(id.clone(), job.clone());
             job
         };
-        // Until returned as a background task, cancellation belongs to this call.
+
         struct Admission(Option<tokio::task::AbortHandle>);
         impl Drop for Admission {
             fn drop(&mut self) {

@@ -7,7 +7,7 @@ export const MAX_USER_DATA_JSON_BYTES = 256 * 1024;
 export const MAX_USER_DATA_FIELDS_BYTES = 16 * 1024;
 export const MAX_USER_DATA_AGGREGATE_BUCKETS = 1_000;
 
-/** Bound streamed HTTP input before parsing, including requests without Content-Length. */
+
 export async function readUserDataRequest(request: Request): Promise<unknown> {
   const reader = request.body?.getReader();
   if (!reader) throw new UserDataError("invalid_json", "request body must be JSON");

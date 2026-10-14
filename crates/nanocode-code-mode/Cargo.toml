@@ -44,11 +44,11 @@ workspace-runtime = [
     "dep:nix",
     "dep:rustix",
 ]
-# Full native runtime: Code Mode and MCP.
+
 native = ["code-mode", "mcp"]
-# Image decoding and preparation without a tool execution runtime.
+
 image-processing = ["dep:base64", "dep:image", "dep:sha1", "dep:thiserror", "dep:tokio"]
-# Code Mode tool runtime used by the agent loop, without MCP.
+
 code-mode = [
     "attachment",
     "image-processing",
@@ -59,7 +59,7 @@ code-mode = [
     "dep:reqwest",
     "dep:rquickjs",
 ]
-# MCP servers, OAuth login, and deferred-tool search.
+
 mcp = ["code-mode", "dep:bm25", "dep:oauth2", "dep:rmcp", "dep:tokio-util"]
 
 [dependencies]

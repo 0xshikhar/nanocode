@@ -1,5 +1,5 @@
-// Owned SDK-only canonical effect identity. Projected turn IDs are lookup hints,
-// never durable journal keys. Keep queued/overlapping turns independently.
+
+
 export function createCodeEffectIdentity(enabled) {
   const sessions = new Map();
   const acceptedTurns = new Map();
@@ -16,9 +16,9 @@ export function createCodeEffectIdentity(enabled) {
     const session = sessions.get(sessionId);
     let projected = session?.turns.has(turnId) ? turnId : session?.aliases.get(turnId);
     if (!projected) {
-      // The current WASM ABI supplies profile IDs `session:logicalOrdinal`,
-      // while events use a UUID. Bind that ABI lookup alias only to a UNIQUE
-      // just-emitted, unclaimed call; never pick the latest accepted turn.
+
+
+
       const prefix = sessionId + ":";
       if (typeof turnId !== "string" || !turnId.startsWith(prefix) || !/^[1-9]\d*$/.test(turnId.slice(prefix.length))) unavailable();
       const candidates = [...session?.turns ?? []].filter(([, turn]) => turn.calls.get(parentCallId)?.pending);
@@ -53,10 +53,10 @@ export function createCodeEffectIdentity(enabled) {
             if (acceptedTurns.get(old) === sessionId) acceptedTurns.delete(old);
             for (const [alias, projected] of session.aliases) if (projected === old) session.aliases.delete(alias);
           }
-          // Rust emits an explicit null request_id for execution_operation=None
-          // (including ephemeral child tasks). There is no durable operation
-          // to recover in that mode; scope to its trusted accepted input item.
-          // Missing metadata is still an error, never a latest-turn fallback.
+
+
+
+
           const operationId = typeof payload.request_id === "string" && payload.request_id
             ? payload.request_id
             : payload.request_id === null && payload.item_id === payload.turn_id + ":prompt"
@@ -64,9 +64,9 @@ export function createCodeEffectIdentity(enabled) {
           session.turns.set(payload.turn_id, { operationId, calls: new Map() });
         }
       } else if (event.type === "tool.call") {
-        // Managed child events share their parent's correlation envelope.
-        // Only the trusted accepted-input session/turn link routes a call;
-        // event.request_id is neither an SDK session nor effect authority.
+
+
+
         const sessionId = acceptedTurns.get(payload.turn_id);
         if (typeof sessionId !== "string") return;
         const turn = sessions.get(sessionId)?.turns.get(payload.turn_id);
@@ -88,9 +88,9 @@ export function createCodeEffectIdentity(enabled) {
       signal?.throwIfAborted();
       try { return lookup(sessionId, parentCallId, turnId); }
       catch (error) { if (!error.retryable || waiters.size >= 128) throw error; }
-      // Child Rust event forwarding can race its host invocation. Rendezvous
-      // only with the exact trusted call; never infer a model index or turn.
-      // Bounded, event-driven and abortable: no polling or execution replay.
+
+
+
       return new Promise((resolve, reject) => {
         let timer;
         const waiter = { sessionId, check() {

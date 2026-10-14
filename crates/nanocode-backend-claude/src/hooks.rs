@@ -1,18 +1,12 @@
-//! Caller-owned tool lifecycle hooks. Hooks run inside the admitted tool effect;
-//! committed durable receipts bypass them on replay. Hosts must reconcile hooks
-//! with external effects using the supplied stable invocation identity.
 use crate::{ClaudeToolInvocation, ClaudeToolReply};
 use serde_json::Value;
 use std::{future::Future, pin::Pin};
 
-/// A hook future follows the target's transport threading contract.
 #[cfg(not(target_family = "wasm"))]
 pub type ClaudeHookFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 #[cfg(target_family = "wasm")]
 pub type ClaudeHookFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
-/// The host decides whether a client tool may execute. Replacements are still
-/// validated by that tool; they do not change its name or grant capabilities.
 #[derive(Clone, Debug)]
 pub enum ClaudeToolDecision {
     Allow,
@@ -20,20 +14,11 @@ pub enum ClaudeToolDecision {
     Deny(String),
 }
 
-/// Explicit host authorization and observation at the native client tool boundary.
-/// No commands, settings, or permissions are loaded implicitly. Server tools run
-/// at the provider and are outside this interface; enable them independently.
 pub trait ClaudeToolHooks: Send + Sync {
-    /// Opt in only when this policy actually handles the supplied boundary.
-    /// False skips durable admission entirely; tool-only policies cost no
-    /// lifecycle effect writes. Matching must be deterministic for a turn.
     fn handles_lifecycle(&self, _event: &ClaudeLifecycleEvent) -> bool {
         false
     }
 
-    /// Runs only at a real host lifecycle boundary. The runtime owns durable
-    /// admission, cancellation and checkpoint ordering. The default keeps
-    /// existing tool-only policies source compatible.
     fn lifecycle<'a>(
         &'a self,
         _invocation: &'a ClaudeLifecycleInvocation,
@@ -41,7 +26,6 @@ pub trait ClaudeToolHooks: Send + Sync {
         Box::pin(async { Ok(ClaudeLifecycleOutcome::default()) })
     }
 
-    /// Runs before any client handler. Failure prevents dispatch.
     fn before<'a>(
         &'a self,
         name: &'a str,
@@ -49,8 +33,6 @@ pub trait ClaudeToolHooks: Send + Sync {
         invocation: &'a ClaudeToolInvocation,
     ) -> ClaudeHookFuture<'a, Result<ClaudeToolDecision, String>>;
 
-    /// Observe the exact result, including failures. A failure here is appended
-    /// to the result; it never erases evidence of a completed tool effect.
     fn after<'a>(
         &'a self,
         _name: &'a str,
@@ -62,8 +44,6 @@ pub trait ClaudeToolHooks: Send + Sync {
     }
 }
 
-/// An actual native lifecycle boundary. Hosts must not synthesize events for
-/// unsupported product workflows (for example an implicit transcript export).
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "hook_event_name")]
 pub enum ClaudeLifecycleEvent {
@@ -117,7 +97,7 @@ impl ClaudeLifecycleEvent {
             Self::SessionEnd { .. } => "SessionEnd",
         }
     }
-    /// Value against which a configured event matcher is evaluated.
+
     pub fn matcher_value(&self) -> &str {
         match self {
             Self::SessionStart { source } => source,
@@ -141,15 +121,10 @@ impl ClaudeLifecycleEvent {
     }
 }
 
-/// Identity belongs to the admitted runtime effect, not to the shell process.
-/// A committed outcome must be replayed without invoking the hook again. A
-/// crash before commit can leave external effects uncertain; event_id lets a
-/// trusted command reconcile them, but does not make arbitrary shell atomic.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ClaudeLifecycleInvocation {
     pub session_id: String,
-    /// Root of this session's conversation tree; equal to `session_id` for a
-    /// root. Hosts export it to hook processes; it is not hook input.
+
     #[serde(skip)]
     pub root_session_id: String,
     pub turn_id: String,
@@ -164,14 +139,12 @@ pub struct ClaudeLifecycleInvocation {
 pub enum ClaudeLifecycleDecision {
     #[default]
     Continue,
-    /// Reject a prompt/compaction, or request another round at Stop.
+
     Block(String),
-    /// An explicit continue:false requests that processing stop immediately.
+
     Stop(String),
 }
 
-/// Kept separate from committed model/tool content. Observation failures are
-/// diagnostics; they may never replace or discard the content being observed.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct ClaudeLifecycleOutcome {
     pub decision: ClaudeLifecycleDecision,
@@ -179,14 +152,6 @@ pub struct ClaudeLifecycleOutcome {
     pub diagnostics: Vec<String>,
 }
 
-/// Execute a lifecycle event within an already admitted durable operation.
-/// Each registered policy has its own receipt, so a later policy failure or
-/// recovery does not repeat an earlier committed policy. The caller checkpoints
-/// the resulting context/decision before retiring these receipts, and selects
-/// cancellation around this future to drop any in-flight command process.
-///
-/// This function does not create lifecycle events. Embeddings must call it at
-/// their actual boundaries and retain completed content before post events.
 pub async fn run_lifecycle_hooks(
     hooks: &[std::sync::Arc<dyn ClaudeToolHooks>],
     invocation: &ClaudeLifecycleInvocation,

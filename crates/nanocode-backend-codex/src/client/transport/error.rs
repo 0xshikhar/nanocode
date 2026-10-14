@@ -5,174 +5,116 @@ use super::api_error::{
     invalid_tool_schema_path, retryable_api_error, retryable_api_error_received,
 };
 
-/// Errors produced by the standard `OpenAI` Responses transports.
-///
-/// The API is identical across native and hosted targets. Platform adapters
-/// retain their complete error detail while reducing retry behavior to explicit
-/// typed fields before the error reaches the shared state machine.
 #[derive(Debug, thiserror::Error)]
 pub enum ResponsesError {
-    /// Authorization could not be resolved.
     #[error("failed to resolve OpenAI authorization: {detail}")]
-    Authorization {
-        /// Credential-resolution detail without the credential value.
-        detail: String,
-    },
-    /// The embedding did not install the transport required by this target.
+    Authorization { detail: String },
+
     #[error("the Responses host transport is not configured")]
     HostUnavailable,
-    /// The configured WebSocket URL was invalid.
+
     #[error("invalid Responses WebSocket URL: {detail}")]
-    InvalidUrl {
-        /// Complete parser failure detail.
-        detail: String,
-    },
-    /// An authorization value could not be encoded for the handshake.
+    InvalidUrl { detail: String },
+
     #[error("invalid OpenAI authorization header: {detail}")]
-    InvalidAuthorization {
-        /// Complete header encoding failure detail.
-        detail: String,
-    },
-    /// A session identity could not be encoded for the handshake.
+    InvalidAuthorization { detail: String },
+
     #[error("invalid Responses session identifier header: {detail}")]
-    InvalidSessionId {
-        /// Complete header encoding failure detail.
-        detail: String,
-    },
-    /// The WebSocket handshake exceeded its deadline.
+    InvalidSessionId { detail: String },
+
     #[error("Responses WebSocket handshake exceeded {seconds} seconds")]
-    HandshakeTimeout {
-        /// Configured timeout in seconds.
-        seconds: u64,
-    },
-    /// The WebSocket handshake failed at the transport layer.
+    HandshakeTimeout { seconds: u64 },
+
     #[error("Responses WebSocket handshake failed: {detail}")]
-    Handshake {
-        /// Complete platform failure detail.
-        detail: String,
-        /// Whether opening a replacement socket may safely recover.
-        reconnectable: bool,
-    },
-    /// The server rejected the WebSocket handshake.
+    Handshake { detail: String, reconnectable: bool },
+
     #[error("Responses WebSocket handshake was rejected with HTTP {status}: {body}")]
     HandshakeRejected {
-        /// HTTP response status.
         status: u16,
-        /// Retained response body.
+
         body: String,
-        /// Server-requested retry delay when present.
+
         retry_after: Option<RetryAfter>,
     },
-    /// Sending a WebSocket frame failed.
+
     #[error("failed to send a Responses WebSocket frame: {detail}")]
-    Send {
-        /// Complete platform failure detail.
-        detail: String,
-        /// Whether opening a replacement socket may safely recover.
-        reconnectable: bool,
-    },
-    /// Sending a WebSocket frame exceeded its deadline.
+    Send { detail: String, reconnectable: bool },
+
     #[error("sending a Responses WebSocket frame exceeded {seconds} seconds")]
-    SendTimeout {
-        /// Configured timeout in seconds.
-        seconds: u64,
-    },
-    /// The WebSocket stream ended without a close frame.
+    SendTimeout { seconds: u64 },
+
     #[error("Responses WebSocket closed without a close frame")]
     UnexpectedEnd,
-    /// Receiving a WebSocket frame failed.
+
     #[error("failed to receive a Responses WebSocket frame: {detail}")]
-    Receive {
-        /// Complete platform failure detail.
-        detail: String,
-        /// Whether opening a replacement socket may safely recover.
-        reconnectable: bool,
-    },
-    /// A received WebSocket event was not valid JSON.
+    Receive { detail: String, reconnectable: bool },
+
     #[error("Responses WebSocket event was not valid JSON")]
     InvalidJson(#[source] serde_json::Error),
-    /// The endpoint returned a binary frame where text JSON was required.
+
     #[error("Responses WebSocket returned a binary data frame; expected JSON text")]
     UnexpectedBinary,
-    /// A typed request could not be serialized.
+
     #[error("failed to encode a Responses WebSocket request")]
     EncodeRequest(#[source] serde_json::Error),
-    /// An event's payload did not match the shape declared by its type.
+
     #[error("Responses API event did not match its declared type: {event}")]
     InvalidPayload {
-        /// Typed payload decode failure.
         #[source]
         source: serde_json::Error,
-        /// Complete retained provider event.
+
         event: String,
     },
-    /// The WebSocket closed with provider-supplied detail.
+
     #[error("Responses WebSocket closed {detail}")]
-    Closed {
-        /// Close code and reason.
-        detail: String,
-    },
-    /// The Responses API returned a typed error event.
+    Closed { detail: String },
+
     #[error("Responses API returned an error event: {event}")]
     Api {
-        /// Complete retained provider event.
         event: String,
-        /// Server advice captured when the event was received.
+
         retry_after: Option<RetryAfter>,
     },
-    /// The request exceeded the model context window.
+
     #[error("Responses input exceeded the model context window")]
-    ContextWindowExceeded {
-        /// Complete retained provider event.
-        event: String,
-    },
-    /// The provider rejected malformed or unsupported image data.
+    ContextWindowExceeded { event: String },
+
     #[error("Responses API rejected invalid image data: {event}")]
-    InvalidImageRequest {
-        /// Complete retained provider event.
-        event: String,
-    },
-    /// The provider identified an invalid function schema in discovery history.
+    InvalidImageRequest { event: String },
+
     #[error("{source}")]
     InvalidToolSchema {
-        /// Original provider failure, including its complete error detail.
         #[source]
         source: Box<Self>,
-        /// Exact discovered definition selected by the provider's parameter path.
+
         definition: Box<serde_json::Value>,
     },
-    /// Sending or reading an HTTPS request failed.
+
     #[error("Responses HTTPS request failed: {detail}")]
     HttpRequest {
-        /// Complete platform failure detail.
         detail: String,
-        /// Whether replaying the request may recover.
+
         retryable: bool,
-        /// Whether the request exceeded a configured deadline.
+
         timeout: bool,
     },
-    /// The server rejected an HTTPS request.
+
     #[error("Responses HTTPS request was rejected with HTTP {status}: {body}")]
     HttpRejected {
-        /// HTTP response status.
         status: u16,
-        /// Retained response body.
+
         body: String,
-        /// Server-requested retry delay when present.
+
         retry_after: Option<RetryAfter>,
     },
-    /// An SSE response body contained invalid UTF-8.
+
     #[error("Responses HTTPS stream contained invalid UTF-8: {detail}")]
-    InvalidSseUtf8 {
-        /// Complete UTF-8 failure detail.
-        detail: String,
-    },
+    InvalidSseUtf8 { detail: String },
 }
 
 const INVALID_IMAGE_ERROR: &str = "The image data you provided does not represent a valid image";
 
 impl ResponsesError {
-    /// Returns the SDK-owned retry classification, if retrying is safe.
     #[must_use]
     pub fn retry_advice(&self) -> Option<RetryAdvice> {
         if matches!(self, Self::HttpRejected { body, .. } | Self::HandshakeRejected { body, .. }
@@ -186,8 +128,7 @@ impl ResponsesError {
                 ..
             } => ("handshake_transport", None),
             Self::HandshakeTimeout { .. } => ("handshake_timeout", None),
-            // ChatGPT's edge can transiently reject an otherwise valid upgrade. Treating the
-            // rejection as bounded recovery also unlocks the standard HTTPS fallback.
+
             Self::HandshakeRejected {
                 status: 403,
                 retry_after,
@@ -214,10 +155,7 @@ impl ResponsesError {
                 ..
             } => ("receive_transport", None),
             Self::Api { event, retry_after } => (retryable_api_error(event)?.0, *retry_after),
-            // Hosted stream adapters surface parser failures through the same
-            // reader rejection as network failures. Replaying a malformed
-            // provider stream cannot repair its protocol and must also remain
-            // terminal when durability consults this retry policy.
+
             Self::HttpRequest { detail, .. } if invalid_provider_stream(detail) => return None,
             Self::HttpRequest { timeout: true, .. } => ("https_timeout", None),
             Self::HttpRequest {
@@ -241,7 +179,6 @@ impl ResponsesError {
         })
     }
 
-    /// Returns advice captured at receipt, without restarting its interval.
     #[must_use]
     pub const fn retry_after(&self) -> Option<RetryAfter> {
         match self {
@@ -262,7 +199,6 @@ impl ResponsesError {
         }
     }
 
-    /// Returns a stable low-cardinality error class for telemetry.
     #[must_use]
     pub fn class(&self) -> &'static str {
         match self {
@@ -312,19 +248,16 @@ impl ResponsesError {
         }
     }
 
-    /// Returns whether the provider no longer recognizes a continuation ID.
     #[must_use]
     pub fn is_checkpoint_missing(&self) -> bool {
         matches!(self, Self::Api { event, .. } if api_error_is_checkpoint_missing(event))
     }
 
-    /// Returns whether the provider rejected the request for context exhaustion.
     #[must_use]
     pub const fn is_context_window_exceeded(&self) -> bool {
         matches!(self, Self::ContextWindowExceeded { .. })
     }
 
-    /// Returns the rejected discovery definition identified on the failed request.
     #[must_use]
     pub fn invalid_tool_schema(&self) -> Option<&serde_json::Value> {
         match self {
@@ -347,7 +280,8 @@ impl ResponsesError {
         let Some(indices) = invalid_tool_schema_path(event) else {
             return self;
         };
-        let Some(crate::client::ResponseItem::ToolSearchOutput { tools, .. }) = input.nth(indices[0])
+        let Some(crate::client::ResponseItem::ToolSearchOutput { tools, .. }) =
+            input.nth(indices[0])
         else {
             return self;
         };
@@ -377,7 +311,6 @@ impl ResponsesError {
         }
     }
 
-    /// Returns whether Astra's misalignment monitor stopped the conversation.
     #[must_use]
     pub fn is_misalignment_policy_violation(&self) -> bool {
         match self {
@@ -410,15 +343,12 @@ impl ResponsesError {
         }
     }
 
-    /// Classifies a received provider error and captures its advice once.
-    /// Pass this error between layers rather than reparsing it after observers.
     #[must_use]
     pub fn api_event(event: String) -> Self {
         Self::api_event_received(event, super::RetryReceipt::now())
     }
 
     pub(crate) fn api_event_received(event: String, received: super::RetryReceipt) -> Self {
-        // Provider policy stops take precedence over incidental image diagnostics.
         if [
             "misalignment_policy_violation",
             "cyber_policy",
@@ -432,8 +362,7 @@ impl ResponsesError {
                 retry_after: None,
             };
         }
-        // Validation failures identify the rejected input field, whereas older image
-        // decoding failures only carry the provider's diagnostic message.
+
         let invalid_image_url = serde_json::from_str::<serde_json::Value>(&event)
             .ok()
             .is_some_and(|event| {
@@ -468,8 +397,6 @@ impl ResponsesError {
     }
 }
 
-// This is the adapter-owned diagnostic, not a heuristic for arbitrary provider
-// messages. Older hosts include an Error prefix and a JavaScript stack trace.
 fn invalid_provider_stream(detail: &str) -> bool {
     detail.lines().next().is_some_and(|line| {
         matches!(
@@ -479,11 +406,9 @@ fn invalid_provider_stream(detail: &str) -> bool {
     })
 }
 
-/// Retry metadata derived from one typed transport or API error.
 #[derive(Clone, Copy, Debug)]
 pub struct RetryAdvice {
-    /// Stable low-cardinality retry class.
     pub class: &'static str,
-    /// Original receipt-time server deadline, if any.
+
     pub server_delay: Option<RetryAfter>,
 }

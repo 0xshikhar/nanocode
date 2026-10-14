@@ -1,4 +1,4 @@
-/// <reference lib="webworker" />
+
 import { API } from "@eduoj/wasm-clang";
 import { installBrowserEgressFetch } from "./browserEgress.mjs";
 let apiPromise;

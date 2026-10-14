@@ -4,18 +4,14 @@ use clap::{Args, ValueEnum, builder::NonEmptyStringValueParser};
 
 use crate::{LogFormat, LogOutput, ObservabilityBuilder, ObservabilityError, ObservabilityGuard};
 
-/// Shared local-output and OpenTelemetry command-line options.
 #[derive(Args)]
 pub struct ObservabilityOutputArgs {
-    /// Local tracing output format.
     #[arg(long, env = "NANOCODEX_LOG_FORMAT", default_value_t, value_enum)]
     log_format: LogFormatArg,
 
-    /// Append local tracing output to this file instead of the default destination.
     #[arg(long, env = "NANOCODEX_LOG_FILE")]
     log_file: Option<PathBuf>,
 
-    /// Export spans through OTLP/HTTP protobuf.
     #[arg(
         long,
         env = "OTEL_EXPORTER_OTLP_ENDPOINT",
@@ -23,7 +19,6 @@ pub struct ObservabilityOutputArgs {
     )]
     otel_endpoint: Option<String>,
 
-    /// Deployment environment attached to exported spans.
     #[arg(
         long,
         env = "OTEL_DEPLOYMENT_ENVIRONMENT",
@@ -34,17 +29,11 @@ pub struct ObservabilityOutputArgs {
 }
 
 impl ObservabilityOutputArgs {
-    /// Explicit local log destination, if provided through the CLI or environment.
     #[must_use]
     pub fn log_file(&self) -> Option<&Path> {
         self.log_file.as_deref()
     }
 
-    /// Installs the shared subscriber with application-owned filters and output defaults.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when a filter, output, exporter, or subscriber cannot be configured.
     pub fn install(
         &self,
         service_name: impl Into<String>,

@@ -14,8 +14,8 @@ const PROJECT_INSTRUCTION_FILES = ["AGENTS.override.md", "AGENTS.md"];
 const DIFF_TRUNCATION_NOTICE = "\n[diff truncated by browser git]\n";
 export function validateBrowserArtifactSource(source) {
     try {
-        // Compile with the exact bindings and strict wrapper used by the
-        // isolated artifact frame without running application code.
+
+
         new Function("React", "html", "sendPrompt", `"use strict";\n${source}\n;return typeof App === "function" ? App : undefined;`);
     }
     catch (error) {
@@ -84,7 +84,7 @@ export async function prepareBrowserShell(threadId, origin, fetch, headers) {
         execTool: shell.tool,
     };
 }
-/** Captures the root project instructions using the native Nanocodex precedence and budget. */
+
 export async function loadBrowserProjectInstructions(rawFs) {
     for (const filename of PROJECT_INSTRUCTION_FILES) {
         const path = `${THREAD_GIT_DIRECTORY}/${filename}`;
@@ -120,7 +120,7 @@ export async function loadBrowserProjectInstructions(rawFs) {
     }
     return undefined;
 }
-/** Builds the browser shell over an already-open OPFS Git adapter. */
+
 export async function createBrowserBash(rawFs, thread, options = {}) {
     const filesystem = new OpfsShellFileSystem(rawFs);
     await filesystem.refreshPaths();

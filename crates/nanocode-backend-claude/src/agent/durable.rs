@@ -1,7 +1,6 @@
-//! Provider-native state at the shared durability crate's execution boundaries.
 use super::*;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Snapshot {
     provider: String,
@@ -13,15 +12,13 @@ pub(super) struct Snapshot {
     pub(super) model: Option<String>,
     #[serde(default)]
     pub(super) workspace: Option<String>,
-    /// Provenance of the session that owns this state, so a reopened durable
-    /// fork, side conversation or subagent keeps its lineage.
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) lineage: Option<Lineage>,
-    /// Conversation-tree identity shared with forks of the same session.
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) conversation_id: Option<String>,
-    /// Thinking effort and fast-mode preference at this boundary, so a
-    /// catalog checkpoint resumes with the session's actual policy.
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) effort: Option<crate::Effort>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -58,7 +55,7 @@ impl Snapshot {
         }
         Ok(self)
     }
-    /// Whether this boundary contains at least one committed exchange.
+
     pub(super) const fn has_conversation(&self) -> bool {
         !self.conversation.messages.is_empty() || !self.conversation.summary.is_empty()
     }
@@ -66,11 +63,6 @@ impl Snapshot {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Cursor {
-    // Process-local Code Mode admissions cannot survive a recovered boundary.
-    // Settled receipts still replay; an unreceipted exec from a replayed
-    // response at this index fails closed because its guest source may already
-    // have dispatched effects. wait never evaluates source or admits effects:
-    // it observes a live cell or reconciles durable observation evidence.
     #[serde(skip)]
     pub(super) recovered_code_index: Option<u32>,
     #[serde(default)]
@@ -81,8 +73,7 @@ pub(super) struct Cursor {
     pub(super) instruction_revision: Option<u64>,
     pub(super) snapshot: Snapshot,
     pub(super) template: MessagesRequest,
-    /// Only these host-owned definitions may change between requests. Static
-    /// definitions remain frozen throughout the admitted durable operation.
+
     #[serde(default)]
     pub(super) dynamic_tool_names: HashSet<String>,
     #[serde(default)]
@@ -92,8 +83,7 @@ pub(super) struct Cursor {
     pub(super) tool_search: bool,
     pub(super) operation: Option<String>,
     pub(super) prepared: bool,
-    // Advancing the cursor retires settled effect receipts. Retain admitted
-    // media here before retiring prompt-media so recovery never reopens a path.
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) frozen_prompt: Option<Prompt>,
     pub(super) pending: Vec<Message>,
@@ -101,12 +91,12 @@ pub(super) struct Cursor {
     pub(super) index: u32,
     #[serde(default)]
     pub(super) steers: u32,
-    // Legacy continuations keep their zero-based effect identities and kind.
+
     #[serde(default)]
     pub(super) model_step_offset: u32,
     #[serde(default)]
     pub(super) model_receipt_start: Option<u32>,
-    // The retry budget belongs to the admitted turn, including durable replay.
+
     #[serde(default)]
     pub(super) context_recovery_attempted: bool,
     #[serde(default)]
@@ -182,8 +172,7 @@ impl Effect<'_> {
             .await
     }
 }
-/// An interrupted old request is retired explicitly, never represented as a
-/// successful model response. The replacement has an independent effect ID.
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct CodeOnlyUpgrade {
@@ -298,8 +287,7 @@ impl State {
         {
             let mut cursor: Cursor = serde_json::from_value(value).map_err(recovery_error)?;
             cursor.recovered_code_index = Some(cursor.index);
-            // Replay the old in-flight effect unchanged; subsequent model effects
-            // can participate in the shared steering consumption contract.
+
             if cursor.model_receipt_start.is_none() {
                 cursor.model_receipt_start = Some(cursor.index.saturating_add(1));
             }
@@ -309,8 +297,7 @@ impl State {
             {
                 return Err(recovery_error("invalid Claude execution continuation"));
             }
-            // The live conversation now owns the restored boundary; the cursor
-            // copy is only rebuilt while it is being persisted.
+
             self.restore_snapshot(conversation, std::mem::take(&mut cursor.snapshot))
                 .await
                 .map_err(recovery_error)?;
@@ -370,7 +357,7 @@ impl State {
             context_recovery_attempted: false,
             output_continuations: 0,
         };
-        // Task state snapshots and receipts must advance in the same order.
+
         #[cfg(all(feature = "tools", not(target_family = "wasm")))]
         if self.policy.is_some() && self.task_board.is_some() {
             cursor.parallel = false;
@@ -378,12 +365,11 @@ impl State {
         self.advance_cursor(&mut cursor, conversation).await?;
         Ok(cursor)
     }
-    /// Whether this cursor is journaled for durable replay.
+
     pub(super) fn persists(&self, cursor: &Cursor) -> bool {
         self.policy.is_some() && cursor.operation.is_some()
     }
-    /// Records the pending round in a journaled cursor; ephemeral turns keep
-    /// their single working copy.
+
     pub(super) fn retain_pending(&self, cursor: &mut Cursor, pending: &[Message]) {
         if self.persists(cursor) {
             cursor.pending = pending.to_vec();
@@ -394,19 +380,13 @@ impl State {
         cursor: &mut Cursor,
         conversation: &Conversation,
     ) -> Result<()> {
-        // Only settled boundaries may replace an admitted catalog. Pending
-        // model requests are reconciled by response(), and tool receipts by
-        // durable_tool(), before the journal permits this advance.
         if self.code_only && !is_code_only_catalog(&cursor.template.tools) {
             cursor.template.tools = self.code_only_tools();
             self.classify_code_only_tools(cursor);
             cursor.tool_search = false;
         }
-        // Only a durable operation persists or replays its cursor. Without one,
-        // another full conversation copy per round would only consume memory.
+
         if let (Some(policy), Some(operation)) = (&self.policy, &cursor.operation) {
-            // Encode straight to JSON text, then release the snapshot copy: the
-            // live conversation is authoritative between persisted boundaries.
             cursor.snapshot = self.snapshot(conversation).await?;
             let encoded = serde_json::value::to_raw_value(&*cursor).map_err(provider_error);
             cursor.snapshot = Snapshot::default();
@@ -423,7 +403,7 @@ impl State {
         let (Some(policy), Some(operation)) = (&self.policy, &request.request_id) else {
             return Ok(());
         };
-        // A store failure cannot be converted into an acknowledged terminal.
+
         if result
             .as_ref()
             .err()
@@ -568,25 +548,13 @@ pub(super) fn recovery_error(error: impl std::fmt::Display) -> NanocodexError {
     )
 }
 
-/// Prepares a settled historical checkpoint for a new conversation branch.
-///
-/// The host selects the checkpoint immediately before a user turn through its
-/// owned durable journal. This function never truncates current messages or
-/// replays historical tools. Effect identity and recovery warnings survive the
-/// branch even when later transcript content is forgotten. Provider containers
-/// are not reused because their filesystem may contain later effects.
-///
-/// The branch records [`Origin::Branch`] lineage: its parent is
-/// `source_session_id`, it stays in the source's conversation tree (same
-/// root), and it sits one level deeper than the source.
 pub fn rewind_checkpoint(
     source_session_id: &str,
     previous: Option<Value>,
     latest: Value,
 ) -> Result<Value> {
     let latest = Snapshot::decode(latest)?;
-    // The source's own lineage, as recorded by its newest boundary; a legacy
-    // snapshot without one belonged to a root session.
+
     let source_lineage = latest
         .lineage
         .clone()
@@ -627,8 +595,7 @@ pub fn rewind_checkpoint(
     selected.conversation.lifecycle_started = false;
     selected.conversation.container = None;
     selected.conversation.previous_message_id = None;
-    // The rewound branch is a new session in the source's tree: it adopts its
-    // own identity and prompt-cache lineage, derived from the source session.
+
     selected.lineage = Some(Lineage::child_of(
         &source_lineage,
         source_session_id,
@@ -638,28 +605,17 @@ pub fn rewind_checkpoint(
     serde_json::to_value(selected).map_err(provider_error)
 }
 
-/// Model-visible content of a Claude checkpoint, decoded for session listing,
-/// previews and transcript replay. Signed thinking and binary payloads are
-/// never exposed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ClaudeCheckpointView {
-    /// Claude model pinned by the checkpoint, when recorded.
-    pub model: Option<HarnessModel>,
-    /// Session workspace recorded by the checkpoint, when any.
+    pub model: Option<ModelSelection>,
+
     pub workspace: Option<String>,
-    /// Provenance recorded by the checkpoint; older checkpoints omit it.
+
     pub lineage: Option<Lineage>,
-    /// User and assistant text plus tool invocations, in conversation order.
+
     pub transcript: Vec<nanocode_agent::session::TranscriptItem>,
 }
 
-/// Decodes a durable Claude checkpoint (the provider-native state committed
-/// by the execution policy) without opening or owning the session.
-///
-/// # Errors
-///
-/// Returns [`NanocodexError::InvalidCheckpoint`] when the value is not a
-/// supported Claude checkpoint or records a non-Claude model.
 pub fn decode_checkpoint(checkpoint: Value) -> Result<ClaudeCheckpointView> {
     let snapshot: Snapshot = serde_json::from_value::<Snapshot>(checkpoint)
         .map_err(|error| NanocodexError::InvalidCheckpoint(error.to_string()))?
@@ -667,20 +623,6 @@ pub fn decode_checkpoint(checkpoint: Value) -> Result<ClaudeCheckpointView> {
     snapshot.view()
 }
 
-/// Encodes a durable Claude checkpoint (the provider-native state committed by
-/// the execution policy) as a portable [`SessionCheckpoint`] for this session,
-/// keeping its recorded model, thinking effort and fast-mode preference.
-///
-/// Request limits that only the live builder knows use the model defaults:
-/// the documented output maximum and context window, with caching and
-/// diagnostics off. [`crate::ClaudeBuilder::resume`] accepts the
-/// result, so a stored session resumes through the same portable path as a
-/// live checkpoint.
-///
-/// # Errors
-///
-/// Returns [`NanocodexError::InvalidCheckpoint`] when the value is not a
-/// supported Claude checkpoint or records no Claude model.
 pub fn session_checkpoint(
     session_id: &str,
     lineage: Lineage,
@@ -692,7 +634,7 @@ pub fn session_checkpoint(
         .clone()
         .filter(|model| {
             model
-                .parse::<HarnessModel>()
+                .parse::<ModelSelection>()
                 .is_ok_and(|model| model.family() == HarnessFamily::Claude)
         })
         .ok_or_else(|| {
@@ -726,12 +668,6 @@ pub fn session_checkpoint(
     .checkpoint()
 }
 
-/// Decodes a portable Claude [`SessionCheckpoint`] into its model-visible view.
-///
-/// # Errors
-///
-/// Returns [`NanocodexError::CheckpointFamilyMismatch`] for another family's
-/// checkpoint and [`NanocodexError::InvalidCheckpoint`] for an invalid one.
 pub fn decode_session_checkpoint(checkpoint: &SessionCheckpoint) -> Result<ClaudeCheckpointView> {
     checkpoint.validate()?;
     checkpoint.require_family(HarnessFamily::Claude)?;
@@ -750,7 +686,7 @@ impl Snapshot {
             .as_deref()
             .map(|model| {
                 model
-                    .parse::<HarnessModel>()
+                    .parse::<ModelSelection>()
                     .ok()
                     .filter(|model| model.family() == HarnessFamily::Claude)
                     .ok_or_else(|| {

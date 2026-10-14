@@ -1,6 +1,3 @@
-//! The shared nanocode tool contract bridged into Claude's native client
-//! tool catalog, with one retained tool runtime per agent.
-
 use std::{path::PathBuf, sync::Arc};
 
 use crate::{
@@ -14,20 +11,18 @@ use nanocode_code_mode::{
 };
 use serde_json::{Value, json};
 
-/// Builds this agent's Claude catalog from its materialized tools.
-///
-/// Code Mode exposes `exec` (JavaScript in `code`) and `wait` over the
-/// same Code Mode runtime Codex uses.
 pub(super) fn install(
     tools: &Tools,
     workspace: PathBuf,
     handle: &AgentHandle,
 ) -> Result<ClaudeTools> {
     let tools = tools.clone().for_session(&handle.session_environment());
-    let runtime = Arc::new(ToolRuntime::new_with_tools(workspace, Vec::new(), &tools));
-    // Claude awaits adapter cleanup after every admitted turn: cells the turn
-    // left running end with it, like a cancelled Codex turn, and the next
-    // turn's cells are distinguished. Shell sessions end with the agent.
+    let runtime = Arc::new(ToolRuntime::new_with_tools(
+        workspace.clone(),
+        Vec::new(),
+        &tools,
+    ));
+
     let guard = Arc::new(RuntimeGuard(runtime.control()));
     let mut native = ClaudeTools::new().adapter_cleanup(move || {
         let guard = Arc::clone(&guard);
@@ -80,6 +75,7 @@ pub(super) fn install(
             async move { call.run(&runtime, input, &invocation).await }
         });
     }
+    native.shared_catalog = Some((tools, workspace, handle.clone()));
     Ok(native)
 }
 
@@ -89,7 +85,6 @@ enum Call {
     Wait,
 }
 
-/// Stops shell sessions and cells when the agent's tool catalog is dropped.
 struct RuntimeGuard(nanocode_code_mode::runtime::ToolRuntimeControl);
 
 impl Drop for RuntimeGuard {
@@ -141,7 +136,6 @@ impl Call {
     }
 }
 
-/// Restores canonical `namespace__name` dispatch names for grouped tools.
 fn flatten(definitions: Vec<RuntimeDefinition>) -> Vec<RuntimeDefinition> {
     let mut flat = Vec::new();
     for definition in definitions {

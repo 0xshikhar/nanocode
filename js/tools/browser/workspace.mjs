@@ -23,7 +23,7 @@ export function getBrowserThread() {
         window.localStorage.setItem(THREAD_STORAGE_KEY, id);
     }
     catch {
-        // The query parameter remains the durable/shareable thread identity.
+
     }
     if (url.searchParams.get("thread") !== id) {
         url.searchParams.set("thread", id);
@@ -46,7 +46,7 @@ export function selectBrowserThread(threadId) {
     const url = new URL(window.location.href);
     url.searchParams.set("thread", id);
     try { window.localStorage.setItem(THREAD_STORAGE_KEY, id); }
-    catch { /* The URL remains authoritative. */ }
+    catch {   }
     if (window.location.href !== url.toString())
         window.history.replaceState(window.history.state, "", url);
     browserThread = {

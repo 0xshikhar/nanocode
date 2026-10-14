@@ -14,7 +14,7 @@ const TURN_STATE_HEADER: &str = "x-codex-turn-state";
 pub(crate) struct ResponsesHttp {
     #[cfg(not(target_family = "wasm"))]
     client: reqwest::Client,
-    /// The gateway and its own client, which refuses redirects.
+
     #[cfg(not(target_family = "wasm"))]
     chat_gateway: Option<(std::sync::Arc<super::chat::ChatGateway>, reqwest::Client)>,
     #[cfg(target_family = "wasm")]
@@ -24,7 +24,7 @@ pub(crate) struct ResponsesHttp {
 pub(crate) struct ResponsesHttpStream {
     #[cfg(not(target_family = "wasm"))]
     response: Option<reqwest::Response>,
-    /// Responses events re-encoded from a Chat Completions gateway reply.
+
     #[cfg(not(target_family = "wasm"))]
     chat: Option<Box<super::chat::ChatStream>>,
     #[cfg(target_family = "wasm")]
@@ -96,8 +96,7 @@ impl ResponsesHttp {
         let status = response.status();
         if !status.is_success() {
             let retry_after = retry_after(response.headers());
-            // Keep the actual header-receipt boundary observable without
-            // retaining headers/body or exposing any authorization material.
+
             tracing::debug!(
                 target: "nanocode::responses::http",
                 status = status.as_u16(),

@@ -16,8 +16,6 @@ pub(crate) fn serialize<S: Serializer>(
     map.end()
 }
 
-// Pending compaction admission compares exact input bytes across process restarts.
-// Standard and Fast identities encode the preference as a boolean.
 #[cfg(feature = "openai")]
 pub(crate) fn serialize_admission<S: Serializer>(
     tier: &ServiceTier,

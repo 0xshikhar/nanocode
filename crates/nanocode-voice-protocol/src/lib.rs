@@ -1,5 +1,3 @@
-//! Shared, transport-neutral Codex Realtime adapter policy.
-
 mod browser;
 mod browser_delivery;
 mod managed;
@@ -13,7 +11,6 @@ pub use managed::{ManagedVoiceProtocol, format_delegation, managed_startup_conte
 
 pub use transcript::project_transcript;
 
-/// Exact Codex Realtime side-agent instructions before user-name substitution.
 pub const CHATGPT_REALTIME_BACKEND_PROMPT_TEMPLATE: &str = include_str!("backend_prompt.md");
 
 pub use browser::{
@@ -24,20 +21,17 @@ pub use browser::{
     preferred_physical_input, realtime_message_requires_agent_admission, valid_realtime_call_id,
 };
 
-/// Builds the exact Codex Realtime side-agent instructions.
 #[must_use]
 pub fn chatgpt_realtime_instructions(user_first_name: &str) -> String {
     CHATGPT_REALTIME_BACKEND_PROMPT_TEMPLATE.replace("{{ user_first_name }}", user_first_name)
 }
 
-/// Canonical developer marker appended when a Realtime conversation begins.
 pub const REALTIME_START_INSTRUCTIONS: &str = concat!(
     "<realtime_conversation>\n",
     include_str!("realtime_start.md"),
     "</realtime_conversation>"
 );
 
-/// Canonical developer marker appended when a Realtime conversation ends.
 pub const REALTIME_END_INSTRUCTIONS: &str = concat!(
     "<realtime_conversation>\n",
     include_str!("realtime_end.md"),
@@ -48,17 +42,14 @@ const REALTIME_SESSION_ENDED_HANDOFF_INSTRUCTION: &str = "The user just ended th
 const MAX_REALTIME_DELEGATION_FIELD_BYTES: usize = 4 * 1024;
 const TRUNCATION_MARKER: &str = "…";
 
-/// One completed user or assistant transcript entry.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TranscriptEntry {
-    /// Stable participant label understood by the Realtime prompt.
     pub role: String,
-    /// Completed transcript text.
+
     pub text: String,
 }
 
 impl TranscriptEntry {
-    /// Creates one role-bearing transcript entry.
     #[must_use]
     pub fn new(role: impl Into<String>, text: impl Into<String>) -> Self {
         Self {
@@ -68,7 +59,6 @@ impl TranscriptEntry {
     }
 }
 
-/// Retains a completed transcript as background context without starting a turn.
 #[must_use]
 pub fn realtime_transcript_context(transcript: &[TranscriptEntry]) -> Option<String> {
     let entries = transcript
@@ -89,7 +79,6 @@ pub fn realtime_transcript_context(transcript: &[TranscriptEntry]) -> Option<Str
     ))
 }
 
-/// Wraps delegated speech and its new transcript using canonical Codex markers.
 #[must_use]
 pub fn realtime_delegation(input: &str, transcript: &[TranscriptEntry]) -> String {
     let input = escape_xml_bounded(input, Retain::Start);
@@ -103,7 +92,6 @@ pub fn realtime_delegation(input: &str, transcript: &[TranscriptEntry]) -> Strin
     }
 }
 
-/// Wraps an unconsumed transcript tail using canonical Codex markers.
 #[must_use]
 pub fn realtime_tail_delegation(transcript: &[TranscriptEntry]) -> Option<String> {
     if transcript.is_empty() {

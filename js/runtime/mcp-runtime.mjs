@@ -92,10 +92,10 @@ export async function createMcpRuntime(configuration, options = {}) {
         if (!closed && !server[RETIRED]) {
           failures[server.name] = server.privateResult
             ? "Private MCP server initialization failed" : errorMessage(error);
-          // Dynamically authorized servers can lose access or hit a transient
-          // broker failure during lazy discovery. Let a later authorized turn
-          // start a fresh client; fixed public servers keep their established
-          // one-attempt failure behavior.
+
+
+
+
           retryWhenAvailable = server.isAvailable !== undefined;
         }
       } finally {
@@ -135,8 +135,8 @@ export async function createMcpRuntime(configuration, options = {}) {
     }
     const client = ownedClients.get(server);
     ownedClients.delete(server);
-    // Retire future admissions immediately, but do not cut off a call which
-    // already reached the server. Inventory refresh cannot retry that effect.
+
+
     if (client) void Promise.allSettled([...(activeCalls.get(server) ?? [])])
       .then(() => client.close()).catch(() => {});
   }
@@ -151,8 +151,8 @@ export async function createMcpRuntime(configuration, options = {}) {
       .then(() => closed ? undefined : options.loadServers())
       .then((configuration) => {
         if (closed) return;
-        // Validate the entire response before mutating the last good inventory.
-        // Explicit fixed servers always win over account inventory names.
+
+
         const next = normalizeServers(configuration, true)
           .filter((server) => !fixedNames.has(server.name));
         const nextByName = new Map(next.map((server) => [server.name, server]));
@@ -172,14 +172,14 @@ export async function createMcpRuntime(configuration, options = {}) {
         startAvailableServers();
       })
       .catch(() => {
-        // Inventory can contain account metadata; do not echo broker errors.
+
         if (!closed) inventoryFailure = "MCP server inventory loading failed";
       })
       .finally(() => {
         inventoryPending = false;
         inventoryTask = undefined;
-        // Invalidation during an in-flight read schedules the next read without
-        // starting concurrent broker RPCs or making definitions await them.
+
+
         inventoryNextRefresh = generation === inventoryGeneration
           ? Date.now() + inventoryRefreshMs : 0;
       });
@@ -373,7 +373,7 @@ async function connectServer(server, options, signal) {
   });
   let paymentSetup;
   const resolvePayment = () => {
-    // Cache rejection too: an uncertain setup is never automatically retried.
+
     paymentSetup ??= (async () => {
       const configured = server.payment;
       const resolved = configured?.[mcpPaymentFactory]
@@ -387,7 +387,7 @@ async function connectServer(server, options, signal) {
     })();
     return paymentSetup;
   };
-  // Preserve the existing eager API. Lazy factories are untouched by discovery.
+
   if (server.payment && !server.payment[mcpPaymentFactory]) await resolvePayment();
   if (server.client) return { client, owned: false, resolvePayment };
   const transport = new StreamableHTTPClientTransport(new URL(server.url), {
@@ -545,11 +545,11 @@ async function callRemoteTool(entry, input, context) {
       const paymentContext = typeof configuredContext === "function"
         ? await configuredContext(call, { ...context, signal: requestOptions.signal }, entry.client)
         : configuredContext;
-      // Free quote validation must finish before a private policy records its
-      // durable dispatch fence. A failed quote has not attempted the paid call.
+
+
       requestOptions.signal.throwIfAborted();
       const preflight = await policy?.beforeCall?.(call, context);
-      // A trusted policy may replay a safe receipt without repeating an effect.
+
       if (preflight && Object.hasOwn(preflight, "result")) return preflight.result;
       const privateContext = preflight?.privateContext;
       const options = {
@@ -579,15 +579,15 @@ async function callRemoteTool(entry, input, context) {
         undefined,
         options,
       );
-      // Transform inside the deadline, before either model or Code Mode projection.
+
       return policy
         ? await policy.transformResult({ ...call, result: rawResult, privateContext }, context)
         : rawResult;
     });
   } catch (error) {
     if (!policy) throw error;
-    // Errors (including policy failures) may contain provider bodies or secrets.
-    // Do not attach the original error as a cause or interpolate its message.
+
+
     result = { isError: true, content: [{ type: "text", text: "Private MCP request failed" }] };
   }
   return toolResult(result, result, {
@@ -635,8 +635,8 @@ async function withMcpRequest(server, outerSignal, operation) {
       `MCP request to ${server.name} exceeded ${server.timeoutMs} milliseconds`,
     ));
   }, server.timeoutMs);
-  // An injected client is not required to honor AbortSignal. The SDK owns the
-  // deadline and observes any eventual rejection after the race is settled.
+
+
   const execution = Promise.resolve().then(() => operation({
     signal: controller.signal,
     timeout: server.timeoutMs,

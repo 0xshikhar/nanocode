@@ -1,5 +1,3 @@
-//! Private preparation and execution engine for attached tools.
-
 pub(crate) mod runtime;
 
 use std::{collections::HashSet, sync::Arc};
@@ -87,8 +85,7 @@ impl PreparedTools {
                     Arc::clone(&workspace),
                 ));
             }
-            // `update_plan` is agent-relative state, not a remotely executable
-            // workspace effect, and is deliberately absent from this catalog.
+
             workspaces.push(workspace);
         }
 

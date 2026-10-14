@@ -2,7 +2,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::client::ResponsesTransport;
 
-/// Session-scoped one-way fallback state carried by replayable attempts.
 #[derive(Debug, Default)]
 pub(crate) struct SessionTransport {
     fallback_to_https: AtomicBool,

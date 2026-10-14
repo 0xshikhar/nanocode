@@ -34,9 +34,11 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }
 uuid.workspace = true
+tower.workspace = true
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 wasm-bindgen-futures.workspace = true
+web-time.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 rusqlite = { workspace = true, optional = true }

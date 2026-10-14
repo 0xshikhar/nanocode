@@ -54,6 +54,20 @@ export async function readRecord(routeId, stateId, key) {
   return value === null ? null : new TextEncoder().encode(string(value, "durability record"));
 }
 
+export async function load(routeId, stateId) {
+  const stored = await requiredRoute(routeId).store.load(stateId);
+  if (!stored || typeof stored !== "object" || Array.isArray(stored)) {
+    throw new TypeError("durability.load() must return a stored state object");
+  }
+  exactKeys(stored, ["revision", "payload"], "durability stored state");
+  const revision = uint64(stored.revision, "durability state revision");
+  const payload = stored.payload === null ? null : string(stored.payload, "durability state payload");
+  if ((revision === "0") !== (payload === null)) {
+    throw new TypeError("durability.load() returned inconsistent revision and payload");
+  }
+  return { revision, payload: payload === null ? null : new TextEncoder().encode(payload) };
+}
+
 export async function acquire(routeId, stateId, ownerId) {
   const stored = await requiredRoute(routeId).store.acquire(stateId, { ownerId });
   if (!stored || typeof stored !== "object" || Array.isArray(stored)) {
@@ -71,14 +85,14 @@ export async function acquire(routeId, stateId, ownerId) {
   if ((retainedRevision === "0") !== (payload === null)) {
     throw new TypeError("durability.acquire() returned inconsistent revision and payload");
   }
-  // Cross the WASM boundary as fields. Wrapping a large legacy payload in
-  // another JSON string duplicates it in both JS and WASM during cold recovery.
+
+
   return Object.freeze({
     owner_id: acquiredOwnerId,
     fence: uint64(stored.fence, "durability owner fence"),
     revision: retainedRevision,
-    // wasm-bindgen's string conversion can reserve three times a large
-    // Unicode string's length. UTF-8 bytes cross with one exact allocation.
+
+
     payload: payload === null ? null : new TextEncoder().encode(payload),
   });
 }

@@ -1,4 +1,4 @@
-// The JS package is canonical; keep local assets for independently packed crates.
+
 import { readFile, writeFile } from "node:fs/promises";
 for (const name of ["code-tools.mjs", "code-values.mjs"]) {
   const canonical = new URL(`../runtime/${name}`, import.meta.url);

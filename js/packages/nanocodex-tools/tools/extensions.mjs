@@ -1,11 +1,11 @@
 import specs from './extension-specs.json' with { type: 'json' };
 
-/** Pinned declarations; host transport spells namespace members with __. */
+
 export const extensionSpecs = Object.freeze(specs);
 const encoder = new TextEncoder();
-// Rust str::trim uses Unicode White_Space (unlike JavaScript trim).
+
 const trimWhitespace = text => text.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, '');
-// Rust strings sort by UTF-8 bytes, not UTF-16 code units.
+
 function comparePaths(left, right) {
   const a = encoder.encode(left), b = encoder.encode(right);
   for (let i = 0; i < Math.min(a.length, b.length); i++) {
@@ -13,7 +13,7 @@ function comparePaths(left, right) {
   }
   return a.length - b.length;
 }
-// str::lines removes CR only as part of a CRLF terminator.
+
 function searchLines(text) {
   if (!text) return [];
   const lines = text.split('\n');
@@ -62,10 +62,10 @@ function page(items, cursor, max) {
   const end = Math.min(start + max, items.length);
   return { values: items.slice(start, end), next_cursor: end < items.length ? String(end) : null, truncated: end < items.length };
 }
-/** The adapter is bound to ONE authorized private store by the host, never selected by model input.
- * listFiles returns visible relative regular-file paths. readFile must reject symlinks.
- * createFile must be atomic create-if-absent, with no overwrites.
- */
+
+
+
+
 export function fileMemoriesBackend(store) {
   async function files(path) {
     const scope = relativePath(path ?? '');
@@ -128,7 +128,7 @@ export function fileMemoriesBackend(store) {
       };
       const prepared = queries.map(prepare);
       if (!prepared.length || prepared.some(query => !query)) fail('queries must not be empty or contain empty strings');
-      // Serde ignores unknown enum fields and serializes only the selected variant.
+
       const mode = input.match_mode ?? { type: 'any' };
       const match_mode = mode.type === 'all_within_lines'
         ? { type: mode.type, line_count: mode.line_count } : { type: mode.type };
@@ -161,7 +161,7 @@ export function fileMemoriesBackend(store) {
     },
     async add_ad_hoc_note(input) {
       validateExtensionInput('memories__add_ad_hoc_note', input);
-      // Upstream runtime permits a leading hyphen even though its schema does not.
+
       if (!/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-[a-z0-9-]{1,80}\.md$/.test(input.filename) || encoder.encode(input.filename).length > 128) fail('invalid ad-hoc note filename');
       if (!trimWhitespace(input.note)) fail('ad-hoc note must not be empty');
       await store.createFile('extensions/ad_hoc/notes/' + input.filename, input.note);
@@ -169,7 +169,7 @@ export function fileMemoriesBackend(store) {
     },
   };
 }
-/** Same byte-based 4 bytes/token policy as Codex's text budget approximation. */
+
 export function truncateMemoryText(text, tokens) {
   const bytes = encoder.encode(text);
   const budget = tokens * 4;
@@ -180,7 +180,7 @@ export function truncateMemoryText(text, tokens) {
   const decoder = new TextDecoder();
   return decoder.decode(bytes.subarray(0, left)) + `…${Math.ceil((bytes.length - budget) / 4)} tokens truncated…` + decoder.decode(bytes.subarray(right));
 }
-/** No store means no declaration. The host authorizes every call. */
+
 export function extensionTools({ memories, authorize }) {
   return specs.flatMap(spec => {
     const method = spec.name.split('__')[1];

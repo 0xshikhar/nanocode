@@ -15,28 +15,30 @@ import type { Workspace } from "../runtime/workspace.mjs";
 import type { Tools } from "../tools/Tools.mjs";
 
 export type Agent = DefaultAgent;
-/** Code Mode (exec/wait) by default; `direct` exposes host tools to the provider without code evaluation. Remote MCP requires Code Mode. */
+
 type ToolExposureOptions =
   | { mcp?: false | undefined; toolMode?: "code-only" | undefined }
   | { mcp: McpServers; toolMode?: "code-only" | undefined };
 
-/** Creates Rust/WASM in the current Web API host isolate. */
+
+export function create(options: create.ClaudeOptions): Promise<DefaultAgent<"claude">>;
+export function create(options?: create.CodexOptions): Promise<DefaultAgent<"codex">>;
 export function create(options?: create.Options): Promise<create.ReturnType>;
 export declare namespace create {
-  /** Codex (OpenAI Responses) harness options. */
+
   type CodexOptions = AgentOptions & ToolExposureOptions & {
-    /** Caller-owned persistent filesystem mounted through standard workspace tools. */
+
     filesystem?: Workspace | undefined;
-    /** Disable the legacy list/read/write workspace functions when a shell owns filesystem access. */
+
     filesystemTools?: boolean | undefined;
     module?: unknown;
-    /** Fixed workspace facts, including its AGENTS.md snapshot. */
+
     executionEnvironment?: ExecutionEnvironment | undefined;
-    /** Optional CSP-compatible Code Mode evaluator, such as createQuickJsEvaluator(). */
+
     codeEvaluator?: CodeEvaluator | undefined;
-    /** Opt-in durable application-tool and Code Mode receipts for safe cold recovery. */
+
     codeEffectJournal?: CodeEffectJournal | undefined;
-    /** Defaults to the same-origin Nanocodex `/api/responses` proxy. */
+
     transport?: ResponsesTransport | undefined;
   } & (
     | {
@@ -47,13 +49,13 @@ export declare namespace create {
     | {
       durability: DurabilityStore;
       durabilityId: string;
-      /** The root remains durable, and so is every fork, side conversation and subagent: each reports its own `session.persistence()`. */
+
       tools?: ToolConfiguration<SubagentTool> | undefined;
     }
   );
-  /** Claude (Messages) harness options; see docs/CLAUDE_JAVASCRIPT.md. */
+
   type ClaudeOptions = import('../runtime/claude.mjs').Options & { harness: 'claude' };
-  /** Options of either harness family, discriminated by `harness`; both return the same Agent. */
+
   type Options = CodexOptions | ClaudeOptions;
   type ReturnType = Agent;
 }

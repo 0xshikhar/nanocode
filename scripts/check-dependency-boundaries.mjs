@@ -8,11 +8,9 @@ const metadata = JSON.parse(execFileSync("cargo", [
 const packages = new Map(metadata.packages.map(pkg => [pkg.name, pkg]));
 const shared = [
   "nanocode-agent", "nanocode-subagents", "nanocode-code-mode", "nanocode-cua",
-  "nanocode-tools", "nanocode-types", "nanocode-media", "nanocode-tls", "nanocode-rollout",
+  "nanocode-tools", "nanocode-types", "nanocode-media", "nanocode-tls",
 ];
 
-// Include optional dependencies and every platform. A feature or target switch
-// must not silently turn a shared contract into a backend implementation.
 for (const name of shared) {
   if (!packages.has(name)) throw new Error(`Missing shared crate: ${name}`);
   const visited = new Set();

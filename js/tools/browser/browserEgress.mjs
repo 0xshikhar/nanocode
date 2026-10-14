@@ -9,7 +9,7 @@ const FORBIDDEN_HEADERS = new Set([
 ]);
 let installed;
 
-/** Installs one thread-owned external fetch route for the current browser Worker isolate. */
+
 export function installBrowserEgressFetch(options) {
   const origin = new URL(options?.origin).origin;
   if (installed) {
@@ -24,7 +24,7 @@ export function installBrowserEgressFetch(options) {
   return routedFetch;
 }
 
-/** Creates the browser harness fetch boundary without mutating the caller's global fetch. */
+
 export function createBrowserRuntimeFetch(options) {
   const origin = new URL(options?.origin).origin;
   const nativeFetch = (options.fetch ?? globalThis.fetch).bind(globalThis);
@@ -44,7 +44,7 @@ export function createBrowserRuntimeFetch(options) {
   };
 }
 
-/** Creates the only workload-network capability installed in browser-side runtimes. */
+
 export function createBrowserEgressFetch(options) {
   if (typeof options?.fetch !== "function") {
     throw new TypeError("browser egress requires a fetch implementation");
@@ -138,7 +138,7 @@ function safeVaultHeaderValue(name, value) {
   return /^\{\{NANOCODEX_VAULT_(?:PASSWORD|API_KEY|BASIC|CARD_NUMBER|EXPIRY_MONTH|EXPIRY_YEAR|CVV|BILLING_ZIP)\}\}$/.test(value);
 }
 
-/** Adapts the shell result to the standard Fetch API used inside browser Workers. */
+
 export function standardFetchFromEgress(secureFetch) {
   return async (input, init = {}) => {
     const request = new Request(input, init);

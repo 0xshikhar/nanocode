@@ -19,10 +19,8 @@ use crate::{
     session::DurableOwner, shared_store::SharedStore,
 };
 
-/// Fluent builder extension that attaches portable durability to an agent.
 pub trait DurableAgentExt: Sized {
-    /// Restores the state's latest checkpoint and installs its execution
-    /// policy at the agent's neutral lifecycle seam.
+
     fn durability(self, state: DurableSession) -> impl Future<Output = AgentResult<Self>>;
 }
 
@@ -31,12 +29,7 @@ impl<F> DurableAgentExt for NanocodexBuilder<F> {
         let state_id = state.state_id().to_owned();
         let record = state.record().await.map_err(agent_error)?;
         let mut builder = self.child_journal(state.child_journal());
-        // A durable Codex session is identified by its state; events,
-        // persistence, and resume all report the same identity. A host that
-        // names the identity explicitly owns it: a Durable Object persisted
-        // before identities were unified keeps the runtime session ID its
-        // event log, task tree, effect journals and checkpoint lineage were
-        // recorded under, rather than being silently renamed to its state ID.
+
         if builder.explicit_session_id().is_none()
             && let Ok(session_id) = state_id.parse::<SessionId>()
         {
@@ -45,14 +38,13 @@ impl<F> DurableAgentExt for NanocodexBuilder<F> {
         if let Some(record) = &record {
             builder = builder.lineage(record.lineage.clone());
         }
-        let initial = record
-            .as_ref()
-            .and_then(|record| match (record.model.as_codex(), record.initial) {
-                (Some(model), Some(initial)) => {
-                    Some((model, initial))
-                }
-                _ => None,
-            });
+        let initial =
+            record
+                .as_ref()
+                .and_then(|record| match (record.model.as_codex(), record.initial) {
+                    (Some(model), Some(initial)) => Some((model, initial)),
+                    _ => None,
+                });
         let branches = Branches {
             store: state.shared_store(),
             record,
@@ -78,14 +70,21 @@ impl<F> DurableAgentExt for NanocodexBuilder<F> {
             }
             known_records = keys;
             builder = builder.resume_native_snapshot(restored);
-        } else if builder.resume_snapshot().is_none() {
-            // A child reopened before its first checkpoint keeps the model and
-            // settings it was created with.
+        } else if let Some(snapshot) = builder.resume_snapshot() {
+
+            let prepared = crate::context::prepare_snapshot(snapshot.clone(), &known_records)
+                .map_err(agent_error)?;
+            owner
+                .commit_checkpoint(prepared.payload)
+                .await
+                .map_err(agent_error)?;
+            known_records = prepared.keys;
+        } else {
+
             if let Some((model, initial)) = initial {
                 builder = builder.initial_settings(model, initial.thinking, initial.service_tier);
             }
-            // A fork's explicitly supplied completed snapshot owns its cache
-            // lineage. A fresh durable root alone defaults to its state ID.
+
             builder = builder.default_prompt_cache_key(state_id.clone());
         }
         let owner = Arc::new(Mutex::new(Some((owner, known_records, branches))));
@@ -113,7 +112,6 @@ impl<F> DurableAgentExt for NanocodexBuilder<F> {
     }
 }
 
-/// Where forks of a durable session persist their own resumable state.
 #[derive(Clone)]
 pub(crate) struct Branches {
     pub(crate) store: SharedStore,
@@ -121,7 +119,7 @@ pub(crate) struct Branches {
 }
 
 impl Branches {
-    /// Describes a child of this session; inherits model and workspace.
+
     pub(crate) fn child_record(
         &self,
         child: &nanocode_agent::SessionInfo,
@@ -180,9 +178,7 @@ impl ExecutionPolicy for DurableExecution {
         &self,
         child: &nanocode_agent::SessionInfo,
     ) -> AgentResult<Option<Arc<dyn ExecutionPolicy>>> {
-        // A session opened without a catalog record has nowhere to describe a
-        // child; the caller reports ExecutionPolicyBranchUnsupported, exactly
-        // as for Claude.
+
         let Some(branches) = self
             .branches
             .as_ref()
@@ -215,8 +211,7 @@ impl ExecutionPolicy for DurableExecution {
                     NanocodexError::ReplayedExecutionFailed(error)
                 }
                 Ok(Some(OperationStatus::Cancelled { .. })) => NanocodexError::TurnCancelled,
-                // Completed work can still fail in event/result delivery. Its
-                // exact ID must replay the receipt, never invent a failed turn.
+
                 Ok(Some(OperationStatus::Pending | OperationStatus::Completed { .. })) => {
                     if error.execution_policy_disposition()
                         == Some(ExecutionPolicyDisposition::Retry)
@@ -229,8 +224,7 @@ impl ExecutionPolicy for DurableExecution {
                         error,
                     )
                 }
-                // Admission may fail before acceptance, or retention may have
-                // pruned a terminal receipt. Neither proves pending work.
+
                 Ok(None) => error,
                 Err(error) => agent_error(error),
             }
@@ -576,19 +570,15 @@ impl ExecutionPolicy for DurableExecution {
     }
 }
 
-/// A fork's own durable state, opened in the parent's store on first use.
-///
-/// [`ExecutionPolicy::branch`] runs synchronously before the child starts, so
-/// the child state is acquired lazily by the child's first policy call.
 struct LazyExecution {
     store: SharedStore,
     record: SessionRecord,
     ready: tokio::sync::OnceCell<DurableExecution>,
-    /// The opened state already held a checkpoint, as for a restored child.
+
     reopened: std::sync::atomic::AtomicBool,
-    /// This policy wrote the state's first checkpoint.
+
     initialized: std::sync::atomic::AtomicBool,
-    /// Settings the child was created with, recorded when the state opens.
+
     created_with: Mutex<Option<nanocode_backend_codex::execution::InitialSettings>>,
 }
 
@@ -617,8 +607,11 @@ impl LazyExecution {
                 let mut record = self.record.clone();
                 if let Some(settings) = self.created_with.lock().ok().and_then(|settings| *settings)
                 {
-                    // The child's own model and settings, not its parent's.
-                    record.model = nanocode_agent::HarnessModel::Codex(settings.model);
+
+                    record.model = nanocode_agent::ModelSelection::new(
+                        nanocode_agent::BackendId::Codex,
+                        settings.model.as_str(),
+                    );
                     record.initial = Some(crate::catalog::InitialSettings {
                         thinking: settings.thinking,
                         service_tier: settings.service_tier,
@@ -701,8 +694,7 @@ impl ExecutionPolicy for LazyExecution {
             if let Ok(mut created_with) = self.created_with.lock() {
                 *created_with = Some(settings);
             }
-            // Opening the state records the child in the catalog; a restored
-            // child keeps the history it already holds.
+
             let policy = self.get().await?;
             if self.reopened.load(std::sync::atomic::Ordering::SeqCst) {
                 return Ok(());

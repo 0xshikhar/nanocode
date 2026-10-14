@@ -1,5 +1,3 @@
-//! Complete typed lifecycle events emitted around Responses operations.
-
 mod data;
 #[doc(hidden)]
 pub mod stream;

@@ -1,4 +1,3 @@
-//! Shared tool registry, Code Mode and execution runtime for Codex and Claude.
 #![cfg_attr(
     all(not(feature = "native"), feature = "workspace-runtime"),
     doc = include_str!("../WORKSPACE_RUNTIME.md")
@@ -7,7 +6,7 @@
     not(any(feature = "native", feature = "workspace-runtime")),
     doc = "Dependency-light model-visible tool contracts for Nanocodex."
 )]
-#![deny(missing_docs, rustdoc::broken_intra_doc_links)]
+#![deny(rustdoc::broken_intra_doc_links)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![cfg_attr(target_family = "wasm", allow(clippy::module_name_repetitions))]
 
@@ -63,7 +62,6 @@ pub mod workspace_runtime;
 #[cfg(all(not(target_family = "wasm"), feature = "workspace-runtime"))]
 pub use workspace_runtime::WorkspaceTools;
 
-/// Model-visible tool definitions, inputs, outputs, and execution contracts.
 pub mod contract {
     #[cfg(all(
         not(target_family = "wasm"),
@@ -79,7 +77,7 @@ pub mod contract {
 }
 
 #[cfg(all(target_family = "wasm", feature = "code-mode"))]
-/// Code Mode results and observation contracts for the embedded WASM runtime.
+
 pub mod code_mode {
     pub use crate::embedded::{
         CodeModeCell, CodeModeExecution, CodeModeNotification, CodeModeObserver, CodeModeUpdate,
@@ -88,7 +86,7 @@ pub mod code_mode {
 }
 
 #[cfg(all(target_family = "wasm", feature = "code-mode"))]
-/// Embedded tool selection and execution runtime.
+
 pub mod runtime {
     pub use crate::{
         embedded::{
@@ -150,7 +148,6 @@ pub mod __private {
     #[cfg(not(target_family = "wasm"))]
     pub use crate::{Tool, ToolContext, ToolDefinition, ToolInput, ToolOutput, ToolResult};
 
-    /// Builds the direct Responses tool prefix and the nested Code Mode name map together.
     #[cfg(feature = "code-mode")]
     pub fn model_contract(
         runtime: &crate::runtime::ToolRuntime,

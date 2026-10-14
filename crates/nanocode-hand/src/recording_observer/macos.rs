@@ -1,4 +1,3 @@
-//! Permission-preserving AX metadata. Native AX text values and labels are never read.
 #![allow(unsafe_code)]
 use super::*;
 use std::{
@@ -69,8 +68,6 @@ impl Drop for Owned {
     }
 }
 fn attribute(element: Ref, name: &'static std::ffi::CStr) -> Option<Owned> {
-    // SAFETY: attributes are fixed null-terminated literals; successful Copy
-    // returns a retained CF object which Owned releases exactly once.
     unsafe {
         let key = Owned(CFStringCreateWithCString(
             ptr::null(),
@@ -113,8 +110,7 @@ fn role(element: Ref, name: &'static std::ffi::CStr) -> Option<String> {
     }
     let end = bytes.iter().position(|b| *b == 0)?;
     let value = std::str::from_utf8(&bytes[..end]).ok()?;
-    // Emit only known role constants. A custom app cannot smuggle content into
-    // the recording by returning an arbitrary role/subrole string.
+
     match value {
         "AXSecureTextField" | "AXTextField" | "AXTextArea" | "AXButton" | "AXCheckBox"
         | "AXRadioButton" | "AXPopUpButton" | "AXSlider" | "AXStaticText" | "AXWindow"
@@ -122,9 +118,7 @@ fn role(element: Ref, name: &'static std::ffi::CStr) -> Option<String> {
         _ => None,
     }
 }
-// Match the AX focused window to a public WindowServer ID, never a local
-// counter. Separate sources()/recording observers then agree on window scope.
-// Numeric PID/bounds/ID only: optional window names are never extracted.
+
 fn stable_window_id(pid: i32, window: Ref) -> Option<u32> {
     fn value(dictionary: Ref, name: &'static std::ffi::CStr) -> Option<Ref> {
         unsafe {
@@ -162,8 +156,7 @@ fn stable_window_id(pid: i32, window: Ref) -> Option<u32> {
         width: 0.0,
         height: 0.0,
     };
-    // SAFETY: CF/AX types are checked before decoding; the C-layout buffers
-    // match kAXValueCGPointType=1 and kAXValueCGSizeType=2 on macOS.
+
     unsafe {
         if CFGetTypeID(position.0) != AXValueGetTypeID()
             || CFGetTypeID(dimensions.0) != AXValueGetTypeID()
@@ -181,8 +174,7 @@ fn stable_window_id(pid: i32, window: Ref) -> Option<u32> {
     {
         return None;
     }
-    // On-screen windows excluding desktop elements. The retained array owns
-    // dictionaries and their values throughout this bounded scan.
+
     let windows = Owned(unsafe { CGWindowListCopyWindowInfo(1 | 16, 0) });
     if windows.0.is_null() || unsafe { CFGetTypeID(windows.0) != CFArrayGetTypeID() } {
         return None;
@@ -211,8 +203,7 @@ fn stable_window_id(pid: i32, window: Ref) -> Option<u32> {
         if !unsafe { CGRectMakeWithDictionaryRepresentation(bounds, &mut rect) } {
             return None;
         }
-        // Both APIs use top-left global screen points; exact bounds prevent
-        // guessing among another document, a sheet, or an overlapping window.
+
         if rect.origin.x == point.x
             && rect.origin.y == point.y
             && rect.size.width == size.width
@@ -235,7 +226,6 @@ pub(super) struct Observer {
 }
 impl Observer {
     pub(super) fn new() -> Result<Self> {
-        // This query does not display a permission prompt.
         if !unsafe { AXIsProcessTrusted() } {
             return Err(ObserverError::new(
                 "permission_denied",
@@ -287,8 +277,6 @@ impl Observer {
         {
             SensitiveInput::Sensitive
         } else {
-            // Custom, browser and unrecognized controls remain unknown. Text
-            // fields need a reported subrole to distinguish secure controls.
             match field_role.as_deref() {
                 Some(
                     "AXButton" | "AXCheckBox" | "AXRadioButton" | "AXPopUpButton" | "AXSlider",

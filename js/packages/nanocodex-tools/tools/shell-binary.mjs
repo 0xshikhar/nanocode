@@ -1,14 +1,14 @@
-// Byte-only fast paths for the two shell operations that otherwise build large
-// Latin-1 strings. Admission uses Just Bash's public parser-backed transform;
-// anything outside this deliberately small grammar stays in the interpreter.
+
+
+
 const CHUNK_BYTES = 1024 * 1024;
 
-/**
- * Return undefined without mutation when the command is not eligible. Call this
- * inside the host's serialized/refresh/cancellation boundary, and only when cat
- * and sha256sum have not been replaced by custom commands. Range callbacks are
- * optional; write callbacks must maintain the filesystem adapter's metadata.
- */
+
+
+
+
+
+
 export async function tryExecuteBinaryCommand({
   bash, filesystem, command, cwd, root, signal, binaryIO, executionLimits,
 }) {
@@ -25,7 +25,7 @@ export async function tryExecuteBinaryCommand({
   try {
     plan = admit(bash.transform(command).ast, cwd, root);
   } catch {
-    // The interpreter owns parser errors and its exact diagnostics.
+
     return undefined;
   }
   if (!plan) return undefined;
@@ -43,7 +43,7 @@ export async function tryExecuteBinaryCommand({
         && (argument.prefix.startsWith(".") || !name.startsWith("."))
         && name.length >= argument.prefix.length + argument.suffix.length
         && name.startsWith(argument.prefix) && name.endsWith(argument.suffix)).sort();
-      if (!matches.length) return undefined; // Bash owns unmatched-glob behavior.
+      if (!matches.length) return undefined;
       for (const name of matches) {
         const path = safePath(`${argument.directory}/${name}`, cwd, root);
         if (!path || path === plan.destination) return undefined;
@@ -51,8 +51,8 @@ export async function tryExecuteBinaryCommand({
       }
     }
     plan.inputs = inputs;
-    // Refuse intermediate symlink aliases as well as leaf symlinks. Root
-    // confinement alone is insufficient for a generic caller-owned adapter.
+
+
     const parents = new Set();
     for (const path of [...plan.inputs, ...plan.hashes.map(({ path }) => path), plan.destination].filter(Boolean)) {
       let parent = path.slice(0, path.lastIndexOf("/")) || "/";
@@ -65,8 +65,8 @@ export async function tryExecuteBinaryCommand({
       const stat = await filesystem.lstat(path);
       if (!stat.isDirectory || stat.isSymbolicLink) return undefined;
     }
-    // Do not accelerate missing files/directories/symlinks: the interpreter
-    // owns cat's partial-output/error semantics, including destination aliases.
+
+
     for (const path of new Set([...plan.inputs, ...plan.hashes.map(({ path }) => path)])) {
       if (path === plan.destination) continue;
       const stat = await filesystem.lstat(path);
@@ -113,7 +113,7 @@ export async function tryExecuteBinaryCommand({
   try {
     if (plan.destination) {
       if (rangedWrite) {
-        // Like >, truncation precedes cat. Never fall back/re-execute afterwards.
+
         mutated = true;
         await binaryIO.truncate(plan.destination, 0);
         const hash = plan.hashes.some(({ path }) => path === plan.destination) ? new Sha256() : undefined;
@@ -128,16 +128,16 @@ export async function tryExecuteBinaryCommand({
         }
         destinationDigest = hash?.hex();
       } else {
-        // Current Workspace is whole-read/write. One output allocation, one
-        // source live at a time; admission also budgets the digest snapshot.
-        // There is no byte -> string -> byte round trip.
+
+
+
         destinationBytes = new Uint8Array(total);
         let position = 0;
         for (const path of plan.inputs) {
           signal?.throwIfAborted();
           const bytes = await filesystem.readFileBuffer(path);
           if (!(bytes instanceof Uint8Array) || bytes.byteLength !== sizes.get(path)) {
-            return undefined; // No destination mutation yet (stale size metadata).
+            return undefined;
           }
           destinationBytes.set(bytes, position);
           position += bytes.byteLength;
@@ -171,8 +171,8 @@ export async function tryExecuteBinaryCommand({
     return { stdout, stderr: "", exitCode: 0 };
   } catch (error) {
     signal?.throwIfAborted();
-    // Before writes, preserve exact upstream errors; afterwards replaying would
-    // repeat effects. Surface one bounded shell error instead.
+
+
     if (!mutated) return undefined;
     return { stdout: "", stderr: `binary shell: ${String(error?.message ?? error)}\n`, exitCode: 1 };
   }
@@ -218,8 +218,8 @@ function admit(ast, cwd, root) {
         || redirect.fdVariable || (redirect.fd !== null && redirect.fd !== 1)) return undefined;
     destination = safePath(literalWord(redirect.target), cwd, root);
     inputArguments = first.words.map((word) => inputArgument(word, cwd, root));
-    // Never let an unsupported glob reach string-based cat after redirection
-    // has truncated the destination. Refusal is atomic and bounded.
+
+
     if (destination && inputArguments.some((arg, index) => !arg && first.words[index].parts?.some((part) => part.type === "Glob"))) {
       return { rejected: "unsupported binary glob (one basename * only)" };
     }
@@ -238,9 +238,9 @@ function admit(ast, cwd, root) {
   return { destination, inputArguments, inputs: [], hashes };
 }
 
-// Exactly one parser-recognized basename '*' is supported. The directory is
-// literal, and prefix/suffix matching consumes directory entries rather than
-// reparsing shell source. Complex glob syntax remains with the interpreter.
+
+
+
 function inputArgument(word, cwd, root) {
   const literal = literalWord(word);
   if (literal !== undefined) {
@@ -271,8 +271,8 @@ function literalParts(parts) {
   let value = "";
   for (const part of parts) {
     if (["Literal", "SingleQuoted", "Escaped"].includes(part.type) && typeof part.value === "string") {
-      // Defensive: upstream normally represents glob/brace/tilde expansions
-      // separately. Refuse unquoted metacharacters even on a changed AST.
+
+
       if (part.type === "Literal" && /[*?\[\]{}~]/.test(part.value)) return undefined;
       value += part.value;
     } else if (part.type === "DoubleQuoted" && Array.isArray(part.parts)) {
@@ -315,7 +315,7 @@ async function readChunks(path, size, io, signal, consume) {
   }
 }
 async function yieldToHost(signal) {
-  // A resolved Promise does not let cancellation timers/I/O run in Workers.
+
   await new Promise((resolve) => setTimeout(resolve, 0));
   signal?.throwIfAborted();
 }
@@ -334,8 +334,8 @@ async function hashBytes(bytes, signal) {
   return hash.hex();
 }
 
-// Incremental SHA-256 for range-backed storage. Uses one 64-byte tail and a
-// fixed 64-word schedule, independent of file size; no runtime dependencies.
+
+
 const K = new Uint32Array([
   0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
   0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,

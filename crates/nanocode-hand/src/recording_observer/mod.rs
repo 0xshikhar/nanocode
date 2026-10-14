@@ -1,8 +1,3 @@
-//! Read-only native metadata for explicitly authorized workflow recording.
-//!
-//! No keyboard events, clipboard, window titles, AX names or AX values are read.
-//! `Unknown` is not permission to capture: consumers must fail closed, including
-//! on errors or foreground changes between metadata and screenshot acquisition.
 use serde::Serialize;
 use std::fmt;
 
@@ -22,17 +17,14 @@ use windows as platform;
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SensitiveInput {
-    /// The native API identified a password control or secure-input mode.
     Sensitive,
-    /// A supported native focused control was checked and is not a password.
-    /// This is not a guarantee that the rest of the screen contains no secrets.
+
     Clear,
-    /// No reliable native signal exists, permission is absent, or focus is unknown.
+
     Unknown,
 }
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ForegroundContext {
-    /// OS process identity, never a title, command line, document path or URL.
     pub app_id: String,
     pub window_id: String,
     pub process_id: Option<u32>,
@@ -46,23 +38,17 @@ pub struct AccessibilitySummary {
 pub struct PointerSnapshot {
     pub x: i32,
     pub y: i32,
-    /// Left, middle, right buttons in bits 0, 1, 2.
+
     pub buttons: u8,
 }
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ObservedEvent {
     FocusChanged,
-    /// Button 1=left, 2=middle, 3=right. No key/modifier state is exposed.
-    Button {
-        button: u8,
-        pressed: bool,
-    },
-    /// Wheel steps, positive right/down. Smooth scrolling is not synthesized.
-    Scroll {
-        horizontal: i32,
-        vertical: i32,
-    },
+
+    Button { button: u8, pressed: bool },
+
+    Scroll { horizontal: i32, vertical: i32 },
 }
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct ObserverCapabilities {
@@ -100,9 +86,6 @@ impl fmt::Display for ObserverError {
 impl std::error::Error for ObserverError {}
 type Result<T> = std::result::Result<T, ObserverError>;
 
-/// Own on one blocking sampler thread. Creation does not request OS permissions.
-/// Drop releases the native connection/AX references. Polling platforms can miss
-/// clicks entirely between samples; capabilities do not imply lossless capture.
 pub struct ObservedFrame {
     pub bytes: Vec<u8>,
     pub width: u32,
@@ -132,8 +115,7 @@ impl NativeObserver {
             ))
         }
     }
-    /// Select the Hand-owned Linux desktop without mutating process environment.
-    /// A supplied runtime must contain its private `display` and `Xauthority`.
+
     pub fn for_desktop(runtime: Option<&std::path::Path>) -> Result<Self> {
         #[cfg(target_os = "linux")]
         {
@@ -153,10 +135,7 @@ impl NativeObserver {
             Self::new()
         }
     }
-    /// Capture only after the caller has checked its allow/deny scope. Recheck
-    /// native context and sensitivity on either side of screenshot acquisition.
-    /// Unknown always suppresses pixels. Context checks preserve queued mouse
-    /// events for the next sample. This cannot make desktop capture atomic.
+
     pub fn frame(&mut self, expected: &ForegroundContext) -> Result<ObservedFrame> {
         #[cfg(target_os = "linux")]
         {

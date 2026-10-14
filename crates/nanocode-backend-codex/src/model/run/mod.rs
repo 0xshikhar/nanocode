@@ -15,11 +15,9 @@ use std::{
     any::Any,
     collections::{HashMap, VecDeque},
     panic::AssertUnwindSafe,
-    path::Path,
     sync::{Arc, Mutex},
 };
 
-use futures_util::{FutureExt, StreamExt, stream::FuturesOrdered};
 use crate::client::{
     __private::{
         EventSink, ManagedSessionState, ModelConfig, RequestHistory, ResponsesAttemptFactory,
@@ -36,6 +34,7 @@ use crate::client::{
     },
     transport::{ResponsesError, ResponsesTransport, TransportStats, TransportStatsSnapshot},
 };
+use futures_util::{FutureExt, StreamExt, stream::FuturesOrdered};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, value::RawValue};
 use tokio::sync::watch;
@@ -93,7 +92,7 @@ pub(crate) struct ModelRun<S> {
     prompt_cache: ModelPromptCache,
     context_source: ContextSource,
     host_context: Option<Arc<str>>,
-    // Execution-local authority is deliberately absent from inheritable ModelCheckpoint.
+
     instruction_revision: Option<u64>,
     global_instructions: Option<Arc<str>>,
     force_compaction: bool,
@@ -170,11 +169,6 @@ impl ModelCheckpoint {
     }
     pub(crate) fn history(&self) -> crate::client::responses::ResponseHistory {
         self.conversation.shared_history()
-    }
-
-    #[allow(dead_code, reason = "consumed by the native rollout boundary only")]
-    pub(crate) const fn history_revision(&self) -> u64 {
-        self.conversation.history_revision()
     }
 
     pub(crate) fn request_prefix(&self) -> &[ResponseItem] {
@@ -510,9 +504,6 @@ impl<S> ModelRun<S> {
     }
 }
 
-// Old discovery results can install direct schemas even after the request prefix
-// has been rebuilt. Preserve the transcript and call/output pairing, but remove
-// provider capability declarations when restoring an embedded strict runtime.
 fn code_only_checkpoint(mut checkpoint: ModelCheckpoint, runtime: &ToolRuntime) -> ModelCheckpoint {
     if !runtime.is_code_only() {
         return checkpoint;
@@ -577,8 +568,7 @@ pub(crate) fn prepare_resumed_checkpoint(
     if checkpoint.conversation.prepare_replay_images() {
         checkpoint.preserve_inherited_delta = false;
     }
-    // Unstored response IDs are scoped to the live transport connection. A fork
-    // owns a fresh client, so it must replay client-owned history instead.
+
     if !config.store_responses {
         checkpoint.conversation.reset_for_full_request();
     }
@@ -662,4 +652,7 @@ pub(crate) fn prepare_history_checkpoint(
     })
 }
 
+#[cfg(not(target_family = "wasm"))]
 use crate::builtin_tools::{ImageGenerationConfig, WebSearchConfig};
+#[cfg(not(target_family = "wasm"))]
+use std::path::Path;

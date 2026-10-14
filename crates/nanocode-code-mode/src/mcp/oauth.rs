@@ -52,10 +52,6 @@ impl OAuthMetadataCache {
     }
 }
 
-/// OAuth credentials for one Streamable HTTP MCP server.
-///
-/// This value intentionally does not implement `Debug`: access and refresh tokens must not be
-/// emitted by diagnostics. Embedders normally provide these through an [`McpOAuthStore`].
 #[derive(Clone, PartialEq, Eq)]
 pub struct McpOAuthCredentials {
     client_id: String,
@@ -66,13 +62,11 @@ pub struct McpOAuthCredentials {
     scopes: Vec<String>,
 }
 
-/// An acquired refresh-transaction lock held until its boxed value is dropped.
 pub trait McpOAuthRefreshGuard: Send {}
 
 impl<T: Send> McpOAuthRefreshGuard for T {}
 
 impl McpOAuthCredentials {
-    /// Creates credentials from a dynamically registered client and access token.
     #[must_use]
     pub fn new(client_id: impl Into<String>, access_token: impl Into<String>) -> Self {
         Self {
@@ -85,65 +79,55 @@ impl McpOAuthCredentials {
         }
     }
 
-    /// Attaches the optional refresh token.
     #[must_use]
     pub fn refresh_token(mut self, refresh_token: impl Into<String>) -> Self {
         self.refresh_token = Some(refresh_token.into());
         self
     }
 
-    /// Binds these credentials to the authorization server that issued them.
     #[must_use]
     pub fn issuer(mut self, issuer: impl Into<String>) -> Self {
         self.issuer = Some(issuer.into());
         self
     }
 
-    /// Sets the access-token expiry as Unix epoch milliseconds.
     #[must_use]
     pub const fn expires_at_millis(mut self, expires_at_millis: u64) -> Self {
         self.expires_at_millis = Some(expires_at_millis);
         self
     }
 
-    /// Records the scopes granted by the authorization server.
     #[must_use]
     pub fn scopes(mut self, scopes: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.scopes = scopes.into_iter().map(Into::into).collect();
         self
     }
 
-    /// Returns the dynamically registered OAuth client ID.
     #[must_use]
     pub fn client_id(&self) -> &str {
         &self.client_id
     }
 
-    /// Returns the bearer access token.
     #[must_use]
     pub fn access_token(&self) -> &str {
         &self.access_token
     }
 
-    /// Returns the refresh token when one was issued.
     #[must_use]
     pub fn refresh_token_value(&self) -> Option<&str> {
         self.refresh_token.as_deref()
     }
 
-    /// Returns the authorization server issuer bound to these credentials.
     #[must_use]
     pub fn authorization_issuer(&self) -> Option<&str> {
         self.issuer.as_deref()
     }
 
-    /// Returns access-token expiry as Unix epoch milliseconds.
     #[must_use]
     pub const fn expires_at(&self) -> Option<u64> {
         self.expires_at_millis
     }
 
-    /// Returns the scopes granted by the authorization server.
     #[must_use]
     pub fn granted_scopes(&self) -> &[String] {
         &self.scopes
@@ -206,17 +190,14 @@ impl McpOAuthCredentials {
     }
 }
 
-/// Persistence selected by an embedding application for MCP OAuth credentials.
 #[async_trait]
 pub trait McpOAuthStore: Send + Sync {
-    /// Loads credentials for one configured server and exact URL.
     async fn load(
         &self,
         server_name: &str,
         server_url: &str,
     ) -> Result<Option<McpOAuthCredentials>, String>;
 
-    /// Atomically persists the latest credentials after login or refresh.
     async fn save(
         &self,
         server_name: &str,
@@ -224,10 +205,6 @@ pub trait McpOAuthStore: Send + Sync {
         credentials: &McpOAuthCredentials,
     ) -> Result<(), String>;
 
-    /// Serializes one credential's authoritative load, provider refresh, and save transaction.
-    ///
-    /// The default coordinates runtimes in this process. Stores shared by multiple processes must
-    /// override this with a matching cross-process or provider-backed lock and bound lock waits.
     async fn acquire_refresh_lock(
         &self,
         server_name: &str,
@@ -309,8 +286,6 @@ impl OAuthRuntime {
                         .refresh_token
                         .clone_from(&previous.refresh_token);
                 } else if previous.refresh_token.is_some() {
-                    // Do not relabel an unbound refresh token with the current issuer merely
-                    // because RMCP returned the still-usable access token staged without it.
                     credentials.issuer = None;
                 }
             }
@@ -368,8 +343,6 @@ fn credentials_for_manager(
 ) -> McpOAuthCredentials {
     let mut staged = credentials.clone();
     if validate_refresh_token_issuer(credentials, authorization_issuer).is_err() {
-        // The access token is still useful at the MCP resource. Never expose an unbound refresh
-        // token to RMCP, which could otherwise send it automatically as the access token expires.
         staged.refresh_token = None;
         staged.issuer = None;
     }

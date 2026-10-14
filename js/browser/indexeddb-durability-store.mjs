@@ -7,7 +7,7 @@ const STATES = "states";
 const RECORDS = "records";
 const MAX_REVISION = "18446744073709551615";
 
-/** Creates the Worker-local IndexedDB durability capability. */
+
 export function createIndexedDbDurabilityStore(options = {}) {
   const indexedDb = options.indexedDB ?? globalThis.indexedDB;
   if (!indexedDb || typeof indexedDb.open !== "function") {

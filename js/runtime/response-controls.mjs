@@ -1,4 +1,4 @@
-/** Apply stable managed response policy at the provider wire boundary, including replay. */
+
 export function responseControlsSocket(socket, controls = {}, onRequestShape, onResponseCreateSent) {
   validateResponseControls(controls);
   if (onRequestShape !== undefined && typeof onRequestShape !== "function") {
@@ -16,29 +16,29 @@ export function responseControlsSocket(socket, controls = {}, onRequestShape, on
       if (property === "send") return (data, ...args) => {
         let body;
         if (typeof data === "string" && (controlled || (onRequestShape !== undefined && remainingObservations > 0) || onResponseCreateSent !== undefined)) {
-          // Reuse the policy parse. Observation alone never rejects an opaque frame.
+
           if (controlled) body = JSON.parse(data);
-          else { try { body = JSON.parse(data); } catch { /* Pass through unchanged. */ } }
+          else { try { body = JSON.parse(data); } catch {   } }
         }
         if (body?.type === "response.create") {
           if (controlled) applyResponseControls(body, controls);
           const encoded = controlled ? JSON.stringify(body) : data;
           const result = target.send(encoded, ...args);
           if (onResponseCreateSent !== undefined) {
-            // Every model request, not the bounded shape-sampling subset. The
-            // callback receives no request body, ID, headers, or credentials.
+
+
             try {
               const observation = onResponseCreateSent();
               if (observation?.then) void Promise.resolve(observation).catch(() => {});
-            } catch { /* Passive timing cannot change transport success. */ }
+            } catch {   }
           }
           if (onRequestShape !== undefined && remainingObservations > 0) {
             remainingObservations -= 1;
-            // Send first; diagnostics retain only fixed enums, booleans and counts.
+
             try {
               const observation = onRequestShape(responseRequestShape(body, encoded.length));
               if (observation?.then) void Promise.resolve(observation).catch(() => {});
-            } catch { /* Observation cannot change transport success. */ }
+            } catch {   }
           }
           return result;
         }
@@ -51,7 +51,7 @@ export function responseControlsSocket(socket, controls = {}, onRequestShape, on
   });
 }
 
-/** Apply the same policy to an HTTPS Responses body before provider dispatch. */
+
 export function responseControlsBody(encoded, controls = {}) {
   validateResponseControls(controls);
   if (!hasResponseControls(controls)) return encoded;
@@ -82,8 +82,8 @@ function applyResponseControls(body, controls) {
   if (controls.promptCache !== undefined) {
     body.prompt_cache_options = { mode: controls.promptCache, ttl: "30m" };
     if (controls.promptCache === "explicit") {
-      // Cache the developer context without marking changing user input.
-      // Continuations with no prefix intentionally do not write new cache entries.
+
+
       const developers = (Array.isArray(body.input) ? body.input : []).filter(item => item.role === "developer");
       const text = developers.flatMap(item => Array.isArray(item.content) ? item.content : [])
         .filter(part => part.type === "input_text").at(-1);
@@ -92,8 +92,8 @@ function applyResponseControls(body, controls) {
   }
 }
 
-// Deliberately omit instructions, tool names/schemas, input, metadata and all IDs.
-// The observation describes post-policy controls; multiplex framing may omit stream.
+
+
 function responseRequestShape(body, encodedLength) {
   const choose = (value, allowed) => allowed.includes(value) ? value : "other_or_absent";
   const shape = {

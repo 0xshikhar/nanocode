@@ -316,8 +316,6 @@ where
                     && error.execution_policy_disposition()
                         == Some(crate::ExecutionPolicyDisposition::Reopen)
                 {
-                    // An interrupted host did not settle its effect. Leave the
-                    // durable batch intact; do not invent failed tool outputs.
                     if let Some(tools) = &self.active_tools {
                         tools.cancel_turn().await;
                     }
@@ -327,20 +325,12 @@ where
                     .responses_error()
                     .is_some_and(ResponsesError::is_context_window_exceeded)
                 {
-                    // The provider is authoritative about the usable context
-                    // window. Compact before the next model attempt even when
-                    // local usage remains below the proactive threshold.
                     self.force_compaction = true;
                 }
                 let checkpoint = if self.active_tool_calls.is_empty() {
-                    // The failed model request may follow a yielded cell. Keep
-                    // it running, as after a completed turn, and report it.
                     self.detach_turn_cells().await;
                     self.finish_active_tool_batch_wall();
-                    // Retain client-authored state at its safe boundary, but
-                    // drop the transport checkpoint: the provider may have
-                    // observed the failed request without returning a usable
-                    // continuation.
+
                     if let Some(session) = &mut self.session {
                         session
                             .conversation
@@ -357,10 +347,6 @@ where
                         )
                     })
                 } else {
-                    // A tool-dispatch failure may leave sibling calls in
-                    // flight. Stop their retained runtime work, preserve every
-                    // completed slot, and synthesize outputs for only the
-                    // unfinished calls before committing the failure boundary.
                     self.terminate_turn_cells().await;
                     Some(self.commit_interrupted_checkpoint()?)
                 };
@@ -378,9 +364,6 @@ where
         }
     }
 
-    /// Leaves cells this turn did not finish running and relays their nested
-    /// starts and completions, so every started call reaches a terminal result
-    /// after the turn ends. A later wait takes over without repeating updates.
     async fn detach_turn_cells(&mut self) {
         let Some(tools) = &self.active_tools else {
             return;
@@ -398,8 +381,6 @@ where
             .await;
     }
 
-    /// Terminates this turn's cells and reports nested calls they leave
-    /// unfinished, including starts emitted before an earlier yield.
     async fn terminate_turn_cells(&mut self) {
         let Some(tools) = &self.active_tools else {
             return;
@@ -532,9 +513,6 @@ where
             phase = ExecutionPhase::PrepareTurn;
             session
         } else {
-            // The owning driver resolves its workspace before accepting
-            // prompts. Reuse that stable path instead of introducing a second
-            // filesystem failure between acceptance and session creation.
             let workspace = requested_workspace.map_or_else(
                 || self.context_source.resolve_workspace(None),
                 |workspace| Ok(workspace.to_string()),
@@ -632,9 +610,6 @@ where
                 match warmup {
                     Ok(outcome) => {
                         if outcome.baseline_established {
-                            // Only completed warmup may establish a baseline without
-                            // an authored configuration item. Failed/skipped warmup
-                            // leaves sampling responsible for the initial update.
                             session.conversation.reasoning.pin(
                                 self.model,
                                 self.thinking,
@@ -717,11 +692,6 @@ where
         if self.stats.last_response_id.is_some() {
             session.conversation.commit()?;
         } else {
-            // A journal-replayed model result is authoritative conversation
-            // history, but its provider response ID belongs to the replaced
-            // transport. Its output was already installed with a forced full
-            // replay baseline, so commit that typed tail without restoring the
-            // invalid response chain.
             session.conversation.commit_tail();
         }
         Ok(Self::checkpoint_from_session(
@@ -840,8 +810,7 @@ where
             instant_tool_steering,
             model_call_index,
         } = steering;
-        // Match Codex's ordering: always sample the turn's initial prompt once
-        // before injecting input that arrived while that first request ran.
+
         let mut can_drain_steers = false;
         let next_call = self.stats.model_calls + 1;
         let mut pending_steers = retained_steers
@@ -865,10 +834,8 @@ where
                 self.drain_steers(&mut session.conversation, &mut pending_steers, call_index)
                     .await?;
             }
-            // Advancing a recovered first batch would retire effects awaiting replay.
+
             if first_batch && resumed {
-                // Legacy Generate continuations have no reasoning sidecar. Preserve
-                // their exact request and effects, then retain its baseline in memory.
                 session.conversation.reasoning.pin(
                     self.model,
                     self.thinking,
@@ -942,8 +909,7 @@ where
                             },
                         )
                         .await?;
-                    // After a mid-turn compaction, resume the model-requested
-                    // continuation before injecting newer steering input.
+
                     can_drain_steers = !compacted;
                     continue;
                 }
@@ -958,8 +924,6 @@ where
                 }
                 pending_steers = live_steers;
                 if !pending_steers.is_empty() {
-                    // The completed response is retained by previous_response_id;
-                    // the next delta contains only newly drained steer messages.
                     session.conversation.clear_delta();
                     self.maybe_compact(
                         call_index,
@@ -1007,8 +971,7 @@ where
                         outcome = &mut tools => { outcome?; break; }
                         changed = preempt.changed(), if instant_tool_steering => {
                             if changed.is_err() { break tools.await?; }
-                            // Withdrawal before this safe boundary must not wake an observer.
-                            // The same tool future stays pinned: never replay/cancel effects.
+
                             let deliveries = steers.lock().await.iter()
                                 .map(|steer| Arc::clone(&steer.delivery)).collect::<Vec<_>>();
                             let mut pending = false;
@@ -1033,8 +996,7 @@ where
                     },
                 )
                 .await?;
-            // Codex resumes a model/tool continuation immediately after
-            // compaction, then drains steering at the following boundary.
+
             can_drain_steers = !compacted;
         }
     }

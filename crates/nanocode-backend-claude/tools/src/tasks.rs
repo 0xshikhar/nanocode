@@ -1,7 +1,3 @@
-//! Session-scoped Claude-style task and todo tracking with portable checkpoints.
-//! Hosts persist checkpoints with tool receipts and restore before dispatch; this
-//! is not an account scheduler or a cross-agent task service.
-
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::{
@@ -45,33 +41,22 @@ struct Checkpoint {
     state: State,
 }
 
-/// Task board scoped to one host-created session. Clones share the same board;
-/// independently constructed boards never share data. Persistence is explicit:
-/// the host checkpoints and restores the board together with session receipts.
 #[derive(Clone, Default, Debug)]
 pub struct ClaudeTasks {
     state: Arc<Mutex<State>>,
 }
 
 impl ClaudeTasks {
-    /// Construct an empty independent session board.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Capture a versioned portable checkpoint, including todos and the task-ID
-    /// watermark. Persist it with the corresponding tool receipt before the next
-    /// dispatch. This method alone performs no durable storage write.
     pub fn snapshot(&self) -> Result<Value, String> {
         let state = self.state.lock().map_err(|_| "task board lock poisoned")?;
         Ok(json!({"version":1,"state":&*state}))
     }
 
-    /// Validate and atomically replace the board from a portable checkpoint.
-    /// Existing cloned handles observe the restored state. The host must suspend
-    /// tool dispatch while restoring; this does not merge concurrent mutations.
-    /// Unknown versions and invalid states leave the live board unchanged.
     pub fn restore(&self, checkpoint: Value) -> Result<(), String> {
         let checkpoint: Checkpoint = serde_json::from_value(checkpoint)
             .map_err(|e| format!("invalid task checkpoint: {e}"))?;
@@ -83,7 +68,6 @@ impl ClaudeTasks {
         Ok(())
     }
 
-    /// Model-visible input schemas for task and todo tracking only.
     #[must_use]
     pub fn definitions() -> Vec<Value> {
         vec![
@@ -95,14 +79,11 @@ impl ClaudeTasks {
         ]
     }
 
-    /// Alias for [`Self::definitions`].
     #[must_use]
     pub fn tool_schemas() -> Vec<Value> {
         Self::definitions()
     }
 
-    /// Execute a named operation and return its JSON output as bounded text.
-    /// This method has no filesystem, network, process, or cross-session effects.
     pub async fn execute(&self, name: &str, input: Value) -> Result<String, String> {
         if serde_json::to_vec(&input).map_err(|e| e.to_string())?.len() > MAX_INPUT {
             return Err("task input exceeds 64 KiB".into());
@@ -169,7 +150,7 @@ impl ClaudeTasks {
             blocks: BTreeSet::new(),
             blocked_by: BTreeSet::new(),
         };
-        // A successful create has a bounded response; a failed request does not mutate state.
+
         let result = json!({"task":{"id":id,"subject":subject}});
         ensure_output(&result)?;
         let mut tasks = state.tasks.clone();
@@ -222,7 +203,7 @@ impl ClaudeTasks {
             }
             return Ok(result);
         }
-        // Validate the entire change set before touching the live board.
+
         let mut candidate = original.clone();
         let mut updated_fields = Vec::new();
         for (key, value) in [
@@ -284,8 +265,7 @@ impl ClaudeTasks {
                 return Err("dependency task not found".into());
             }
         }
-        // The graph is tiny and bounded; testing candidate edges as a set makes
-        // multi-edge updates atomic and prevents cycles even within one request.
+
         let mut adjacency: BTreeMap<String, BTreeSet<String>> = state
             .tasks
             .iter()
@@ -321,8 +301,7 @@ impl ClaudeTasks {
                 .blocked_by
                 .insert(source);
         }
-        // Reciprocal dependency updates affect other task reads as well. Validate
-        // the complete proposal before publishing any field or edge changes.
+
         ensure_readable(&tasks)?;
         state.tasks = tasks;
         Ok(result)
@@ -451,8 +430,6 @@ fn list_result(tasks: &BTreeMap<String, Task>) -> Value {
 }
 
 fn ensure_readable(tasks: &BTreeMap<String, Task>) -> Result<(), String> {
-    // A bounded mutation receipt is insufficient: successful writes must not
-    // make subsequent public reads fail, leaving the board undiscoverable.
     ensure_output(&list_result(tasks))?;
     for task in tasks.values() {
         ensure_output(&task_result(Some(task)))?;

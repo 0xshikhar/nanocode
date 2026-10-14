@@ -1,5 +1,5 @@
-use nanocode_agent::backend::{created, created_batch};
 use super::*;
+use nanocode_agent::backend::{created, created_batch};
 #[cfg(feature = "openai")]
 pub(super) struct OpenAiAgentFactory {
     pub(super) commands: mpsc::WeakSender<Command>,
@@ -68,7 +68,7 @@ impl super::backend::AgentFactory for OpenAiAgentFactory {
     fn settings(
         &self,
         _parent: AgentHandle,
-    ) -> super::backend::BackendFuture<Result<(crate::HarnessModel, Thinking)>> {
+    ) -> super::backend::BackendFuture<Result<(crate::ModelSelection, Thinking)>> {
         let commands = self.commands.upgrade();
         let shutdown = self.shutdown.clone();
         Box::pin(async move {
@@ -78,7 +78,7 @@ impl super::backend::AgentFactory for OpenAiAgentFactory {
             })
             .await?;
             Ok((
-                crate::HarnessModel::Codex(snapshot.model),
+                crate::ModelSelection::Codex(snapshot.model),
                 snapshot.thinking,
             ))
         })

@@ -1,7 +1,5 @@
 use super::*;
 
-/// The current conversation and execution position. This replaces completed
-/// effect receipts; it is not a collection of historical model requests.
 #[derive(Deserialize, Serialize)]
 struct CurrentExecution {
     phase: ExecutionPhase,
@@ -77,11 +75,9 @@ where
         let (history, prefix) = if session.tools.is_code_only() {
             let mut history = history;
             clear_code_only_schemas(&mut history);
-            // Keep admitted instructions, but the embedding's strict capability
-            // boundary applies to an active continuation as well as a new turn.
+
             let mut prefix = prefix;
-            // Redeclare the current tools where the admitted prefix declared
-            // them, so the request keeps the layout of a fresh one.
+
             let tools_at = prefix
                 .iter()
                 .position(|item| matches!(item, ResponseItem::AdditionalTools { .. }))
@@ -148,7 +144,7 @@ where
         session
             .conversation
             .prepare_request_policy(self.continuation_policy());
-        // Provider response IDs are connection-local; only the conversation is durable.
+
         session.conversation.reset_for_full_request();
         session.context = ContextState::new(
             self.context_source
@@ -163,9 +159,6 @@ where
         saved.stats.warmup_usage.estimated_cost = saved.warmup_cost;
         self.stats = saved.stats;
         if let Some(origin) = saved.operation_started_at {
-            // Compare attempt starts, then use the live monotonic timer. This
-            // includes receipt replay and downtime without adding overlapping
-            // model/tool counters or losing work after the last checkpoint.
             self.elapsed_before_attempt = self
                 .operation_started_at
                 .and_then(|started_at| started_at.checked_sub(origin))
@@ -191,8 +184,7 @@ where
         if !recovered_settings {
             return Ok(());
         }
-        // Saved request settings belong to the unfinished operation. Future
-        // turns use the current runtime's instructions and tool catalog.
+
         if let Some(mut session) = self.session.take() {
             let current = self.attempt_factory(&session.tools)?;
             session.factory = session

@@ -1,6 +1,6 @@
 import type { DefaultAgent, DurabilityStore, SessionCheckpoint, ToolContext } from '../types.mjs';
 
-/** Explicit, caller-approved credentials. The callback is resolved independently for each request. */
+
 export type Auth = Readonly<
   | { apiKey: string; headers?: never }
   | { headers(): HeadersInit | Promise<HeadersInit>; apiKey?: never }
@@ -21,18 +21,18 @@ export type ToolResult = Readonly<{
   structuredResult?: unknown;
   metadata?: unknown;
 }>;
-/** No default catalog: each named tool must be supplied with an actual host handler. */
+
 export type Tool = Readonly<{
   name: string;
   description: string;
   inputSchema?: Record<string, unknown>;
-  /** Alias for existing named-tool object schemas. */
+
   parameters?: Record<string, unknown>;
   strict?: boolean;
   deferLoading?: boolean;
-  /** Native wire-name alias for deferLoading; do not supply both. */
+
   defer_loading?: boolean;
-  /** Independent calls may overlap with adjacent parallel-safe calls in one response. */
+
   supportsParallelToolCalls?: boolean;
   handler(input: unknown, context: ToolContext): unknown | Promise<unknown>;
 }>;
@@ -42,35 +42,35 @@ export type CodexHarnessOptions = Readonly<{
   thinking?: import('../types.mjs').Thinking;
   instructions?: string;
   workspace?: string;
-  /** Code Mode always exposes exec/wait; child tools run inside exec. */
+
   toolMode?: 'code-only';
-  /** Overrides Node QuickJS; required for Code Mode in non-Worker Web API hosts. */
+
   codeEvaluator?: import('../types.mjs').CodeEvaluator;
   tools?: import('../types.mjs').ToolConfiguration;
 }>;
 export type Options = Readonly<{
   harness?: 'claude';
-  /** Only exec and wait are exposed to Messages; native tools run inside exec. */
+
   toolMode?: 'code-only';
-  /** Overrides Node QuickJS or browser Worker evaluation; required in other Web API hosts. */
+
   codeEvaluator?: import('../types.mjs').CodeEvaluator;
-  /** Opt in to the canonical shared subagent task tree. */
+
   subagents?: Readonly<{ maxConcurrency?: number }>;
-  /** Explicit alternate-family capability; no credentials are inferred. */
+
   harnesses?: Readonly<{ codex?: CodexHarnessOptions }>;
   auth: Auth;
-  /** A cataloged Claude model, or another id served by a compatible `endpoint`. */
+
   model: import("../types.mjs").ClaudeModel | (string & {});
   endpoint?: string;
-  /** Explicit host Messages fetch; never serialized into model/session state. */
+
   fetch?: typeof globalThis.fetch;
-  /** Protocol compatibility only; supplies neither authentication nor product parity. Requires endpoint. */
+
   compatibilityProfile?: 'subscription';
-  /** Public stable OMP wire affinity. Reuse installId across sessions/restarts; never supply credentials. */
+
   subscriptionIdentity?: Readonly<{ installId?: string; accountUuid?: string; userId?: string; platform?: string; arch?: string; version?: string }>;
   instructions?: string;
   systemBlocks?: readonly Record<string, unknown>[];
-  /** Defaults to durabilityId for durable sessions; an explicit ID must match it. */
+
   sessionId?: string;
   workspace?: string;
   tools?: readonly Tool[];
@@ -78,22 +78,22 @@ export type Options = Readonly<{
   thinking?: 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   adaptiveThinking?: boolean;
   keepThinking?: boolean;
-  /** Fast mode where the model offers it (`capabilities().serviceTier`); an unsupported model rejects before any request. Same as Codex `fastMode`. */
+
   fastMode?: boolean;
   cache?: 'off' | '5m' | '1h';
   parallelTools?: boolean;
   contextWindowTokens?: number;
   autoCompactWindowTokens?: number;
-  /** Disabling automatic compaction is not supported. */
+
   autoCompact?: true;
   terminalReceiptRetention?: number;
-  /** Resumes this Claude checkpoint's session, keeping its session ID and committed conversation. */
+
   resume?: SessionCheckpoint;
-  /** Compiled browser WASM module for this exact package. */
+
   module?: unknown;
 }> & (
   | { durability?: never; durabilityId?: never }
   | { durability: DurabilityStore; durabilityId: string }
 );
-/** The one harness-neutral Agent; canonical subagents are available through Subagents when enabled. */
-export type Agent = DefaultAgent;
+
+export type Agent = DefaultAgent<"claude">;

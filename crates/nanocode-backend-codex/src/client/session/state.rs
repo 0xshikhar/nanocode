@@ -9,24 +9,17 @@ use super::{
     context::{ContextManager, assign_missing_response_item_ids, has_well_formed_tool_calls},
 };
 
-/// Stable client-owned identity for one managed conversation.
-///
-/// Session IDs are `UUIDv7` values so they remain globally unique while sorting
-/// by creation time. They are not `OpenAI` response IDs and are safe to persist
-/// as application lineage.
 #[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[repr(transparent)]
 #[serde(try_from = "uuid::Uuid", into = "uuid::Uuid")]
 pub struct SessionId(uuid::Uuid);
 
 impl SessionId {
-    /// Generates a new `UUIDv7` session identity.
     #[must_use]
     pub fn new() -> Self {
         Self(uuid::Uuid::now_v7())
     }
 
-    /// Returns the UUID representation.
     #[must_use]
     pub const fn as_uuid(self) -> uuid::Uuid {
         self.0
@@ -78,24 +71,15 @@ impl From<SessionId> for uuid::Uuid {
     }
 }
 
-/// Invalid persisted or caller-supplied session identity.
 #[derive(Debug, thiserror::Error)]
 pub enum SessionIdError {
-    /// The value was not a UUID.
     #[error("invalid session UUID")]
     InvalidUuid(#[from] uuid::Error),
-    /// The UUID used a version other than `UUIDv7`.
+
     #[error("session IDs must be UUIDv7, got UUIDv{version}")]
-    WrongVersion {
-        /// Parsed UUID version number.
-        version: usize,
-    },
+    WrongVersion { version: usize },
 }
 
-/// OAI-owned mutable state shared by the standalone session and agent loop.
-///
-/// This is a lower-layer integration surface for `nanocode-runtime`. Normal
-/// API consumers should use [`Session`], which prevents invalid mutations.
 #[doc(hidden)]
 #[derive(Clone)]
 pub struct ManagedSessionState {
@@ -108,7 +92,6 @@ pub struct ManagedSessionState {
 }
 
 impl ManagedSessionState {
-    /// Creates fresh continuation state around uncommitted typed input.
     #[must_use]
     pub fn new(mut items: Vec<ResponseItem>) -> Self {
         assign_missing_response_item_ids(&mut items);
@@ -122,17 +105,6 @@ impl ManagedSessionState {
         }
     }
 
-    /// Restores complete committed history without trusting a provider
-    /// continuation checkpoint.
-    ///
-    /// The next request performs a full replay. History must be non-empty,
-    /// contain only supported API items, and have complete ordered tool-call
-    /// pairs.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed structural error when the retained history is empty,
-    /// contains unsupported items, or has malformed tool-call pairing.
     pub fn resume(mut items: Vec<ResponseItem>) -> Result<Self, ManagedSessionStateError> {
         if items.is_empty() {
             return Err(ManagedSessionStateError::EmptyHistory);
@@ -154,46 +126,35 @@ impl ManagedSessionState {
         Ok(state)
     }
 
-    /// Returns the number of retained typed history items.
     #[must_use]
     pub fn history_len(&self) -> usize {
         self.context.len()
     }
 
-    /// Returns whether retained typed history is empty.
     #[must_use]
     pub fn history_is_empty(&self) -> bool {
         self.context.is_empty()
     }
 
-    /// Iterates over retained typed history in provider order.
     #[must_use]
     pub fn history(&self) -> impl ExactSizeIterator<Item = &ResponseItem> {
         self.context.iter()
     }
 
-    /// Materializes complete retained typed history.
     #[must_use]
     pub fn flattened_history(&self) -> Vec<ResponseItem> {
         self.context.flattened_items()
     }
 
-    /// Returns an O(1) shared checkpoint of retained typed history.
     #[must_use]
     pub fn shared_history(&self) -> ResponseHistory {
         self.context.shared_items()
     }
 
-    /// Appends client- or provider-authored typed items to the active tail.
-    ///
-    /// Unsupported non-API items are ignored and bounded tool-output policy is
-    /// applied by the underlying context manager.
     pub fn append(&mut self, items: impl IntoIterator<Item = ResponseItem>) {
         self.context.record_items(items);
     }
 
-    /// Records explicitly client-authored input, preserving developer provenance
-    /// separately from the provider-visible response items.
     pub fn append_client(&mut self, items: impl IntoIterator<Item = ResponseItem>) {
         let mut items: Vec<_> = items.into_iter().collect();
         assign_missing_response_item_ids(&mut items);
@@ -211,14 +172,11 @@ impl ManagedSessionState {
         self.append(items);
     }
 
-    /// Client provenance sidecar for durable snapshots. Never send it to the model.
     #[must_use]
     pub const fn client_authored(&self) -> &BTreeSet<String> {
         &self.client_authored
     }
 
-    /// Restores explicit provenance. Legacy histories without this sidecar have
-    /// no client-authored developer messages; text is never used to infer origin.
     pub fn restore_client_authored(&mut self, ids: BTreeSet<String>) {
         self.client_authored = self
             .context
@@ -237,7 +195,6 @@ impl ManagedSessionState {
             .collect();
     }
 
-    /// Usage baseline needed to preserve compaction decisions across recovery.
     #[doc(hidden)]
     #[must_use]
     pub const fn context_usage(&self) -> (Option<&Usage>, bool) {
@@ -247,15 +204,12 @@ impl ManagedSessionState {
         )
     }
 
-    /// Whether the saved usage covers every retained item, including local input.
     #[doc(hidden)]
     #[must_use]
     pub const fn context_usage_is_estimate(&self) -> bool {
         self.context.token_usage_is_estimate
     }
 
-    /// Restores accounting for unchanged durable history. Image repairs retain
-    /// their newly computed baseline instead of reinstalling stale usage.
     #[doc(hidden)]
     pub fn restore_context_usage(
         &mut self,
@@ -270,68 +224,44 @@ impl ManagedSessionState {
         }
     }
 
-    /// Records usage from the most recent completed provider operation.
     pub fn update_token_info(&mut self, usage: Option<&Usage>) {
         self.context.update_token_info(usage);
     }
 
-    /// Records whether the active transport includes retained reasoning in
-    /// provider-reported input usage.
     pub const fn observe_server_reasoning(&mut self, included: bool) {
         self.server_reasoning_included |= included;
     }
 
-    /// Returns the best available estimate of active provider context tokens.
     #[must_use]
     pub fn active_context_tokens(&self) -> u64 {
         self.context
             .active_context_tokens(self.server_reasoning_included)
     }
 
-    /// Returns the first history index not retained by the current provider
-    /// continuation checkpoint.
     #[must_use]
     pub const fn delta_start(&self) -> usize {
         self.delta_start
     }
 
-    /// Returns the private provider continuation checkpoint, when healthy.
-    ///
-    /// Higher layers use this only to construct requests and compatibility
-    /// telemetry; it must not become an application-owned session identity.
     #[must_use]
     pub fn previous_response_id(&self) -> Option<&str> {
         self.previous_response_id.as_deref()
     }
 
-    /// Installs a completed provider continuation checkpoint.
     pub fn set_previous_response_id(&mut self, response_id: impl Into<String>) {
         let response_id = response_id.into();
         self.previous_response_id = (!response_id.is_empty()).then_some(response_id);
     }
 
-    /// Excludes all currently retained items from the next healthy
-    /// continuation delta.
     pub fn clear_delta(&mut self) {
         self.delta_start = self.context.len();
     }
 
-    /// Discards the provider checkpoint so the next request replays complete
-    /// client-owned history.
     pub fn reset_for_full_request(&mut self) {
         self.delta_start = 0;
         self.previous_response_id = None;
     }
 
-    /// Commits the active tail after a completed provider response.
-    ///
-    /// A provider continuation ID is required so a healthy next request cannot
-    /// accidentally omit committed history.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ManagedSessionStateError::MissingResponseId`] when no
-    /// completed provider continuation has been installed.
     pub fn commit(&mut self) -> Result<(), ManagedSessionStateError> {
         if self.previous_response_id.is_none() {
             return Err(ManagedSessionStateError::MissingResponseId);
@@ -341,17 +271,11 @@ impl ManagedSessionState {
         Ok(())
     }
 
-    /// Commits repaired client-authored cancellation state and forces the next
-    /// request to replay all retained history.
     pub fn commit_interrupted(&mut self) {
         self.reset_for_full_request();
         self.context.commit_tail();
     }
 
-    /// Derives the next `response.create` request from retained history.
-    ///
-    /// A repaired prompt (incomplete tool calls closed in an isolated copy)
-    /// cannot continue the provider checkpoint and is sent as a full replay.
     #[must_use]
     pub fn generation_request(&self) -> RequestHistory {
         let (full, repaired) = self.context.prompt_items_with_repair();
@@ -364,17 +288,6 @@ impl ManagedSessionState {
         }
     }
 
-    /// Records one completed generation derived from [`Self::generation_request`].
-    ///
-    /// `response_id` is `None` when the provider checkpoint cannot be reused
-    /// (for example, a journal-replayed result from a replaced transport); the
-    /// next request then replays complete history. The active tail is not
-    /// committed.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ManagedSessionStateError::MissingResponseId`] without
-    /// changing state when a reusable continuation has an empty ID.
     pub fn complete_generation(
         &mut self,
         request: RequestHistory,
@@ -399,10 +312,6 @@ impl ManagedSessionState {
         Ok(())
     }
 
-    /// Derives the next `response.compact` request from retained history.
-    ///
-    /// Callers may inspect [`RequestHistory::full`] (for example, to preserve
-    /// the transcript) before [`RequestHistory::fit_context_window`] trims it.
     #[must_use]
     pub fn compaction_request(&self) -> RequestHistory {
         let (full, repaired) = self.context.prompt_items_with_repair();
@@ -415,12 +324,6 @@ impl ManagedSessionState {
         }
     }
 
-    /// Applies the client-owned history repair a provider rejection requires.
-    ///
-    /// Rejected image payloads are replaced with a stable text diagnostic and
-    /// a rejected tool definition is removed from discovery metadata, so a
-    /// later full replay cannot resend them. Any change discards the provider
-    /// checkpoint. Returns whether retained history changed.
     pub fn repair_rejected_request(&mut self, repair: RejectedRequestRepair<'_>) -> bool {
         let mut changed = 0;
         if repair.replace_images {
@@ -436,18 +339,10 @@ impl ManagedSessionState {
         changed > 0
     }
 
-    /// Commits the active tail without changing continuation state.
-    ///
-    /// The agent uses this only when publishing a safe in-turn fork boundary.
     pub fn commit_tail(&mut self) {
         self.context.commit_tail();
     }
 
-    /// Installs one completed compaction item atomically and forces a full
-    /// replay on the next request.
-    ///
-    /// `initial_context` contains caller-owned canonical items that must
-    /// survive summarization, such as an agent's developer and task context.
     pub fn install_compaction(
         &mut self,
         item: ResponseItem,
@@ -468,7 +363,6 @@ impl ManagedSessionState {
         self.history_revision = self.history_revision.saturating_add(1);
     }
 
-    /// Installs image-prepared replay history and marks its durable baseline changed.
     #[doc(hidden)]
     pub fn replace_prepared_history(&mut self, history: Vec<ResponseItem>) {
         self.context.replace_and_recompute(history, &[]);
@@ -477,17 +371,12 @@ impl ManagedSessionState {
         self.history_revision = self.history_revision.saturating_add(1);
     }
 
-    /// Returns the monotonic number of installed history replacements.
     #[must_use]
     pub const fn history_revision(&self) -> u64 {
         self.history_revision
     }
 }
 
-/// Continuation-aware history for one replayable provider request.
-///
-/// Produced by [`ManagedSessionState`] so every driver derives the full replay,
-/// the incremental delta, and the provider checkpoint from one policy.
 #[doc(hidden)]
 #[derive(Clone)]
 pub struct RequestHistory {
@@ -499,21 +388,16 @@ pub struct RequestHistory {
 }
 
 impl RequestHistory {
-    /// Returns the complete request-ready history.
     #[must_use]
     pub const fn full(&self) -> &ResponseHistory {
         &self.full
     }
 
-    /// Returns the provider checkpoint this request continues, if any.
     #[must_use]
     pub fn previous_response_id(&self) -> Option<&str> {
         self.previous_response_id.as_deref()
     }
 
-    /// Trims oversized tool outputs so a compaction request fits the context
-    /// window. Rewritten history no longer matches the provider checkpoint, so
-    /// any rewrite turns the request into a full replay.
     pub fn fit_context_window(
         &mut self,
         request_prefix: &[ResponseItem],
@@ -532,18 +416,15 @@ impl RequestHistory {
     }
 }
 
-/// Client-owned history repair required after a provider rejected a request.
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RejectedRequestRepair<'a> {
-    /// Replace every retained image payload with a text diagnostic.
     pub replace_images: bool,
-    /// Remove this rejected definition from retained discovery metadata.
+
     pub tool_definition: Option<&'a serde_json::Value>,
 }
 
 impl<'a> RejectedRequestRepair<'a> {
-    /// Derives the repair required by one provider error.
     #[must_use]
     pub fn for_error(error: &'a ResponsesError) -> Self {
         Self {
@@ -553,20 +434,18 @@ impl<'a> RejectedRequestRepair<'a> {
     }
 }
 
-/// Invalid state supplied to or produced by the managed session state engine.
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ManagedSessionStateError {
-    /// Restored history was empty.
     #[error("conversation history must not be empty")]
     EmptyHistory,
-    /// Restored history contained an unsupported item.
+
     #[error("conversation history contains an unsupported item")]
     UnsupportedHistoryItem,
-    /// Restored history contained an unmatched or misordered tool call.
+
     #[error("conversation history contains an unmatched or misordered tool call")]
     MalformedToolCalls,
-    /// A completed response was missing its provider continuation identity.
+
     #[error("completed response did not have a response ID")]
     MissingResponseId,
 }

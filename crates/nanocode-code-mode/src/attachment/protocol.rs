@@ -5,8 +5,6 @@ use super::AttachmentMachine;
 
 pub(crate) const HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(20);
 
-/// Monotonic host-local phases. The final frame serialization and socket write
-/// remain in the broker's combined transit/return overhead, never one-way latency.
 #[derive(Debug, Default, Clone, Serialize)]
 pub(crate) struct ReceiptTiming {
     pub(crate) scheduler_ms: f64,

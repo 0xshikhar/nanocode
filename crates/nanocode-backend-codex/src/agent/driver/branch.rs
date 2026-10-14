@@ -13,7 +13,7 @@ pub(in crate::agent) struct BranchSpawner<S> {
     pub(in crate::agent) before_compaction: Option<Arc<dyn execution::BeforeCompaction>>,
     pub(in crate::agent) context_config: ContextSourceConfig,
     pub(in crate::agent) context_source: ContextSource,
-    /// This session's own provenance; children derive theirs from it.
+
     pub(in crate::agent) lineage: Lineage,
     pub(in crate::agent) execution: ExecutionConfig,
     pub(in crate::agent) restored_snapshot: Option<SessionSnapshot>,
@@ -21,7 +21,6 @@ pub(in crate::agent) struct BranchSpawner<S> {
     pub(in crate::agent) service_factory: ServiceFactory<S>,
 }
 
-/// How a driver started and the provenance its handle reports.
 #[derive(Clone)]
 pub(in crate::agent) struct AgentOrigin {
     pub(in crate::agent) start: crate::session::SessionStart,
@@ -41,9 +40,6 @@ impl AgentOrigin {
         self.lineage.parent_session_id.as_deref()
     }
 
-    /// Parent recorded in rollout metadata. Roots never have one; a resumed
-    /// session keeps its persisted parent, so a reopened branch is still
-    /// mirrored as a branch of its source.
     pub(in crate::agent) fn recorded_parent(&self) -> Option<&str> {
         match self.start {
             crate::session::SessionStart::New(crate::Origin::Root) => None,
@@ -71,13 +67,13 @@ impl<S> BranchSpawner<S> {
             config: Arc::clone(&self.config),
             tools: self.tools.clone(),
             spawn_factory: self.spawn_factory.clone(),
-            // A durable task-tree journal belongs only to its configured root.
+
             child_journal: None,
             lineage_id: Arc::clone(&self.lineage_id),
             provider_session_id: Arc::clone(&self.provider_session_id),
             prompt_cache_key: self.prompt_cache_key.as_ref().map(Arc::clone),
             shared_prompt_cache: self.shared_prompt_cache.clone(),
-            // Preservation belongs to the host that explicitly configured this root.
+
             before_compaction: None,
             context_config: self.context_config.clone(),
             context_source: self.context_source.clone(),
@@ -175,7 +171,7 @@ where
         let session_id = SessionId::new();
         let session_id_text = session_id.to_string();
         let lineage = Lineage::child_of(&self.lineage, parent_session_id, crate::Origin::Subagent);
-        // A subagent of a durable session is durable exactly like a fork.
+
         let branch_policy = parent.branch_policy(&crate::SessionInfo::new(
             session_id_text.as_str(),
             crate::HarnessFamily::Codex,
@@ -200,13 +196,13 @@ where
             instant_tool_steering: self.instant_tool_steering,
             tools: self.tools.clone(),
             spawn_factory: self.spawn_factory.clone(),
-            // A durable task-tree journal belongs only to its configured root.
+
             child_journal: None,
             lineage_id: Arc::from(session_id_text.as_str()),
             provider_session_id: Arc::clone(&self.provider_session_id),
             prompt_cache_key: Some(prompt_cache_key),
             shared_prompt_cache: self.shared_prompt_cache.clone(),
-            // Preservation belongs to the host that explicitly configured this root.
+
             before_compaction: None,
             context_config: self.context_config.clone(),
             context_source: self.context_config.build(),
@@ -243,14 +239,13 @@ where
         let session_id = snapshot.session_id.parse::<SessionId>().map_err(|error| {
             NanocodexError::InvalidCheckpoint(format!("invalid child session ID: {error}"))
         })?;
-        // The restoring runtime is the parent; the child keeps how it was created.
+
         let origin = match snapshot.lineage.origin {
             crate::Origin::Root => crate::Origin::Subagent,
             origin => origin,
         };
         let lineage = Lineage::child_of(&self.lineage, parent_session_id, origin);
-        // Rehydrate an evicted child under its own branch policy, which reopens
-        // the durable state and rollout it recorded under the same session ID.
+
         let branch_policy = parent.branch_policy(&crate::SessionInfo::new(
             snapshot.session_id.as_str(),
             crate::HarnessFamily::Codex,
@@ -339,9 +334,7 @@ where
             )?;
             children.push(child);
         }
-        // All or nothing: a failure above drops every created child, whose
-        // driver then stops before any turn recorded durable state or a
-        // rollout. Observers see only a batch that started completely.
+
         if let Some(observer) = observer {
             for (child, _) in &children {
                 observer(child.session_id());

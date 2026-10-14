@@ -1,5 +1,3 @@
-//! Retained-image budgeting follows codex-rs remote compaction v2: retain the
-//! newest parts of a boundary message and keep image labels with their image.
 use super::{
     ContentItem, ImageDetail, RESIZED_IMAGE_BYTES_ESTIMATE, ResponseItem, approx_tokens,
     estimate_item_tokens, original_image_bytes_estimate, truncate_middle_with_token_budget,

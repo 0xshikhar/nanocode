@@ -36,7 +36,6 @@
         "$TURBO_ROOT$/crates/nanocode-types/**",
         "$TURBO_ROOT$/crates/nanocode-media/**",
         "$TURBO_ROOT$/crates/nanocode-tls/**",
-        "$TURBO_ROOT$/crates/nanocode-rollout/**",
         "$TURBO_ROOT$/crates/nanocode-cua/**"
       ],
       "env": [

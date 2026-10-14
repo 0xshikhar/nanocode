@@ -147,7 +147,7 @@ export function parseHistoryReadSessionInput(value: unknown): HistoryReadSession
   };
 }
 
-/** Exact identifiers are better served by FTS than semantic similarity. */
+
 export function isExactHistoryIdentifierQuery(query: string): boolean {
   return EXACT_IDENTIFIER.test(query.normalize("NFKC").trim());
 }
@@ -155,10 +155,10 @@ export function isExactHistoryIdentifierQuery(query: string): boolean {
 export function historyVectorRetrieval(organizationId: string, teamId: string, limit: number) {
   return {
     retrieval_type: "vector" as const,
-    // AI Search applies this to vector similarity before result limiting. A
-    // query with no sufficiently related memory therefore returns no direct
-    // results instead of filling the response with nearest-but-irrelevant
-    // turns.
+
+
+
+
     match_threshold: HISTORY_VECTOR_MATCH_THRESHOLD,
     max_num_results: Math.min(50, Math.max(limit, limit * 3)),
     filters: {
@@ -328,11 +328,11 @@ export type ReadSessionToolResult = Readonly<{
   }>[];
 }>;
 
-/**
- * Projects the internal search response onto the model-visible contract. The
- * allowlist and UTF-8 truncation prevent storage/provider metadata or a single
- * oversized transcript from leaking into a tool result.
- */
+
+
+
+
+
 export function projectFindSessionsToolResult(
   value: unknown,
   limit: number,
@@ -366,7 +366,7 @@ export function projectFindSessionsToolResult(
   };
 }
 
-/** Projects only bounded transcript fields; citations remain Worker-owned. */
+
 export function projectReadSessionToolResult(value: unknown): ReadSessionToolResult {
   if (!isRecord(value) || !Array.isArray(value.turns)
     || value.turns.length > MAX_HISTORY_SEARCH_LIMIT) {

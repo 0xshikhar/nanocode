@@ -22,15 +22,15 @@ export type Config = Readonly<{
 }>;
 
 export type CreateConfigParameters = Readonly<{
-  /** Defaults inherited by every Agent created by this config. */
+
   agent?: createAgent.Options | undefined;
-  /** Stable origin included in both preparation and creation of the browser harness. */
+
   origin?: string | undefined;
-  /** Agent startup retries after the first attempt. Defaults to 2. */
+
   retry?: number | undefined;
-  /** Backoff before a startup retry. Defaults to 400ms × attempt. */
+
   retryDelay?: ((attempt: number, error: unknown) => number) | undefined;
 }>;
 
-/** Creates the stable browser runtime consumed by framework bindings. */
+
 export function createConfig(options?: CreateConfigParameters): Config;

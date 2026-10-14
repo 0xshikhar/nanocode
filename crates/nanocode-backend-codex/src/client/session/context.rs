@@ -10,12 +10,10 @@ use super::compaction;
 const TOOL_OUTPUT_TOKEN_LIMIT: usize = 12_000;
 const REQUEST_PREFIX_ID_NAMESPACE: uuid::Uuid =
     uuid::Uuid::from_u128(0x3e203f80_1cd8_4938_9588_0990bb023db5);
-// Changing this value would change model-visible IDs and invalidate prompt caches.
+
 const SYNTHETIC_OUTPUT_ID_NAMESPACE: uuid::Uuid =
     uuid::Uuid::from_u128(0x90d38d3e_6a5b_4d52_bfe2_2f1e634bfac4);
 
-/// Typed model-visible transcript. The common prompt path shares its backing
-/// allocation; prompt-only repairs allocate only for incomplete call pairs.
 #[derive(Clone)]
 pub struct ContextManager {
     items: ResponseHistory,
@@ -118,7 +116,6 @@ impl ContextManager {
         }
     }
 
-    /// Repairs malformed legacy tool images before restored history is replayed.
     pub(super) fn replace_invalid_tool_images(&mut self) -> usize {
         let mut replaced = 0;
         let mut items = self.flattened_items();
@@ -254,8 +251,7 @@ impl ContextManager {
             .last_token_usage
             .as_ref()
             .map_or(0, |usage| usage.total_tokens);
-        // A recomputed baseline already includes every retained item. Appends
-        // extend that estimate directly until a provider supplies fresh usage.
+
         if self.token_usage_is_estimate {
             return reported;
         }
@@ -269,8 +265,6 @@ impl ContextManager {
         }
     }
 
-    /// Returns a shared prompt snapshot, allocating a repaired copy only for
-    /// missing call outputs or orphan outputs.
     #[must_use]
     pub fn prompt_items(&self) -> ResponseHistory {
         self.prompt_items_with_repair().0
@@ -360,7 +354,7 @@ impl ContextManager {
                 .iter()
                 .map(compaction::estimate_item_tokens)
                 .fold(0, u64::saturating_add);
-            // Retain any request-prefix contribution outside the history.
+
             usage.total_tokens = usage
                 .total_tokens
                 .saturating_sub(before)
@@ -453,7 +447,7 @@ impl CallIds {
             } => {
                 self.custom_outputs.insert(call_id.clone());
             }
-            // Named outputs are progress notifications, not terminal tool results.
+
             ResponseItem::CustomToolCallOutput { .. } => {}
             ResponseItem::ToolSearchCall {
                 call_id: Some(call_id),
@@ -519,8 +513,6 @@ pub fn responses_lite_request_prefix(
     Ok([tools_item, instructions_item])
 }
 
-// Only namespace children are definitions. Never walk arbitrary JSON Schema
-// properties that happen to be named `tools`.
 fn retain_tool_definition(
     tool: &mut serde_json::Value,
     rejected: &serde_json::Value,
@@ -637,8 +629,6 @@ fn is_user_turn_boundary(item: &ResponseItem) -> bool {
     }
 }
 
-// Older Codex histories encode inter-agent instructions as a single JSON text
-// block in an assistant message. Recognize the envelope, not arbitrary JSON.
 fn is_inter_agent_instruction_content(content: &[ContentItem]) -> bool {
     #[derive(serde::Deserialize)]
     struct Instruction {

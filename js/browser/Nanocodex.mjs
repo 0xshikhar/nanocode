@@ -4,10 +4,10 @@ import { open as openWorkspace } from "./workspace.mjs";
 import { initializeBrowserEngine } from "./engine.mjs";
 import { createNanocodexFactory } from "../runtime/nanocodex.mjs";
 
-/**
- * Configures backends once. Roots using a shared Workspace run in this isolate.
- * Codex-only runtimes with explicit tools retain the package Worker path.
- */
+
+
+
+
 export const create = createNanocodexFactory({
   placement: "browser",
   createAgent(options) {

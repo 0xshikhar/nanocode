@@ -93,8 +93,8 @@ function nodeBackend(root, logicalRoot) {
 async function listDirectory(root, directory, prefix, recursive, maxEntries, output) {
   const entries = await readdir(directory, { withFileTypes: true });
   for (const entry of entries) {
-    // Discover regular files without following links or aborting an otherwise
-    // usable repository listing. Direct reads and writes still reject links.
+
+
     if (entry.isSymbolicLink() || (!entry.isDirectory() && !entry.isFile())) continue;
     if (output.length >= maxEntries) {
       throw new RangeError(`workspace listing exceeds ${maxEntries} entries`);

@@ -5,9 +5,6 @@ use tracing::warn;
 
 const PROJECT_DOC_SEPARATOR: &str = "\n\n--- project-doc ---\n\n";
 
-/// User-level instructions from the configured homes: the Codex home's
-/// `AGENTS.override.md` (when non-empty) or `AGENTS.md`, then the Claude
-/// home's `CLAUDE.md` when it is a distinct document.
 pub(crate) fn load_global_instructions(
     codex_home: Option<&Path>,
     claude_home: Option<&Path>,
@@ -19,8 +16,7 @@ pub(crate) fn load_global_instructions(
     };
     let global = AgentHome::new(codex, claude).global_instructions();
     report(&global.diagnostics);
-    // A home that was not configured contributes nothing, even when the
-    // configured one is passed for both.
+
     let texts = global
         .sources
         .iter()
@@ -55,10 +51,6 @@ pub(super) fn combine_instructions(
     }
 }
 
-/// Project instructions root-to-leaf, each loaded whole: per directory
-/// `AGENTS.override.md` or `AGENTS.md`, then the Claude conventions
-/// `CLAUDE.md`, `CLAUDE.local.md`, and `.claude/CLAUDE.md`, each distinct
-/// document once.
 fn load_project_instructions(workspace: &Path) -> Option<String> {
     let instructions = ProjectHome::discover(workspace).read_instructions();
     report(&instructions.diagnostics);

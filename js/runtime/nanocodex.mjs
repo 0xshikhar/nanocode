@@ -1,8 +1,9 @@
-// Reusable Nanocodex runtime: configure backends once, then create independent
-// root Agents through the existing per-agent Agent.create path. Each root gets
-// its own host, tool execution state, code evaluator binding and session; only
-// immutable configuration and caller-owned credential capabilities are shared.
+
+
+
+
 import {
+  createSessionId,
   observeAgentRelease,
   retainAgentForOwner,
   shutdownOwnedAgent,
@@ -15,16 +16,15 @@ import { claudeWorkspaceTools } from "./claude-workspace-tools.mjs";
 import { toolRouterBrand, toolRouterRuntime, toolMapSource } from "./tool-router.mjs";
 
 const FAMILIES = Object.freeze(["codex", "claude"]);
-const RUNTIME_KEYS = new Set(["backends", "harness", "model", "thinking", "instructions", "workspace", "filesystem", "codeEvaluator", "module", "cua"]);
+const RUNTIME_KEYS = new Set(["backends", "harness", "model", "thinking", "instructions", "workspace", "filesystem", "codeEvaluator", "module", "cua", "durability"]);
 const RUNTIME_REJECTED = Object.freeze({
   tools: "tools belong to each backend: backends.codex.tools / backends.claude.tools",
   codeMode: "Code Mode is always enabled",
   transport: "transports belong to backends.codex / backends.claude",
   auth: "Claude authentication belongs to backends.claude: Transport.anthropic()",
   harnesses: "Nanocodex.create wires alternate-family children from its backends",
-  sessionId: "session identity is per Agent; use Agent.create for a named session",
-  durability: "durable sessions are per Agent; use Agent.create with durability",
-  durabilityId: "durable sessions are per Agent; use Agent.create with durability",
+  sessionId: "session identity is per Agent; use nano.spawn({ sessionId })",
+  durabilityId: "session identity is per Agent; use nano.spawn({ sessionId })",
   resume: "use nano.resume(checkpoint)",
 });
 const SHARED_BACKEND_KEYS = ["transport", "tools"];
@@ -33,19 +33,20 @@ const CODEX_KEYS = new Set([...SHARED_BACKEND_KEYS, "reasoningMode", "fastMode",
   "beforeCompaction", "codeEffectJournal"]);
 const CLAUDE_KEYS = new Set([...SHARED_BACKEND_KEYS, "maxTokens", "cache", "adaptiveThinking", "keepThinking",
   "fastMode", "parallelTools", "contextWindowTokens", "autoCompactWindowTokens", "subagents"]);
-// Root-only Codex settings never become part of an alternate-family child recipe.
+
 const CODEX_CHILD_KEYS = ["reasoningMode", "fastMode"];
 const CLAUDE_CHILD_EXCLUDED = new Set(["subagents"]);
-// Caller-owned stateful capabilities keep their identity.
+
 const CAPABILITY_KEYS = new Set(["codeEffectJournal", "beforeCompaction"]);
-const SPAWN_KEYS = new Set(["instructions", "harness", "model", "thinking"]);
+const SPAWN_KEYS = new Set(["instructions", "harness", "model", "thinking", "sessionId"]);
+const BACKEND_SPAWN_KEYS = new Set(["instructions", "model", "thinking", "sessionId"]);
 const RESUME_KEYS = new Set(["harness", "instructions"]);
 
-/**
- * @param {{ placement: string, createAgent(options: object): Promise<object>,
- *   loadCatalog(options: { module?: unknown }): Promise<readonly object[]> | readonly object[],
- *   requiresEvaluator?: () => boolean, connectCua?: () => Promise<object> }} platform
- */
+
+
+
+
+
 export function createNanocodexFactory(platform) {
   return async function create(options) {
     const initial = snapshotRuntime(options, platform);
@@ -91,6 +92,10 @@ function snapshotRuntime(options, platform) {
   if (options.codeEvaluator === undefined && platform.requiresEvaluator?.()) {
     throw new TypeError("Code Mode in this " + platform.placement + " placement requires an explicit codeEvaluator, such as createQuickJsEvaluator()");
   }
+  if (options.durability !== undefined && (!options.durability
+      || ["readRecord", "load", "acquire", "replace"].some(name => typeof options.durability[name] !== "function"))) {
+    throw new TypeError("durability must be a shared DurabilityStore");
+  }
   const filesystem = options.filesystem;
   if (filesystem !== undefined && (!filesystem || typeof filesystem.root !== "string"
     || ["list", "readFile", "writeFile", "remove", "mkdir"].some(name => typeof filesystem[name] !== "function"))) {
@@ -106,14 +111,15 @@ function snapshotRuntime(options, platform) {
     instructions: options.instructions,
     workspace,
     filesystem,
+    durability: options.durability,
     cua: snapshotCua(options.cua),
     codeEvaluator: options.codeEvaluator,
     module: options.module,
   });
 }
 
-// The embedding owns the upstream connection. Agent hosts release only their
-// own sessions; closing one agent must not dispose another backend's provider.
+
+
 function snapshotCua(cua) {
   if (cua === undefined) return undefined;
   if (cua === false) return Object.freeze([]);
@@ -146,7 +152,7 @@ function withCua(tools, cua) {
 }
 
 function backendEntry(value, family, isTransport) {
-  // Transport shorthand: backends.codex = Transport.openAi(...).
+
   if (isTransport(value)) return { transport: value };
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new TypeError("backends." + family + " must be a transport or { transport, ... }");
@@ -156,7 +162,7 @@ function backendEntry(value, family, isTransport) {
 
 function snapshotShared(entry, family, keys) {
   for (const key of Object.keys(entry)) {
-    if (key === "workspace" || key === "filesystem") throw new TypeError(key + " belongs on Nanocodex.create, shared by all harnesses");
+    if (key === "workspace" || key === "filesystem" || key === "durability") throw new TypeError(key + " belongs on Nanocodex.create, shared by all harnesses");
     if (!keys.has(key)) throw new TypeError("unsupported backends." + family + " option: " + key);
   }
   const extras = {};
@@ -192,11 +198,11 @@ function snapshotClaude(value) {
 }
 
 
-/**
- * Deep-copies caller-owned plain data, including inside shallow-frozen tool
- * definitions. Functions, class instances and empty frozen tokens (opaque
- * WeakMap-keyed capabilities) keep their identity.
- */
+
+
+
+
+
 function plain(value) {
   if (Array.isArray(value)) return Object.freeze(value.map(plain));
   if (!value || typeof value !== "object") return value;
@@ -210,7 +216,7 @@ function plain(value) {
 
 function snapshotTools(tools, family) {
   if (tools === undefined) return undefined;
-  // A factory materializes a fresh tool set for every Agent host.
+
   if (typeof tools === "function") return tools;
   if (tools && typeof tools === "object" && !Array.isArray(tools)
     && (typeof tools.close === "function" || typeof tools.attach === "function")) {
@@ -222,7 +228,7 @@ function snapshotTools(tools, family) {
   return plain(tools);
 }
 
-/** Declarative tools are copied; a factory is awaited and its closable result is rolled back on failure. */
+
 async function materializeTools(tools, context, created) {
   if (typeof tools !== "function") return Array.isArray(tools) ? [...tools] : tools === undefined ? undefined : { ...tools };
   const value = await tools(Object.freeze({ ...context }));
@@ -230,7 +236,7 @@ async function materializeTools(tools, context, created) {
   return value;
 }
 
-/** Closes factory-created tools; Tools.close() is idempotent when a claiming host already closed it. */
+
 async function release(created) {
   const results = await Promise.allSettled(created.map((tools) => Promise.resolve().then(() => tools.close())));
   return results.filter((result) => result.status === "rejected").map((result) => result.reason);
@@ -277,7 +283,7 @@ function checkThinking(entry, thinking) {
   }
 }
 
-/** A model belongs to exactly one family; uncataloged ids are Claude endpoint models only. */
+
 function modelEntry(config, catalog, model, harness) {
   if (typeof model !== "string" || !model.trim()) throw new TypeError("model must be a non-empty string");
   const entry = catalog.get(model);
@@ -293,11 +299,11 @@ function modelEntry(config, catalog, model, harness) {
     : "; use a cataloged model id or harness claude with an explicit endpoint"));
 }
 
-/**
- * Default family: explicit harness, else the explicit model's family, else
- * codex when configured, else the only backend. Default model: explicit, else
- * that family's catalog default. Thinking: explicit, else the model's default.
- */
+
+
+
+
+
 function resolveDefaults(config, catalog) {
   checkFamily(config.harness, "harness");
   let harness = config.harness;
@@ -318,7 +324,7 @@ function resolveDefaults(config, catalog) {
   return Object.freeze({ harness, model, thinking: config.thinking ?? entry?.defaultThinking });
 }
 
-/** Selection against the runtime defaults, matching native subagent spawn semantics. */
+
 function select(config, catalog, defaults, { harness, model, thinking }) {
   checkFamily(harness, "harness");
   let family, entry, resolved;
@@ -354,7 +360,7 @@ function toolMode(backend) {
   return "code-only";
 }
 
-/** One workspace is shared by every harness, root and child in this runtime. */
+
 async function prepareWorkspace(config, platform) {
   const needsFiles = Object.values(config.backends).some(backend => backend.tools === undefined);
   const resolved = await platform.prepareWorkspace?.({ workspace: config.workspace,
@@ -368,7 +374,7 @@ async function prepareWorkspace(config, platform) {
   return Object.freeze({ ...config, workspace, filesystem });
 }
 
-/** An explicit tool selection replaces the defaults, including an empty array. */
+
 function withFilesystemTools(tools, filesystem, family, cua) {
   if (tools === undefined) tools = family === "claude" ? claudeWorkspaceTools(filesystem)
     : Object.entries(workspaceTools(filesystem)).map(([name, tool]) => ({ name, ...tool }));
@@ -409,8 +415,16 @@ async function agentOptions(config, catalog, defaults, family, settings, created
   if (instructions !== undefined) shared.instructions = instructions;
   if (settings.resume !== undefined) {
     shared.resume = settings.resume;
-    // Without the checkpoint's own ID, a resume would start a new root continuing it.
+
     if (typeof settings.resume.session_id === "string") shared.sessionId = settings.resume.session_id;
+  }
+  if (settings.sessionId !== undefined) shared.sessionId = settings.sessionId;
+  if (config.durability !== undefined) {
+
+
+    shared.sessionId ??= createSessionId();
+    shared.durability = config.durability;
+    shared.durabilityId = shared.sessionId;
   }
   if (family === "codex") {
     const workspace = config.workspace;
@@ -455,7 +469,7 @@ function createRuntime(config, catalog, defaults, platform) {
 
   const owner = Object.freeze({ admit: (start) => admit(start) });
 
-  /** One admission: closed gate, then construction, then ownership; late admissions are shut down. */
+
   function admit(start) {
     if (closing) return Promise.reject(closedError());
     const admission = (async () => {
@@ -472,14 +486,14 @@ function createRuntime(config, catalog, defaults, platform) {
     return admission;
   }
 
-  /** Built inside the admission so tool factories never run after shutdown begins. */
+
   function construct(family, settings) {
     return admit(async () => {
       const created = [];
       try {
         return await platform.createAgent(await agentOptions(config, catalog, defaults, family, settings, created));
       } catch (error) {
-        // Awaited so shutdown never resolves while a failed admission is still closing its tools.
+
         const cleanup = await release(created);
         if (cleanup.length) throw new AggregateError([error, ...cleanup], "Nanocodex agent creation failed and its tools did not close");
         throw error;
@@ -488,7 +502,7 @@ function createRuntime(config, catalog, defaults, platform) {
   }
 
   function own(agent) {
-    // Forks and session siblings, through agent.session or Actions, are admitted by this owner.
+
     retainAgentForOwner(agent, owner);
     owned.add(agent);
     observeAgentRelease(agent, () => owned.delete(agent));
@@ -498,32 +512,51 @@ function createRuntime(config, catalog, defaults, platform) {
     let selection, settings;
     try {
       settings = checkKeys(options, SPAWN_KEYS, "nano.spawn");
+      if (settings.sessionId !== undefined && (typeof settings.sessionId !== "string" || !settings.sessionId.trim())) {
+        throw new TypeError("sessionId must be a non-empty string");
+      }
       selection = select(config, catalog, defaults, settings);
     } catch (error) { return Promise.reject(error); }
-    return construct(selection.harness, { ...selection, instructions: settings.instructions });
+    return construct(selection.harness, { ...selection, instructions: settings.instructions, sessionId: settings.sessionId });
+  }
+
+  function forBackend(backend) {
+    checkFamily(backend, "backend");
+    requireBackend(config, backend);
+    return Object.freeze({
+      spawn(options) {
+        let settings;
+        try { settings = checkKeys(options, BACKEND_SPAWN_KEYS, "backend.spawn"); }
+        catch (error) { return Promise.reject(error); }
+        return spawn({ ...settings, harness: backend });
+      },
+    });
   }
 
   function resume(checkpoint, options) {
-    let family, settings;
+    let family, settings, model;
     try {
       settings = checkKeys(options, RESUME_KEYS, "nano.resume");
+      model = typeof checkpoint?.model === "string" ? checkpoint.model : checkpoint?.model?.model;
+      const qualifiedFamily = typeof checkpoint?.model === "object" ? checkpoint.model?.backend : undefined;
       if (!checkpoint || typeof checkpoint !== "object" || Array.isArray(checkpoint)
-        || typeof checkpoint.format !== "string" || typeof checkpoint.model !== "string") {
+        || typeof checkpoint.format !== "string" || typeof model !== "string" || !model.trim()) {
         throw new TypeError("nano.resume requires a SessionCheckpoint");
       }
       checkFamily(settings.harness, "harness");
-      const cataloged = catalog.get(checkpoint.model)?.family;
+      checkFamily(qualifiedFamily, "checkpoint backend");
+      const cataloged = qualifiedFamily ?? catalog.get(model)?.family;
       if (cataloged !== undefined && settings.harness !== undefined && settings.harness !== cataloged) {
         throw new TypeError("this checkpoint belongs to the " + cataloged + " harness, not " + settings.harness);
       }
       family = cataloged ?? settings.harness;
       if (family === undefined) {
-        throw new TypeError("checkpoint model " + checkpoint.model + " is not cataloged; pass { harness } to resume it");
+        throw new TypeError("checkpoint model " + model + " is not cataloged; pass { harness } to resume it");
       }
       requireBackend(config, family);
     } catch (error) { return Promise.reject(error); }
-    // The checkpoint keeps its own session identity, model and thinking.
-    return construct(family, { model: family === "claude" ? checkpoint.model : undefined,
+
+    return construct(family, { model: family === "claude" ? model : undefined,
       instructions: settings.instructions, resume: checkpoint });
   }
 
@@ -542,6 +575,7 @@ function createRuntime(config, catalog, defaults, platform) {
     defaults,
     backends: Object.freeze(Object.keys(config.backends)),
     spawn,
+    forBackend,
     resume,
     shutdown,
   });

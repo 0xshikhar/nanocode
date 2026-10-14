@@ -32,14 +32,14 @@ export type SshCommandOptions = Readonly<{
   ): Promise<SshCommandResult>;
 }>;
 
-/** Creates a non-interactive SSH command over a host-owned byte stream. */
+
 export function createSshCommand(options: SshCommandOptions): Readonly<{
   name: "ssh";
   trusted?: boolean;
   execute(args: string[], context: unknown): Promise<SshCommandResult>;
 }>;
 
-/** Adapts a WHATWG byte-stream socket, including Cloudflare TCP sockets, to SSH. */
+
 export function createWebStreamSshStream(
   socket: Readonly<{
     readable: ReadableStream<Uint8Array>;
@@ -50,7 +50,7 @@ export function createWebStreamSshStream(
   signal?: AbortSignal,
 ): SshStream;
 
-/** Host-only credential generation; keep privateKey in the credential vault. */
+
 export function createSshKeyPair(): Promise<Readonly<{ privateKey: string; publicKey: string }>>;
-/** Derives an OpenSSH authorized_keys line from a PEM private key. */
+
 export function sshPublicKey(privateKey: string): Promise<string>;

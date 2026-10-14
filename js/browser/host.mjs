@@ -37,8 +37,8 @@ export function createBrowserHost(options = {}) {
   const socketObservations = createSocketObservations(options.onSocketEvent);
   const preservation = createBeforeCompaction(options.beforeCompaction);
   const toolMode = options.toolMode ?? "code-only";
-  // Code Mode is the default; direct mode is an explicit opt-in that exposes
-  // host tools to the provider without dynamic code evaluation.
+
+
   if (toolMode !== "code-only" && toolMode !== "direct") {
     throw new TypeError("toolMode must be code-only or direct");
   }
@@ -87,7 +87,7 @@ export function createBrowserHost(options = {}) {
   const connections = new Map();
   const openingAttempts = new Set();
   const connectingConnections = new Set();
-  // Direct mode never evaluates code, so it neither starts nor requires a Worker.
+
   const codeEvaluator = options.codeEvaluator
     ?? (toolMode === "direct"
       ? () => Promise.reject(new Error("direct tool mode does not evaluate code"))
@@ -360,8 +360,8 @@ export function createBrowserHost(options = {}) {
       error: "WebSocket is no longer open",
     });
     if (closed()) return closedResult();
-    // The runtime sends one request at a time. Do not retain an unbounded queue
-    // of request bodies while the underlying socket is under pressure.
+
+
     if (connection.sending) {
       return JSON.stringify({ ok: false, reconnectable: false,
         error: "concurrent WebSocket sends are unsupported" });
@@ -386,8 +386,8 @@ export function createBrowserHost(options = {}) {
       while (connection.socket.bufferedAmount + frameBytes > maxBufferedSendBytes) {
         if (closed()) return closedResult();
         if (Date.now() >= deadline) {
-          // Nothing was sent. The transport may reconnect, but this invocation
-          // must never send later after reporting a retryable failure.
+
+
           return JSON.stringify({ ok: false, reconnectable: true,
             error: `WebSocket send buffer did not drain within ${SEND_BUFFER_WAIT_MS} ms (frame ${frameBytes} bytes, buffered ${connection.socket.bufferedAmount} bytes, limit ${maxBufferedSendBytes} bytes)` });
         }
@@ -413,7 +413,7 @@ export function createBrowserHost(options = {}) {
         error: error instanceof Error ? error.message : String(error),
       });
     } finally {
-      // A send that did not reach socket.send must not leave a waiting timer.
+
       if (!sent) connection.observation?.sendFailed();
       connection.sending = false;
     }
@@ -466,7 +466,7 @@ export function createBrowserHost(options = {}) {
     const enqueuedAt = timing && dataMessage && !connection.waiter ? performance.now() : undefined;
     if (timing && dataMessage) {
       timing.metrics.message_count += 1;
-      // Only the exact metadata event can produce diagnostics; deltas stay opaque.
+
       connection.observation?.message(message.kind === "text" ? message.text : undefined);
       if (message.kind === "text" && (timing.provider.size < 32 || connection.observation)) {
         const metadata = providerSocketTiming(message.text);
@@ -506,7 +506,7 @@ export function createBrowserHost(options = {}) {
     connection.queuedBytes += bytes;
   }
 
-  // No counters, timestamps, metadata parsing or observations without the internal hook.
+
   function socketTiming() {
     return onSocketTiming === undefined && socketObservations === undefined ? undefined : {
       metrics: {
@@ -523,8 +523,8 @@ export function createBrowserHost(options = {}) {
   function finishSocketTiming(connection) {
     const timing = connection.timing;
     if (!timing) return;
-    // Finalize owned consumption, not the remote close event: buffered frames may
-    // still be drained after that event. Clear first for reentrant close/dispose.
+
+
     connection.timing = undefined;
     if (onSocketTiming === undefined) return;
     const metrics = timing.metrics;
@@ -534,9 +534,9 @@ export function createBrowserHost(options = {}) {
         discarded_message_count: metrics.message_count - metrics.delivered_message_count,
         provider_timings: [...timing.provider.values()],
       });
-      // Diagnostics must never fail transport cleanup, including an async hook.
+
       if (result?.then) void Promise.resolve(result).catch(() => {});
-    } catch { /* Passive observations cannot fail transport cleanup. */ }
+    } catch {   }
   }
 
   function dispose() {
@@ -730,8 +730,8 @@ function normalizeWebSocketConnection(opened) {
   return { socket: opened };
 }
 
-// Provider-reported fields are nested spans, not additive measurements. Bound the
-// diagnostic parser and retain only three finite durations plus a response ID.
+
+
 function providerSocketTiming(text) {
   if (text.length > 16_384 || !text.includes('"responsesapi.websocket_timing"')) return;
   let event;

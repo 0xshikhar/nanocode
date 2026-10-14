@@ -3,7 +3,7 @@ import { utf8ByteLength } from "../runtime/utf8.mjs";
 import { hostedCatalog } from "./hostedCatalog.mjs";
 import { normalizeHostedMachines } from "./hostedMachine.mjs";
 
-// heartbeatMs is the deprecated compatibility name for the control ping interval.
+
 const DEFAULT_HEARTBEAT_MS = 30_000;
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 10_000;
 const DEFAULT_DRAIN_TIMEOUT_MS = 10_000;
@@ -25,7 +25,7 @@ class AttachmentTransportError extends Error {
   }
 }
 
-/** Creates the executor side of the socket-owned reverse tool protocol. */
+
 export function createAttachment(owner, target, options = {}) {
   const router = owner?.[toolRouterRuntime];
   if (!router || typeof router.execute !== "function") {
@@ -330,9 +330,9 @@ function createClient(endpoint, transport, options, admission, machines, attachm
     const controller = new AbortController();
     const call = { controller, timing, identity, frame };
     state.calls.set(callId, call);
-    // Dispatch calls concurrently through the retained ToolRouter snapshot,
-    // checking cancellation before dispatch. A connection-local count must not
-    // reject valid calls or disconnect a socket with unacknowledged results.
+
+
+
     if (frame.deadline_at <= Date.now()) {
       retainAndSend(callId, { status: "unavailable", message: "tool attachment call deadline elapsed before dispatch" }, socket, timing);
       return;
@@ -389,8 +389,8 @@ function createClient(endpoint, transport, options, admission, machines, attachm
     if (!outcome) {
       try {
         const output = wireOutput(value);
-        // Serialize the output once: the budget applies to exactly these UTF-8
-        // bytes, and the receipt embeds the same text.
+
+
         const encoded = JSON.stringify(output);
         if (exceedsUtf8Budget(encoded, frame.output_byte_budget)) {
           outcome = { status: "ambiguous", message: "tool attachment output exceeded the admitted byte budget after dispatch" };
@@ -433,15 +433,15 @@ function createClient(endpoint, transport, options, admission, machines, attachm
       execution_gate_ms: clock.taskStarted === undefined ? 0 : execution - task,
       execution_ms: clock.executionStarted === undefined ? 0 : finished - execution,
       result_encode_ms: clock.executionFinished === undefined ? 0 : encodeStarted - finished,
-      result_queue_ms: 0, // Node sends synchronously; there is no result channel.
+      result_queue_ms: 0,
       host_elapsed_ms: encodeStarted - clock.received,
     };
     try {
-      // Encode the business receipt once. The small metadata append and socket
-      // handoff remain in the broker's combined transit/return residual.
-      // JSON.stringify of a plain object concatenates its members' encodings in
-      // insertion order, so splicing the already-encoded output is exactly
-      // JSON.stringify(result) without serializing the output again.
+
+
+
+
+
       const encoded = outputJson === undefined
         ? JSON.stringify(result)
         : `{"type":"result","call_id":${JSON.stringify(callId)},"outcome":{"status":"completed","output":${outputJson}}}`;
@@ -472,8 +472,8 @@ function createClient(endpoint, transport, options, admission, machines, attachm
   function startHeartbeat(socket) {
     clearInterval(state.heartbeat);
     state.pendingNonce = undefined;
-    // Browser-standard WebSockets cannot send or observe control frames. Their
-    // close/error events and admitted call deadlines provide failure detection.
+
+
     if (typeof socket.ping !== "function" || typeof socket.on !== "function") return;
     socket.on("pong", bytes => {
       if (state.socket === socket && equalBytes(bytes, state.pendingNonce)) state.pendingNonce = undefined;
@@ -550,7 +550,7 @@ function createClient(endpoint, transport, options, admission, machines, attachm
 
   function diagnostic(socket, callId, stage, clock) {
     if (state.socket !== socket) return;
-    // Passive telemetry must never alter business outcomes or retry execution.
+
     try {
       const elapsed = performance.now() - clock.received;
       if (!Number.isFinite(elapsed)) return;
@@ -590,9 +590,9 @@ function createClient(endpoint, transport, options, admission, machines, attachm
   }
 }
 
-// Exact test of utf8ByteLength(text) > budget. Each UTF-16 code unit encodes
-// to one to three UTF-8 bytes, so only lengths between those bounds need the
-// exact count.
+
+
+
 function exceedsUtf8Budget(text, budget) {
   if (text.length > budget) return true;
   if (text.length * 3 <= budget) return false;
@@ -676,8 +676,8 @@ function bindSocket(socket, handlers) {
 function send(socket, frame) {
   try {
     const encoded = JSON.stringify(frame);
-    // Results already obey the admitted output byte budget. Let the transport
-    // own its frame limits and send queue; buffered bytes are not a failed call.
+
+
     socket.send(encoded);
   }
   catch (error) { throw new AttachmentTransportError(error); }

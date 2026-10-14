@@ -1,4 +1,4 @@
-/** Multiplex an already authenticated Responses WebSocket. The caller owns its lifetime. */
+
 export function multiplex(socket) {
   if (!socket || typeof socket.addEventListener !== "function" || typeof socket.send !== "function") throw new TypeError("multiplex requires a WebSocket");
   const lanes = new Map();
@@ -50,7 +50,7 @@ export function multiplex(socket) {
           if (body.type !== "response.create") throw new TypeError("multiplexed lanes accept response.create only");
           if (body.stream_id !== undefined && body.stream_id !== id) throw new TypeError("request belongs to a different lane");
           delete body.stream; delete body.background;
-          // Lineage is caller-owned; never substitute the most recent response on another lane.
+
           socket.send(JSON.stringify({ ...body, stream_id: id }));
         } },
         close: { value: (code = 1000, reason = "lane released") => {

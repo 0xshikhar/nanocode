@@ -14,7 +14,7 @@ export type MediaResult = Readonly<{
 }>;
 export type MediaCommandOptions = Readonly<{
   filesystem: () => Workspace;
-  /** Execute in an isolated, ephemeral memory filesystem without host files or network. */
+
   execute: (request: MediaRequest, signal?: AbortSignal) => Promise<MediaResult>;
 }>;
 
@@ -63,7 +63,7 @@ const probeScalars: Record<string, RegExp> = {
   "-print_format": /^(json|default|compact|csv|flat|ini|xml)$/,
 };
 
-/** Local-file FFmpeg commands; the caller owns the isolated WASM executor. */
+
 export function createMediaCommands(options: MediaCommandOptions) {
   return (["ffmpeg", "ffprobe"] as const).map((command) => ({
     name: command,
@@ -131,7 +131,7 @@ function validateArguments(args: string[]) {
 
 function parse(command: "ffmpeg" | "ffprobe", args: string[]) {
   if (args.length === 1 && informational.has(args[0]!)) return { args: [...args], overwrite: false };
-  // Durable overwrite policy is checked separately; ephemeral output may be replaced.
+
   const rewritten: string[] = command === "ffmpeg" ? ["-nostdin", "-y"] : [];
   let input: string | undefined;
   let output: string | undefined;
@@ -178,7 +178,7 @@ function parse(command: "ffmpeg" | "ffprobe", args: string[]) {
   return { args: rewritten, input, output, inputPath, outputPath, overwrite };
 }
 
-// Only filters with scalar parameters and no secondary file, script, or URL inputs.
+
 function validateFilter(value: string, option: string) {
   const video: Record<string, RegExp> = {
     fps: /^\d+(?:\.\d+)?(?:\/\d+)?$/,
@@ -228,7 +228,7 @@ async function stat(workspace: Workspace, path: string): Promise<WorkspaceEntry 
   const separator = path.lastIndexOf("/");
   const parent = path.slice(0, separator);
   const name = path.slice(separator + 1);
-  // Workspace storage rejects symbolic links; never bypass it with a host filesystem.
+
   return (await workspace.list(parent)).find((entry) => entry.path === path || entry.path === name);
 }
 

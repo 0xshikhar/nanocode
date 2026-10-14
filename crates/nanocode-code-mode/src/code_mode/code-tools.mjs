@@ -1,9 +1,6 @@
-// Nanocodex extension to Codex's known-tool object: missing names reject locally.
-// Keep this factory self-contained: QuickJS and Rust embed its source verbatim.
-// Object methods avoid bundler-injected naming helpers when keepNames is enabled.
 export function createCodeTools(names, invoke) {
   const helpers = {
-    // Observe discarded calls without changing the returned promise's outcome.
+
     observe(promise) {
       promise.catch(() => {});
       return promise;
@@ -31,8 +28,7 @@ export function createCodeTools(names, invoke) {
   return new Proxy(target, {
     get(target, name) {
       if (Object.prototype.hasOwnProperty.call(target, name)) return target[name];
-      // An absent then must not make the facade a thenable. Symbols are ordinary
-      // absent properties, including inspection and iteration protocols.
+
       if (typeof name !== "string" || name === "then") return undefined;
       return {
         missing() {

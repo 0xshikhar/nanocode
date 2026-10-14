@@ -54,9 +54,6 @@ pub(crate) struct ContextSource {
 impl ContextSource {
     pub(crate) fn resolve_workspace(&self, requested: Option<&str>) -> Result<String> {
         if self.execution_environment.is_some() {
-            // A configured execution environment means model-visible tools run
-            // somewhere other than this process. Preserve its workspace name;
-            // probing it through the embedding host would cross that boundary.
             return Ok(requested.unwrap_or(".").to_owned());
         }
         let requested = PathBuf::from(requested.unwrap_or("."));

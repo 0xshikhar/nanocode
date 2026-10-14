@@ -1,8 +1,3 @@
-// Derived from clabby/tact@1d9ccaefd1d8613dab020812af04a91cd9b4c52c (Apache-2.0).
-// Modified for Nanocodex's reusable native/WASM extension runtime.
-
-//! Per-agent actor that exclusively owns a child runtime and its active turn.
-
 use super::{
     capacity::{Capacity, TurnCapacity},
     model::{AgentId, AgentMessage, MessageDisposition, MessageId, MessagePriority},
@@ -270,8 +265,7 @@ impl Harness {
             biased;
             command = self.commands.recv() => HarnessEvent::Command(command),
             urgent = self.urgent.recv() => HarnessEvent::Urgent(urgent),
-            // Completed turns must release their capacity and drain queued work
-            // even when deferred admission requests keep arriving.
+
             result = &mut active.result => HarnessEvent::TurnFinished(result),
             deferred = self.deferred.recv() => HarnessEvent::Deferred(deferred),
         }
@@ -552,9 +546,7 @@ impl Harness {
                 self.id
             )));
         };
-        // A first turn interrupted before a committed model boundary still
-        // needs its assignment after idle eviction. Include it in the next
-        // admitted prompt when rehydrating from memory.
+
         let prompt = match &self.rehydrated_assignment {
             Some(assignment) => format!("{assignment}\n\n{prompt}"),
             None => prompt,
@@ -613,8 +605,7 @@ impl Harness {
     async fn turn_finished(&mut self, result: Result<AgentResult<TurnResult>, TaskError>) {
         self.active = None;
         self.publish_turn_result(result).await;
-        // Do not depend on the capacity watch to notice our own turn ending.
-        // If another agent took the released slot, the watch still retries later.
+
         self.start_pending().await;
     }
 

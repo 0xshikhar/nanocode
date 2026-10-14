@@ -30,9 +30,9 @@ function createDatasetTool(options = {}) {
   const randomId = options.randomId ?? (() => crypto.randomUUID());
   const loadParquet = options.loadParquet ?? (() => import("hyparquet"));
   const loadCompressors = options.loadCompressors ?? (() => import("hyparquet-compressors"));
-  const sessions = /* @__PURE__ */ new Map();
+  const sessions =   new Map();
   const rangeCache = new RangeCache(RANGE_CACHE_BYTES, MAX_CACHED_RANGE_BYTES);
-  const pendingOpens = /* @__PURE__ */ new Map();
+  const pendingOpens =   new Map();
   return {
     description: DATASET_DESCRIPTION,
     parameters: datasetParameters,
@@ -329,7 +329,7 @@ async function queryJsonl(dataset, query, budget, runtime) {
   return scanJsonl(dataset, query, budget, runtime);
 }
 function needsCustomCompressors(metadata, query) {
-  const selected = query.columns ? /* @__PURE__ */ new Set([...query.columns, ...query.filters.map((filter) => filter.path[0])]) : void 0;
+  const selected = query.columns ?   new Set([...query.columns, ...query.filters.map((filter) => filter.path[0])]) : void 0;
   return metadata.row_groups.some((group) => group.columns.some((column) => {
     const meta = column.meta_data;
     const name = meta?.path_in_schema[0];
@@ -610,7 +610,7 @@ function parseQuery(args, dataset) {
     const known = new Set(dataset.schema.map((column) => column.name));
     const unknown = filters.map((filter) => filter.column.split(".")[0]).filter((column) => !known.has(column));
     if (unknown.length) throw new Error(`dataset filter columns not found: ${unique(unknown).join(", ")}`);
-    filters = coerceParquetFilters(filters, dataset.parquet?.filterKinds ?? /* @__PURE__ */ new Map());
+    filters = coerceParquetFilters(filters, dataset.parquet?.filterKinds ??   new Map());
   }
   const limit = optionalIntegerAtLeast(args.limit, 1, DEFAULT_QUERY_LIMIT, "dataset.limit");
   const maxBytes = optionalBoundedInteger(
@@ -743,7 +743,7 @@ function parquetColumns(schema) {
   }));
 }
 function parquetFilterKinds(schema) {
-  const kinds = /* @__PURE__ */ new Map();
+  const kinds =   new Map();
   const visit = (node, prefix) => {
     for (const child of node.children) {
       const path = [...prefix, child.element.name];
@@ -765,12 +765,12 @@ function parquetFilterKinds(schema) {
   return kinds;
 }
 function inferJsonlSchema(rows) {
-  const types = /* @__PURE__ */ new Map();
+  const types =   new Map();
   for (const row of rows) {
     for (const [key, value] of Object.entries(row)) {
       let seen = types.get(key);
       if (!seen) {
-        seen = /* @__PURE__ */ new Set();
+        seen =   new Set();
         types.set(key, seen);
       }
       seen.add(valueType(value));
@@ -864,7 +864,7 @@ function parseContentRange(value) {
   if (start == null || end == null || end < start || total != null && end >= total) return null;
   return { start, end, total };
 }
-function normalizeValue(value, seen = /* @__PURE__ */ new WeakSet()) {
+function normalizeValue(value, seen =   new WeakSet()) {
   if (value === void 0) return null;
   if (typeof value === "bigint") {
     const number = Number(value);
@@ -906,7 +906,7 @@ function requireDataset(sessions, sessionId, value) {
 function sessionDatasets(sessions, sessionId) {
   let datasets = sessions.get(sessionId);
   if (!datasets) {
-    datasets = /* @__PURE__ */ new Map();
+    datasets =   new Map();
     sessions.set(sessionId, datasets);
   }
   return datasets;
@@ -1080,7 +1080,7 @@ class QueryRows {
   }
 }
 class RangeCache {
-  entries = /* @__PURE__ */ new Map();
+  entries =   new Map();
   maxBytes;
   maxEntryBytes;
   bytes = 0;
@@ -1128,7 +1128,7 @@ class RangeCache {
   }
 }
 class QueryResultCache {
-  entries = /* @__PURE__ */ new Map();
+  entries =   new Map();
   maxBytes;
   maxEntries;
   bytes = 0;

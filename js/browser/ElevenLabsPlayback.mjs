@@ -1,4 +1,4 @@
-/** Plays account-proxied PCM without exposing provider credentials to the browser. */
+
 export class ElevenLabsPlayback {
   #synthesize;
   #onError;
@@ -30,7 +30,7 @@ export class ElevenLabsPlayback {
     if (this.#caption !== undefined && entry.id < this.#caption) return;
     if (entry.id !== this.#caption) { this.#caption = entry.id; this.#offset = 0; }
     const remaining = entry.text.slice(this.#offset);
-    // Buffer partial words; emit complete sentences before the turn finishes.
+
     const boundary = entry.is_partial ? [...remaining.matchAll(/[.!?\n](?:\s|$)/g)].at(-1) : undefined;
     const length = entry.is_partial ? (boundary ? boundary.index + boundary[0].length : 0) : remaining.length;
     const text = remaining.slice(0, length).trim();
@@ -66,7 +66,7 @@ export class ElevenLabsPlayback {
           const size = bytes.length - bytes.length % 2;
           carry = size < bytes.length ? bytes[size] : undefined;
           if (!size) continue;
-          // Keep decoded/scheduled audio bounded even when synthesis outruns playback.
+
           for (let offset = 0; offset < size && !signal.aborted; offset += 9600) {
             while (!signal.aborted && (this.#nextTime - this.#context.currentTime > 2 || this.#sources.size >= 128)) {
               await new Promise((resolve) => {
@@ -107,7 +107,7 @@ export class ElevenLabsPlayback {
     for (const source of this.#sources) { try { source.stop(); } catch {} source.disconnect(); }
     this.#sources.clear();
     this.#nextTime = 0;
-    // Caption IDs are monotonic: every late delta/final for this epoch stays silent.
+
   }
 
   close() {

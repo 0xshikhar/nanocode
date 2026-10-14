@@ -1,11 +1,11 @@
-import type { DefaultAgent, Thinking } from "../types.mjs";
+import type { DefaultAgent, BackendName, BackendSelection, ModelSelection, Thinking } from "../types.mjs";
 
-// Adapter-specific extend() signatures do not change subagent ownership.
+
 type SubagentOwner = Omit<DefaultAgent, "extend"> | import("./claude.mjs").Agent;
 
 declare const subagentToolBrand: unique symbol;
 
-/** Opaque selector for the Rust-owned subagent tool set. */
+
 export type Tool = Readonly<{
   [subagentToolBrand]: true;
 }>;
@@ -13,7 +13,7 @@ export type Tool = Readonly<{
 export type Subagents = readonly [Tool];
 
 export interface Options {
-  /** Optional finite concurrency limit. Omit for unlimited active turns. */
+
   maxConcurrency?: number | undefined;
 }
 
@@ -31,17 +31,14 @@ export type AgentSummary = Readonly<{
   last_output?: unknown;
 }>;
 export type JsonSchema = boolean | Readonly<Record<string, unknown>>;
-type CodexModel = "sol" | "luna" | "astra" | "glm-5.3" | "kimi" | "mimo";
-type ClaudeModel = "opus" | "sonnet" | "haiku" | "fable" | "claude-opus-5-5" | "claude-sonnet-5-5" | "claude-haiku-5-5" | "claude-fable-5-1" | "claude-opus-4-6" | "claude-sonnet-4-6" | "claude-haiku-4-5";
-export type SpawnOptions = Readonly<{
+export type SpawnOptions<B extends BackendName = BackendName> = Readonly<{
   role: string;
   task: string;
   thinking?: Thinking | undefined;
   outputSchema: JsonSchema;
-} & ({ harness?: undefined; model?: CodexModel | ClaudeModel | undefined }
-  | { harness: "codex"; model?: CodexModel | undefined }
-  | { harness: "claude"; model?: ClaudeModel | undefined })>;
-/** Batch children inherit their parent's family, model and thinking. */
+}> & (BackendSelection<B>
+  | Readonly<{ harness?: undefined; model?: ModelSelection<B> | undefined }>);
+
 export type BatchSpawnOptions = Readonly<{
   role: string;
   task: string;
@@ -80,7 +77,7 @@ export type SendOptions = Readonly<{
   message: string;
   priority?: MessagePriority | undefined;
   purpose?: MessagePurpose | undefined;
-  /** Continue the same participant pair in either direction. Required for purpose "reply", which must reverse the referenced message. */
+
   inReplyTo?: number | undefined;
 }>;
 export type MessageReceipt = Readonly<{
@@ -91,22 +88,22 @@ export type MessageReceipt = Readonly<{
   disposition: "started" | "queued" | "steered";
 }>;
 
-/** Returns a spreadable Rust-backed tool extension for an Agent's tools array. */
+
 export function create(options?: Options): Subagents;
-/** Directly invokes the canonical Rust spawn_agent handler. */
+
 export function spawn(agent: SubagentOwner, options: SpawnOptions): Promise<SpawnReport>;
-/** Atomically reserves and starts an ordered batch of canonical Rust subagents. */
+
 export function spawnMany(
   agent: SubagentOwner,
   options: readonly BatchSpawnOptions[],
 ): Promise<readonly SpawnReport[]>;
-/** Directly invokes the canonical Rust wait_agent handler. */
+
 export function wait(agent: SubagentOwner, options: WaitOptions): Promise<WaitReport>;
-/** Directly invokes the canonical Rust list_agents handler. */
+
 export function list(agent: SubagentOwner, options?: DirectoryOptions): Promise<DirectoryReport>;
-/** Directly invokes the canonical Rust send_agent_message handler. */
+
 export function send(agent: SubagentOwner, options: SendOptions): Promise<MessageReceipt>;
-/** Directly invokes the canonical Rust interrupt_agent handler. */
+
 export function interrupt(agent: SubagentOwner, agentId: AgentId): Promise<LifecycleReport>;
-/** Directly invokes the canonical Rust close_agent handler. */
+
 export function close(agent: SubagentOwner, agentId: AgentId): Promise<LifecycleReport>;

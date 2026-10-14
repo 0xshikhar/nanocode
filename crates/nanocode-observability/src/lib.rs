@@ -1,5 +1,4 @@
-//! Tracing formatting and OpenTelemetry setup for Nanocodex applications.
-#![deny(missing_docs, rustdoc::broken_intra_doc_links)]
+#![deny(rustdoc::broken_intra_doc_links)]
 
 extern crate self as nanocode_observability;
 
@@ -29,29 +28,24 @@ pub use cli::ObservabilityOutputArgs;
 const DEPLOYMENT_ENVIRONMENT_NAME: &str = "deployment.environment.name";
 const LOCAL_LOG_BUFFERED_LINES_LIMIT: usize = 4_096;
 
-/// Human-readable or structured local tracing output.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum LogFormat {
-    /// Multiline human-readable records.
     Pretty,
-    /// Dense human-readable records.
+
     #[default]
     Compact,
-    /// Structured JSON records.
+
     Json,
 }
 
-/// Destination for the local formatting layer.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub enum LogOutput {
-    /// Write local records to standard error.
     #[default]
     Stderr,
-    /// Append local records to a file, creating its parent directories.
+
     File(PathBuf),
 }
 
-/// Builder for local formatting and optional OTLP/HTTP trace export.
 #[derive(Clone, Debug)]
 pub struct ObservabilityBuilder {
     filter: String,
@@ -64,34 +58,30 @@ pub struct ObservabilityBuilder {
     otlp_endpoint: Option<String>,
 }
 
-/// Keeps asynchronous formatting and OTLP providers alive and flushes them on drop.
 pub struct ObservabilityGuard {
     tracer_provider: Option<SdkTracerProvider>,
     _writer: WorkerGuard,
 }
 
-/// Failure to configure, install, or flush observability.
 #[derive(Debug, thiserror::Error)]
 pub enum ObservabilityError {
-    /// A local or OpenTelemetry filter is invalid.
     #[error("invalid tracing filter: {0}")]
     Filter(#[from] tracing_subscriber::filter::ParseError),
-    /// The configured local output could not be opened.
+
     #[error("failed to open tracing output: {0}")]
     Output(#[from] io::Error),
-    /// The OTLP exporter could not be constructed.
+
     #[error("failed to configure OTLP exporter: {0}")]
     Otlp(#[from] opentelemetry_otlp::ExporterBuildError),
-    /// The OpenTelemetry SDK could not flush or shut down.
+
     #[error("failed to flush or shut down the OpenTelemetry exporter: {0}")]
     OTelSdk(#[from] opentelemetry_sdk::error::OTelSdkError),
-    /// Another process-global tracing subscriber is already installed.
+
     #[error("a global tracing subscriber is already installed")]
     Subscriber,
 }
 
 impl ObservabilityBuilder {
-    /// Starts a builder with the service identity attached to exported spans.
     #[must_use]
     pub fn new(service_name: impl Into<String>, service_version: impl Into<String>) -> Self {
         let filter = "warn,nanocode=info,nanocode_backend_codex=info,nanocode_backend_claude=info,nanocode_agent=info,nanocode_code_mode=info".to_owned();
@@ -107,45 +97,36 @@ impl ObservabilityBuilder {
         }
     }
 
-    /// Sets the filter applied to local formatted records.
     #[must_use]
     pub fn filter(mut self, filter: impl Into<String>) -> Self {
         self.filter = filter.into();
         self
     }
 
-    /// Sets the independent filter applied only to exported OpenTelemetry spans.
     #[must_use]
     pub fn otel_filter(mut self, filter: impl Into<String>) -> Self {
         self.otel_filter = filter.into();
         self
     }
 
-    /// Selects the local record format.
     #[must_use]
     pub const fn format(mut self, format: LogFormat) -> Self {
         self.format = format;
         self
     }
 
-    /// Selects the local record destination.
     #[must_use]
     pub fn output(mut self, output: LogOutput) -> Self {
         self.output = output;
         self
     }
 
-    /// Sets the deployment environment attached to exported spans.
     #[must_use]
     pub fn environment(mut self, environment: impl Into<String>) -> Self {
         self.environment = Some(environment.into());
         self
     }
 
-    /// Sets the OTLP/HTTP collector base endpoint.
-    ///
-    /// The standard `/v1/traces` signal path is appended unless it is already
-    /// present, matching `OTEL_EXPORTER_OTLP_ENDPOINT` semantics.
     #[must_use]
     pub fn otlp_endpoint(mut self, endpoint: impl Into<String>) -> Self {
         let endpoint = endpoint.into();
@@ -153,12 +134,6 @@ impl ObservabilityBuilder {
         self
     }
 
-    /// Installs the process-global subscriber.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for an invalid filter, unusable output file, invalid
-    /// exporter configuration, or an already-installed global subscriber.
     pub fn install(self) -> Result<ObservabilityGuard, ObservabilityError> {
         if rustls::crypto::CryptoProvider::get_default().is_none() {
             drop(rustls::crypto::ring::default_provider().install_default());
@@ -244,9 +219,6 @@ impl ObservabilityBuilder {
             ));
         }
 
-        // The async processor's synchronous flush waits for work scheduled on
-        // Tokio. Keep the SDK's dedicated-thread processor when no runtime is
-        // active or when a current-thread runtime could deadlock that flush.
         let exporter = SpanExporter::builder()
             .with_http()
             .with_endpoint(endpoint)
@@ -296,11 +268,6 @@ fn trace_endpoint(endpoint: &str) -> String {
 }
 
 impl ObservabilityGuard {
-    /// Flushes pending spans and shuts down the exporter. Later calls are no-ops.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the exporter cannot flush or shut down cleanly.
     pub fn shutdown(&mut self) -> Result<(), ObservabilityError> {
         if let Some(provider) = self.tracer_provider.take() {
             provider.force_flush()?;

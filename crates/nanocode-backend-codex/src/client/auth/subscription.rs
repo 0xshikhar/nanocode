@@ -21,13 +21,12 @@ const REFRESH_EARLY_MILLIS: i64 = 5 * 60 * 1_000;
 const MAX_RESPONSE_BYTES: usize = 16 * 1_024;
 
 #[cfg(not(target_family = "wasm"))]
-/// Boxed native future returned by a hosted ChatGPT subscription capability.
+
 pub type SubscriptionFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 #[cfg(target_family = "wasm")]
-/// Boxed browser future returned by a hosted ChatGPT subscription capability.
+
 pub type SubscriptionFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
-/// Host failure while loading credentials or making an OAuth request.
 #[derive(Clone, Debug, thiserror::Error)]
 #[error("{detail}")]
 pub struct SubscriptionHostError {
@@ -35,7 +34,6 @@ pub struct SubscriptionHostError {
 }
 
 impl SubscriptionHostError {
-    /// Creates a host failure without retaining credential contents.
     #[must_use]
     pub fn new(detail: impl Into<Arc<str>>) -> Self {
         Self {
@@ -44,25 +42,20 @@ impl SubscriptionHostError {
     }
 }
 
-/// One opaque subscription value loaded from host-owned durable storage.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SubscriptionStoreValue {
-    /// Monotonic storage revision used for compare-and-swap updates.
     pub revision: u64,
-    /// Rust-owned serialized state. Hosts must treat this as secret.
+
     pub payload: Option<String>,
 }
 
-/// Result of atomically replacing one subscription value.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SubscriptionCommit {
-    /// The value was stored at this new revision.
     Committed(u64),
-    /// Another owner changed the value first.
+
     Conflict(u64),
 }
 
-/// Bounded outbound request required by the Rust subscription state machine.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SubscriptionHttpRequest {
     method: &'static str,
@@ -73,58 +66,45 @@ pub struct SubscriptionHttpRequest {
 }
 
 impl SubscriptionHttpRequest {
-    /// HTTP method selected by the state machine.
     #[must_use]
     pub const fn method(&self) -> &'static str {
         self.method
     }
 
-    /// Complete allowlisted OAuth endpoint.
     #[must_use]
     pub fn url(&self) -> &str {
         &self.url
     }
 
-    /// Request content type.
     #[must_use]
     pub const fn content_type(&self) -> &'static str {
         self.content_type
     }
 
-    /// Encoded request body. Hosts must not log it.
     #[must_use]
     pub fn body(&self) -> &str {
         &self.body
     }
 
-    /// Maximum response bytes the host may return.
     #[must_use]
     pub const fn max_response_bytes(&self) -> usize {
         self.max_response_bytes
     }
 }
 
-/// Complete bounded response returned by a hosted HTTP capability.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SubscriptionHttpResponse {
-    /// HTTP response status.
     pub status: u16,
-    /// Response body, bounded according to [`SubscriptionHttpRequest::max_response_bytes`].
+
     pub body: String,
 }
 
-/// Minimal host capabilities needed by managed ChatGPT subscription authentication.
-///
-/// The host owns placement, encryption at rest, and outbound networking. Rust owns OAuth,
-/// device login, token decoding and rotation, account continuity, and unauthorized recovery.
 pub trait ChatGptSubscriptionHost: Send + Sync + 'static {
-    /// Loads one opaque state value. A missing value has revision zero.
     fn load<'a>(
         &'a self,
         key: &'a str,
     ) -> SubscriptionFuture<'a, Result<SubscriptionStoreValue, SubscriptionHostError>>;
 
-    /// Atomically replaces one opaque state value.
     fn compare_and_swap<'a>(
         &'a self,
         key: &'a str,
@@ -132,14 +112,12 @@ pub trait ChatGptSubscriptionHost: Send + Sync + 'static {
         payload: &'a str,
     ) -> SubscriptionFuture<'a, Result<SubscriptionCommit, SubscriptionHostError>>;
 
-    /// Executes one bounded OAuth HTTP request.
     fn request<'a>(
         &'a self,
         request: SubscriptionHttpRequest,
     ) -> SubscriptionFuture<'a, Result<SubscriptionHttpResponse, SubscriptionHostError>>;
 }
 
-/// Initial credentials imported from a trusted host secret or Codex login.
 #[derive(Clone)]
 pub struct ChatGptCredentialSeed {
     access_token: String,
@@ -148,10 +126,6 @@ pub struct ChatGptCredentialSeed {
     fedramp: bool,
 }
 
-/// One immutable credential generation resolved by the Rust subscription manager.
-///
-/// Hosts receive this only to perform an authenticated outbound request. `Debug` redacts the
-/// bearer token.
 #[derive(Clone)]
 pub struct ChatGptCredential {
     access_token: Arc<str>,
@@ -161,25 +135,21 @@ pub struct ChatGptCredential {
 }
 
 impl ChatGptCredential {
-    /// Bearer token for one outbound request. Do not retain or log it.
     #[must_use]
     pub fn access_token(&self) -> &str {
         &self.access_token
     }
 
-    /// Stable ChatGPT account routing identifier.
     #[must_use]
     pub fn account_id(&self) -> &str {
         &self.account_id
     }
 
-    /// Whether the request targets FedRAMP service boundaries.
     #[must_use]
     pub const fn is_fedramp(&self) -> bool {
         self.fedramp
     }
 
-    /// Credential generation used for unauthorized recovery.
     #[must_use]
     pub const fn revision(&self) -> u64 {
         self.revision
@@ -199,7 +169,6 @@ impl std::fmt::Debug for ChatGptCredential {
 }
 
 impl ChatGptCredentialSeed {
-    /// Creates an importable credential. Values are validated when the subscription is opened.
     #[must_use]
     pub fn new(
         access_token: impl Into<String>,
@@ -228,61 +197,54 @@ impl std::fmt::Debug for ChatGptCredentialSeed {
     }
 }
 
-/// Public state of one hosted ChatGPT device login.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum ChatGptLoginStatus {
-    /// No credential or pending login exists.
     SignedOut,
-    /// The device login expired before authorization completed.
+
     Expired,
-    /// The caller should display the code and poll again after the suggested delay.
+
     Pending {
-        /// Browser URL used to authorize the device.
         #[serde(rename = "verificationUrl")]
         verification_url: String,
-        /// Short code displayed to the user.
+
         #[serde(rename = "userCode")]
         user_code: String,
-        /// Absolute Unix time in milliseconds when this attempt expires.
+
         #[serde(rename = "expiresAt")]
         expires_at: i64,
-        /// Minimum delay before polling again.
+
         #[serde(rename = "pollAfterMs")]
         poll_after_ms: i64,
     },
-    /// A refreshable credential is ready for an agent.
+
     Authenticated {
-        /// Stable ChatGPT account ID.
         #[serde(rename = "accountId")]
         account_id: String,
-        /// Access-token expiry when the token contains one.
+
         #[serde(rename = "expiresAt")]
         expires_at: Option<i64>,
     },
 }
 
-/// Managed subscription failure.
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum ChatGptSubscriptionError {
-    /// Host storage or networking failed.
     #[error("ChatGPT subscription host failed: {0}")]
     Host(Arc<str>),
-    /// Stored state or an OAuth response violated the protocol.
+
     #[error("invalid ChatGPT subscription state: {0}")]
     Invalid(Arc<str>),
-    /// No authenticated credential is available.
+
     #[error("ChatGPT subscription is not authenticated")]
     NotAuthenticated,
-    /// A rotating refresh token can no longer be used.
+
     #[error("ChatGPT login is required: {0}")]
     LoginRequired(Arc<str>),
-    /// Concurrent updates did not converge within the bounded retry budget.
+
     #[error("ChatGPT subscription state remained contended")]
     Contended,
 }
 
-/// Cloneable Rust-owned ChatGPT device-login and credential lifecycle.
 #[derive(Clone)]
 pub struct ChatGptSubscription {
     inner: Arc<SubscriptionInner>,
@@ -381,10 +343,6 @@ struct ExpClaims {
 }
 
 impl ChatGptSubscription {
-    /// Opens one subscription over generic host persistence and HTTP capabilities.
-    ///
-    /// When storage is empty, `seed` is imported atomically. A same-account seed may repair an
-    /// existing credential that has no refresh token; otherwise durable state always wins.
     pub async fn open(
         host: impl ChatGptSubscriptionHost,
         key: impl Into<Arc<str>>,
@@ -491,11 +449,6 @@ impl ChatGptSubscription {
         }
     }
 
-    /// Returns managed authorization for an agent.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error while signed out or while a device login is pending.
     pub async fn authorization(&self) -> Result<OpenAiAuth, ChatGptSubscriptionError> {
         self.current_snapshot().await?;
         Ok(OpenAiAuth::managed_chatgpt(Arc::new(
@@ -505,7 +458,6 @@ impl ChatGptSubscription {
         )))
     }
 
-    /// Resolves one credential generation for a host-owned outbound request.
     pub async fn credential(&self) -> Result<ChatGptCredential, ChatGptSubscriptionError> {
         let snapshot = self.current_snapshot().await?;
         Ok(ChatGptCredential {
@@ -516,7 +468,6 @@ impl ChatGptSubscription {
         })
     }
 
-    /// Refreshes the rejected generation and resolves the credential now current.
     pub async fn recover(
         &self,
         rejected_revision: u64,
@@ -525,7 +476,6 @@ impl ChatGptSubscription {
         self.credential().await
     }
 
-    /// Starts a new device login, replacing any prior credential or pending attempt.
     pub async fn start_login(&self) -> Result<ChatGptLoginStatus, ChatGptSubscriptionError> {
         let response = self
             .request_json(
@@ -565,7 +515,6 @@ impl ChatGptSubscription {
         Err(ChatGptSubscriptionError::Contended)
     }
 
-    /// Polls a pending login when due and reports only non-secret state.
     pub async fn status(&self) -> Result<ChatGptLoginStatus, ChatGptSubscriptionError> {
         let loaded = self.load().await?;
         if let Some(credential) = loaded.state.credential {
@@ -628,7 +577,6 @@ impl ChatGptSubscription {
         }
     }
 
-    /// Clears durable credentials and pending login state.
     pub async fn logout(&self) -> Result<(), ChatGptSubscriptionError> {
         for _ in 0..4 {
             let loaded = self.load().await?;

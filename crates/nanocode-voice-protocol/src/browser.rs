@@ -112,7 +112,6 @@ pub struct BrowserRealtimeCallResult {
     pub sdp: String,
 }
 
-/// Decodes the two provider values returned by Codex's Realtime call endpoint.
 pub fn decode_chatgpt_realtime_call(
     response_body: &str,
     location: &str,
@@ -295,7 +294,6 @@ impl BrowserVoiceProtocol {
         })
     }
 
-    /// Select the current desktop handoff contract while keeping media browser-owned.
     pub fn enable_client_managed_handoffs(&mut self) {
         self.client_delivery = Some(crate::browser_delivery::BrowserSpeechDelivery::new());
     }
@@ -329,14 +327,12 @@ impl BrowserVoiceProtocol {
         &self.settings
     }
 
-    /// Configure before starting a new provider call. Voice changes require a new call.
     pub fn configure(&mut self, settings: VoiceSettings) -> Result<(), String> {
         settings.validate_chatgpt()?;
         self.settings = settings;
         Ok(())
     }
 
-    /// Explicit speech is independent of background narration preferences.
     pub fn append_speech(&mut self, text: &str) -> Result<BrowserVoiceEffects, String> {
         if text.trim().is_empty() {
             return Ok(BrowserVoiceEffects::default());
@@ -355,15 +351,11 @@ impl BrowserVoiceProtocol {
         Ok(effects)
     }
 
-    /// Adds validated background context without requesting speech.
     pub fn append_context(&mut self, text: &str) -> Result<BrowserVoiceEffects, String> {
         validate_text(text)?;
         Ok(self.context(text))
     }
 
-    /// Codex's subscription adapter sends text as chunked context, regardless
-    /// of its API role. FramelessBidi maps to core V1, so the V2-only
-    /// `[USER] ` prefix does not apply. Background-only callers use `append_context`.
     pub fn append_text(
         &mut self,
         _role: VoiceTextRole,
@@ -401,8 +393,7 @@ impl BrowserVoiceProtocol {
         let Some(kind) = event.get("type").and_then(Value::as_str) else {
             return BrowserVoiceUpdate::default();
         };
-        // Match Codex's frameless parser: a malformed completion is not an
-        // event and must not close captions or change input ownership.
+
         if kind == "turn.done"
             && (!matches!(
                 event.pointer("/turn/role").and_then(Value::as_str),
@@ -595,9 +586,6 @@ impl BrowserVoiceProtocol {
         }
         match kind {
             "turn_failed" => {
-                // The managed host can fail admission before run.started. Only
-                // an outstanding provider handoff needs this fallback; a prior
-                // run.failed already completed it. Hosts correlate turn IDs.
                 if self.active_delegation.is_none() {
                     return BrowserVoiceEffects::default();
                 }
@@ -660,9 +648,7 @@ impl BrowserVoiceProtocol {
             }
             "run.completed" | "run.failed" | "run.cancelled" => {
                 let mut effects = self.flush(true);
-                // The managed first utterance can start a run before the
-                // provider emits a delegation ID. Its failures still need
-                // feedback through the session context channel.
+
                 if kind == "run.failed" && !self.output_sent_this_run {
                     let output = self
                         .run_error
@@ -762,14 +748,11 @@ impl BrowserVoiceProtocol {
         }
     }
 
-    /// Background data uses the same retained queue as normal output, without
-    /// consuming the transcript or changing the active delegation.
     #[must_use]
     pub fn context(&mut self, text: &str) -> BrowserVoiceEffects {
         self.queue_context(text)
     }
 
-    /// Send all selected startup context through the acknowledged control queue.
     #[must_use]
     pub fn startup_context(&mut self, text: &str) -> BrowserVoiceEffects {
         self.queue_context(text)
@@ -833,8 +816,6 @@ impl BrowserVoiceProtocol {
     }
 }
 
-// Match core's 1,000-token standalone-speech cap, including its middle
-// truncation marker and retry with a tightened content budget.
 fn bounded_speech(text: &str) -> String {
     let mut budget = REALTIME_OUTPUT_BYTE_LIMIT / APPROX_BYTES_PER_TOKEN;
     loop {
@@ -887,8 +868,6 @@ fn reconnect_delay_ms(rapid_disconnects: u32) -> u64 {
         .min(RECONNECT_MAX_DELAY_MS)
 }
 
-/// Codex's conservative UTF-8 byte chunks keep each message below the provider's
-/// token limit while preserving the selected context across all frames.
 pub(crate) fn session_context_frames(text: &str, channel: &str) -> Vec<Value> {
     text_context_frames(text, Some(channel))
 }
@@ -1084,8 +1063,6 @@ fn complete_transcript(
     force_new: bool,
 ) {
     if !force_new && let Some(last) = transcript.iter_mut().rev().find(|entry| entry.role == role) {
-        // Frameless finals can lag deltas from the next utterance. Match
-        // Codex by replacing accumulated speech only when the final extends it.
         if text.starts_with(&last.text) {
             last.text = text.to_owned();
         }

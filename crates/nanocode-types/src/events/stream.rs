@@ -13,11 +13,9 @@ use serde_json::value::to_raw_value;
 use tokio::sync::mpsc;
 use web_time::Instant;
 
-/// Current version of the canonical agent-event protocol.
 pub const AGENT_EVENT_PROTOCOL_VERSION: u32 = 1;
 static PROCESS_MONOTONIC_EPOCH: OnceLock<Instant> = OnceLock::new();
 
-/// Returns a process-relative monotonic timestamp for private cross-layer timing.
 #[doc(hidden)]
 #[must_use]
 pub fn monotonic_now_ns() -> u64 {
@@ -28,214 +26,176 @@ pub fn monotonic_now_ns() -> u64 {
     u64::try_from(elapsed).unwrap_or(u64::MAX)
 }
 
-/// Failure while encoding, writing, or consuming the contractual event stream.
 #[derive(Debug, thiserror::Error)]
 pub enum EventError {
-    /// A typed event could not be encoded as JSON.
     #[error("failed to encode agent event")]
     Encode(#[source] serde_json::Error),
 
-    /// An encoded event could not be written to the supplied output.
     #[error("failed to write agent event")]
     Write(#[source] std::io::Error),
 
-    /// The stream closed before the accepted turn emitted a terminal event.
     #[error("agent event stream closed before the turn emitted a terminal event")]
     ClosedBeforeTerminal,
 
-    /// An externally formed event uses an unsupported protocol version.
     #[error("agent event protocol version mismatch: expected {expected}, received {actual}")]
-    ProtocolVersionMismatch {
-        /// Protocol version accepted by this channel.
-        expected: u32,
-        /// Protocol version carried by the rejected event.
-        actual: u32,
-    },
+    ProtocolVersionMismatch { expected: u32, actual: u32 },
 
-    /// An externally formed event belongs to another request/session.
     #[error("agent event request identity mismatch: expected {expected}, received {actual}")]
     RequestIdMismatch {
-        /// Request identity owned by this channel.
         expected: Arc<str>,
-        /// Request identity carried by the rejected event.
+
         actual: Arc<str>,
     },
 
-    /// An externally formed event did not advance the session sequence.
     #[error("agent event sequence did not advance: minimum {expected}, received {actual}")]
-    SequenceMismatch {
-        /// Next sequence number required by this channel.
-        expected: u64,
-        /// Sequence number carried by the rejected event.
-        actual: u64,
-    },
+    SequenceMismatch { expected: u64, actual: u64 },
 
-    /// The event sequence cannot be advanced beyond `u64::MAX`.
     #[error("agent event sequence is exhausted")]
     SequenceExhausted,
 
-    /// A turn publisher received another event after its terminal event.
     #[error("agent turn event was published after its terminal event")]
     TurnAlreadyTerminal,
 }
 
-/// One ordered event emitted by an agent run.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AgentEvent {
-    /// Version of the stable event protocol.
     pub protocol_version: u32,
-    /// Stable session/request identity shared by this event stream.
+
     pub request_id: Arc<str>,
-    /// Monotonic sequence number within the stream.
+
     pub seq: u64,
-    /// Stable event category.
+
     #[serde(rename = "type")]
     pub kind: AgentEventKind,
-    /// Complete typed-event payload encoded as retained raw JSON.
+
     pub payload: Arc<RawValue>,
 }
 
-/// Private in-process timing carried beside an event without changing JSONL.
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug)]
 pub struct AgentEventTiming {
-    /// Process-relative nanoseconds when the event was emitted.
     pub emitted_ns: u64,
-    /// Process-relative nanoseconds when the transport observed the source event.
+
     pub source_received_ns: Option<u64>,
 }
 
-/// An agent event plus private in-process delivery timing.
 #[doc(hidden)]
 #[derive(Clone, Debug)]
 pub struct TimedAgentEvent {
-    /// Contractual event visible to consumers.
     pub event: AgentEvent,
-    /// Private in-process timing carried beside the contractual event.
+
     pub timing: AgentEventTiming,
 }
 
-/// Stable event categories emitted by the agent runtime.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum AgentEventKind {
-    /// A prompt or steer was accepted, with its complete input.
     #[serde(rename = "input.accepted")]
     InputAccepted,
-    /// Complete provider event in original order.
+
     #[serde(rename = "api.event")]
     ApiEvent,
-    /// Incremental assistant text.
+
     #[serde(rename = "assistant.delta")]
     AssistantDelta,
-    /// Completed assistant message.
+
     #[serde(rename = "assistant.message")]
     AssistantMessage,
-    /// Incremental reasoning summary.
+
     #[serde(rename = "reasoning.summary.delta")]
     ReasoningSummaryDelta,
-    /// Accepted turn started.
+
     #[serde(rename = "run.started")]
     RunStarted,
-    /// Input was added to an active turn.
+
     #[serde(rename = "run.steered")]
     RunSteered,
-    /// Recoverable run-level error was observed.
+
     #[serde(rename = "run.error")]
     RunError,
-    /// Turn completed successfully.
+
     #[serde(rename = "run.completed")]
     RunCompleted,
-    /// Turn terminated with an error.
+
     #[serde(rename = "run.failed")]
     RunFailed,
-    /// Tool invocation started.
+
     #[serde(rename = "tool.call")]
     ToolCall,
-    /// Tool invocation completed.
+
     #[serde(rename = "tool.result")]
     ToolResult,
-    /// Optional model connection warmup started.
+
     #[serde(rename = "model.warmup.started")]
     ModelWarmupStarted,
-    /// Optional model connection warmup completed.
+
     #[serde(rename = "model.warmup.completed")]
     ModelWarmupCompleted,
-    /// Optional model connection warmup failed.
+
     #[serde(rename = "model.warmup.failed")]
     ModelWarmupFailed,
-    /// Logical model call started.
+
     #[serde(rename = "model.call.started")]
     ModelCallStarted,
-    /// Logical model call completed.
+
     #[serde(rename = "model.call.completed")]
     ModelCallCompleted,
-    /// Logical model call failed.
+
     #[serde(rename = "model.call.failed")]
     ModelCallFailed,
-    /// Model-side context compaction started.
+
     #[serde(rename = "model.compaction.started")]
     ModelCompactionStarted,
-    /// Model-side context compaction completed.
+
     #[serde(rename = "model.compaction.completed")]
     ModelCompactionCompleted,
-    /// Model-side context compaction failed.
+
     #[serde(rename = "model.compaction.failed")]
     ModelCompactionFailed,
-    /// One transport attempt started.
+
     #[serde(rename = "model.attempt.started")]
     ModelAttemptStarted,
-    /// One transport attempt failed.
+
     #[serde(rename = "model.attempt.failed")]
     ModelAttemptFailed,
-    /// The SDK scheduled another transport attempt.
+
     #[serde(rename = "model.attempt.retrying")]
     ModelAttemptRetrying,
-    /// A model transport connection started.
+
     #[serde(rename = "model.connection.started")]
     ModelConnectionStarted,
-    /// A model transport connection completed.
+
     #[serde(rename = "model.connection.completed")]
     ModelConnectionCompleted,
-    /// A model transport connection failed.
+
     #[serde(rename = "model.connection.failed")]
     ModelConnectionFailed,
 }
 
-/// The receiving half of an agent's typed event stream.
 pub struct AgentEvents {
     request_id: Arc<str>,
     receiver: mpsc::UnboundedReceiver<TimedAgentEvent>,
 }
 
 impl AgentEvents {
-    /// Stable session/request identifier shared by every event in this stream.
     #[must_use]
     pub fn request_id(&self) -> &str {
         &self.request_id
     }
 
-    /// Receives the next event, or `None` after all emitters are dropped.
     pub async fn recv(&mut self) -> Option<AgentEvent> {
         self.recv_timed().await.map(|event| event.event)
     }
 
-    /// Receives one event with private process-relative timing metadata.
     #[doc(hidden)]
     pub async fn recv_timed(&mut self) -> Option<TimedAgentEvent> {
         self.receiver.recv().await
     }
 
-    /// Receives one immediately available event without waiting.
     #[doc(hidden)]
     pub fn try_recv_timed(&mut self) -> Option<TimedAgentEvent> {
         self.receiver.try_recv().ok()
     }
 
-    /// Writes every event as one flushed JSONL record.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when an event cannot be encoded or written.
     pub async fn write_jsonl(mut self, mut output: impl Write) -> Result<(), EventError> {
         while let Some(event) = self.recv().await {
             write_jsonl_event(&mut output, &event)?;
@@ -243,13 +203,6 @@ impl AgentEvents {
         Ok(())
     }
 
-    /// Writes one turn through its terminal event and leaves the session stream
-    /// available for follow-on turns.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when an event cannot be written or the agent stops
-    /// before emitting `run.completed` or `run.failed`.
     pub async fn write_turn_jsonl(&mut self, mut output: impl Write) -> Result<(), EventError> {
         while let Some(event) = self.recv().await {
             let terminal = event.kind.is_terminal();
@@ -276,7 +229,6 @@ impl Stream for AgentEvents {
 }
 
 impl AgentEventKind {
-    /// Returns whether this event completes a turn.
     #[must_use]
     pub const fn is_terminal(self) -> bool {
         matches!(self, Self::RunCompleted | Self::RunFailed)
@@ -284,18 +236,6 @@ impl AgentEventKind {
 }
 
 impl AgentEvent {
-    /// Returns a stable typed projection of this event.
-    ///
-    /// Application-facing run, assistant, reasoning, tool, model, and context
-    /// events decode into named types. Lower-level diagnostics remain lossless.
-    /// With the `client` feature, raw `OpenAI` frames decode into the
-    /// provider-specific projection; events-only builds retain them as
-    /// transport diagnostics.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when a payload does not satisfy the contract declared
-    /// by its event kind.
     pub fn data(&self) -> Result<super::AgentEventData, serde_json::Error> {
         use super::{
             AgentEventData, AssistantEvent, ContextEvent, ModelEvent, ReasoningEvent, RunEvent,
@@ -373,11 +313,6 @@ impl AgentEvent {
         })
     }
 
-    /// Decodes the event payload into a caller-selected typed shape.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the retained payload does not match `T`.
     pub fn decode_payload<T: serde::de::DeserializeOwned>(&self) -> Result<T, serde_json::Error> {
         serde_json::from_str(self.payload.get())
     }
@@ -506,8 +441,6 @@ impl EventChannel {
         }
     }
 
-    /// Atomically closes admission, then waits for publications admitted before
-    /// the terminal to finish routing. The low 62 bits count those admissions.
     fn claim_terminal(&self) -> Result<Option<TerminalClaim<'_>>, EventError> {
         let Some(state) = self.turn_admission.as_deref() else {
             return Ok(None);
@@ -625,13 +558,6 @@ fn wait_for_terminal_claim(state: &AtomicU64, observed: u64) {
     }
 }
 
-/// Cloneable publisher for already-formed canonical agent events.
-///
-/// A publisher validates protocol version, request identity, and contiguous
-/// sequence order before routing the same retained event to the session stream
-/// and, when present, one turn stream. Callers must provide one ordered source;
-/// publishing concurrently does not add delivery ordering beyond the underlying
-/// event channel.
 #[derive(Clone)]
 pub struct AgentEventPublisher {
     channel: EventChannel,
@@ -639,20 +565,17 @@ pub struct AgentEventPublisher {
 }
 
 impl AgentEventPublisher {
-    /// Associates newly emitted local events with a stable turn identity.
     #[must_use]
     pub fn with_turn_id(mut self, id: impl Into<Arc<str>>) -> Self {
         self.turn_id = Some(id.into());
         self
     }
 
-    /// Canonical local turn identity, when this publisher belongs to a turn.
     #[must_use]
     pub fn turn_id(&self) -> Option<&str> {
         self.turn_id.as_deref()
     }
 
-    /// Creates a publisher and its independently consumed session event stream.
     #[must_use]
     pub fn channel(request_id: impl Into<Arc<str>>) -> (Self, AgentEvents) {
         let request_id = request_id.into();
@@ -666,24 +589,17 @@ impl AgentEventPublisher {
         )
     }
 
-    /// Returns the stable request/session identity accepted by this publisher.
     #[must_use]
     pub fn request_id(&self) -> &str {
         &self.channel.request_id
     }
 
-    /// Returns whether this per-turn publisher has emitted its terminal event.
     #[doc(hidden)]
     #[must_use]
     pub fn turn_is_terminal(&self) -> bool {
         self.channel.turn_is_terminal()
     }
 
-    /// Creates a publisher that also mirrors its events into a turn stream.
-    ///
-    /// The returned publisher shares validation and session ordering with this
-    /// publisher. Dropping it closes only its turn stream once all of its clones
-    /// have also been dropped.
     #[must_use]
     pub fn mirrored_channel(&self) -> (Self, AgentEvents) {
         let (channel, events) = self.channel.mirrored_channel();
@@ -696,14 +612,6 @@ impl AgentEventPublisher {
         )
     }
 
-    /// Validates and publishes one already-formed canonical event.
-    ///
-    /// The retained raw payload is not decoded or re-encoded.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the protocol version or request identity differs,
-    /// or when the sequence is not exactly the next expected value.
     pub fn publish(&self, event: AgentEvent) -> Result<(), EventError> {
         self.publish_timed(TimedAgentEvent {
             event,
@@ -739,7 +647,6 @@ impl AgentEventPublisher {
     }
 }
 
-/// Internal sequenced emission handle shared by orchestration and transport crates.
 #[derive(Clone)]
 pub struct EventSink {
     publisher: AgentEventPublisher,
@@ -747,30 +654,22 @@ pub struct EventSink {
 }
 
 impl EventSink {
-    /// Canonical turn identity of this emitter.
     #[must_use]
     pub fn turn_id(&self) -> Option<&str> {
         self.publisher.turn_id()
     }
 
-    /// Creates an emission handle and its independently consumed event stream.
     #[must_use]
     pub fn channel(request_id: String) -> (Self, AgentEvents) {
         let (publisher, events) = AgentEventPublisher::channel(request_id);
         (Self::from_publisher(publisher), events)
     }
 
-    /// Returns the stable request/session identity attached to emitted events.
     #[must_use]
     pub fn request_id(&self) -> &str {
         self.publisher.request_id()
     }
 
-    /// Creates a sink that mirrors its events into one independently owned stream.
-    ///
-    /// The returned sink preserves the parent sink's request identity and
-    /// sequence counter. Dropping every clone of it closes only the mirror;
-    /// the original session stream remains available.
     #[must_use]
     pub fn mirrored_channel(&self) -> (Self, AgentEvents) {
         let (publisher, events) = self.publisher.mirrored_channel();
@@ -783,25 +682,10 @@ impl EventSink {
         )
     }
 
-    /// Emits an event when a receiver is present and otherwise discards it.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the payload cannot be converted to JSON or the
-    /// sequence is exhausted.
     pub fn emit<P: Serialize>(&self, kind: AgentEventKind, payload: P) -> Result<(), EventError> {
         self.emit_with_sequence(kind, payload).map(|_| ())
     }
 
-    /// Emits an event and returns its session-monotonic sequence number.
-    ///
-    /// This is intended for transport telemetry that must correlate the point
-    /// of emission with a downstream consumer without retaining payload data.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the payload cannot be converted to JSON or the
-    /// sequence is exhausted.
     pub fn emit_with_sequence<P: Serialize>(
         &self,
         kind: AgentEventKind,
@@ -810,7 +694,6 @@ impl EventSink {
         self.emit_with_source_sequence(kind, payload, None)
     }
 
-    /// Emits an event correlated with the process-monotonic source receipt time.
     pub fn emit_with_source_sequence<P: Serialize>(
         &self,
         kind: AgentEventKind,
@@ -831,7 +714,6 @@ impl EventSink {
             .as_deref()
             .filter(|_| kind != AgentEventKind::InputAccepted)
         {
-            // Flatten typed semantic payloads without parsing retained provider JSON.
             #[derive(Serialize)]
             struct TurnPayload<'a, P> {
                 #[serde(flatten)]
@@ -867,7 +749,6 @@ impl EventSink {
         Ok(seq)
     }
 
-    /// Creates a local sequenced emitter over an existing canonical publisher.
     #[doc(hidden)]
     #[must_use]
     pub const fn from_publisher(publisher: AgentEventPublisher) -> Self {
@@ -877,8 +758,6 @@ impl EventSink {
         }
     }
 
-    /// Selects whether raw API payloads are serialized and published.
-    /// Normalized output and progress events are unaffected.
     #[doc(hidden)]
     #[must_use]
     pub const fn with_raw_api_events(mut self, enabled: bool) -> Self {
@@ -886,7 +765,6 @@ impl EventSink {
         self
     }
 
-    /// Returns the backend-neutral canonical publisher used by this emitter.
     #[doc(hidden)]
     #[must_use]
     pub fn publisher(&self) -> AgentEventPublisher {

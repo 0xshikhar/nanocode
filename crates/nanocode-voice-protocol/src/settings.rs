@@ -1,4 +1,3 @@
-//! User-facing voice policy, shared by native, WASM, and Rust consumers.
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -41,16 +40,16 @@ pub enum VoiceOutputProvider {
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct VoiceSettings {
     pub voice: String,
-    /// Output synthesis only; realtime input and delegation remain with Codex.
+
     pub output_provider: VoiceOutputProvider,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub eleven_labs_voice_id: Option<String>,
-    /// Additional speaking preferences; the base assistant instructions are retained.
+
     pub instructions: String,
     pub pace: VoicePace,
     pub updates: VoiceUpdates,
     pub handoff_mode: VoiceHandoffMode,
-    /// `None` retains the provider default.
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub acknowledgements: Option<bool>,
 }

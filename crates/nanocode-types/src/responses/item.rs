@@ -1,5 +1,3 @@
-//! Complete typed transcript items used by Responses input and output.
-
 use std::{fmt, ops::Deref};
 
 use serde::{Deserialize, Serialize};
@@ -13,44 +11,36 @@ use super::{
 };
 use crate::Thinking;
 
-/// Reasoning controls carried by a Responses `configuration_update` item.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct ConfigurationUpdateReasoning {
-    /// Reasoning effort that applies until a later configuration update overrides it.
     pub effort: Thinking,
 }
 
-/// A stable Responses API item identifier.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]
 pub struct ResponseItemId(Box<str>);
 
 impl ResponseItemId {
-    /// Builds a deterministic client-owned ID from a type prefix and suffix.
     #[must_use]
     pub fn with_suffix(prefix: &str, suffix: impl fmt::Display) -> Self {
         Self(format!("{prefix}_{suffix}").into_boxed_str())
     }
 
-    /// Retains a provider-supplied item ID.
     #[must_use]
     pub fn from_server(value: impl Into<Box<str>>) -> Self {
         Self(value.into())
     }
 
-    /// Returns the encoded item ID.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
-    /// Returns whether the encoded item ID is empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
-    /// Returns whether this is a deterministic Nanocodex-owned ID.
     #[must_use]
     pub fn is_prefixed(&self) -> bool {
         self.split_once('_')
@@ -90,12 +80,6 @@ impl From<&str> for ResponseItemId {
     }
 }
 
-/// One typed Responses transcript item.
-///
-/// Variants preserve the provider's complete known wire fields. Unknown future
-/// item types are retained by [`ResponseItem::Other`] without converting known
-/// history into an untyped JSON document.
-#[allow(missing_docs)]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseItem {
@@ -321,7 +305,6 @@ impl ResponseItem {
         }
     }
 
-    /// Creates the stable developer item that declares session tools.
     #[must_use]
     pub const fn additional_tools(tools: Vec<ToolDefinition>) -> Self {
         Self::AdditionalTools {
@@ -331,7 +314,6 @@ impl ResponseItem {
         }
     }
 
-    /// Creates a message without provider status or internal metadata.
     #[must_use]
     pub fn message(role: MessageRole, content: impl IntoIterator<Item = ContentItem>) -> Self {
         Self::Message {
@@ -344,7 +326,6 @@ impl ResponseItem {
         }
     }
 
-    /// Creates completed output for one custom-tool call.
     #[must_use]
     pub fn custom_tool_output(
         call_id: String,
@@ -363,7 +344,6 @@ impl ResponseItem {
         }
     }
 
-    /// Creates completed output for one function call.
     #[must_use]
     pub fn function_call_output(call_id: String, output: FunctionOutputBody) -> Self {
         Self::FunctionCallOutput {
@@ -377,16 +357,11 @@ impl ResponseItem {
         }
     }
 
-    /// Creates the typed terminal item for a remote compaction request.
     #[must_use]
     pub const fn compaction_trigger() -> Self {
         Self::CompactionTrigger {}
     }
 
-    /// Creates a retained reasoning-effort protocol update.
-    ///
-    /// Nanocodex forwards these only to models supporting appended effort
-    /// updates. Unsupported models retain request-level effort semantics.
     #[must_use]
     pub const fn configuration_update(effort: Thinking) -> Self {
         Self::ConfigurationUpdate {
@@ -394,7 +369,6 @@ impl ResponseItem {
         }
     }
 
-    /// Returns whether this item is a user-role message.
     #[must_use]
     pub const fn is_user_message(&self) -> bool {
         matches!(
@@ -406,7 +380,6 @@ impl ResponseItem {
         )
     }
 
-    /// Returns the Responses API item ID, if present.
     #[must_use]
     pub const fn id(&self) -> Option<&ResponseItemId> {
         match self {
@@ -429,7 +402,6 @@ impl ResponseItem {
         }
     }
 
-    /// Sets or clears the Responses API item ID for variants that carry one.
     pub fn set_id(&mut self, new_id: Option<ResponseItemId>) {
         match self {
             Self::AdditionalTools { id, .. }
@@ -451,7 +423,6 @@ impl ResponseItem {
         }
     }
 
-    /// Returns the Responses API item ID prefix for variants that carry an ID.
     #[must_use]
     pub const fn id_prefix(&self) -> Option<&'static str> {
         match self {
@@ -473,18 +444,10 @@ impl ResponseItem {
         }
     }
 
-    /// Removes the item ID from a derived copy that starts a separate history.
     pub fn strip_id(&mut self) {
         self.set_id(None);
     }
 
-    /// Removes a replaceable item ID while preserving IDs bound into opaque
-    /// encrypted provider content.
-    ///
-    /// Recovered requests may assign fresh IDs to ordinary copied items. An
-    /// encrypted compaction, reasoning item, or function argument authenticates
-    /// the provider-issued ID inside its ciphertext, so changing that ID makes
-    /// the otherwise valid content impossible to replay.
     pub fn strip_unbound_id(&mut self) {
         let provider_bound = matches!(
             self,

@@ -28,7 +28,7 @@ export function durabilityRevision(value) {
   return durabilityUint64(value, "revision");
 }
 
-/** Returns SHA-256 over the UTF-8 JSON tuple `[revision, payload]`. */
+
 export async function durabilityStateDigest(state) {
   const exact = copyState(state);
   const encoded = new TextEncoder().encode(JSON.stringify([exact.revision, exact.payload]));
@@ -55,7 +55,7 @@ export class DurabilityImportConflictError extends Error {
   }
 }
 
-/** Exports one deterministic page of the exact total state at `to`. */
+
 export async function exportDurabilityStatePage(store, stateId, request) {
   requireId(stateId, "state");
   if (!store || typeof store.acquire !== "function") {
@@ -117,7 +117,7 @@ export async function exportDurabilityStatePage(store, stateId, request) {
   });
 }
 
-/** Imports contiguous cursor pages with a CAS guard on the destination's `from` revision. */
+
 export async function importDurabilityStatePages(store, pages) {
   if (!store || typeof store.importState !== "function") {
     throw new TypeError("durability import requires a portable state store");
@@ -197,7 +197,7 @@ export async function importDurabilityStatePages(store, pages) {
   return copyState(imported);
 }
 
-/** Fences a source store and exports one coherent provider-neutral state archive. */
+
 export async function exportDurabilityState(store, stateId, { headOnly = false } = {}) {
   requireId(stateId, "state");
   if (!store || typeof store.acquire !== "function") {
@@ -228,7 +228,7 @@ export async function exportDurabilityState(store, stateId, { headOnly = false }
   return Object.freeze({ format: PORTABLE_FORMAT, stateId, ...state, records });
 }
 
-/** Restores an exact provider-neutral archive into an empty portable store. */
+
 export async function importDurabilityState(store, archive) {
   if (!store || typeof store.importState !== "function") {
     throw new TypeError("durability import requires a portable state store");
@@ -499,9 +499,9 @@ export function createSqliteDurabilityStore(options) {
             return { status: "fenced" };
           }
           const expectedRevision = durabilityRevision(request?.expectedRevision);
-          // The normal write needs only the revision. Loading the previous
-          // payload also hydrates every Cloudflare chunk, doubling live state
-          // memory while the replacement is already held by Rust and JS.
+
+
+
           return mapMaybePromise(query(
             "SELECT revision FROM nanocodex_durable_states WHERE state_id = ?",
             [stateId],
@@ -512,8 +512,8 @@ export function createSqliteDurabilityStore(options) {
             if (actualRevision !== expectedRevision) {
               if (actualRevision === nextRevision(expectedRevision)
                 && typeof request?.payload === "string") {
-                // A lost acknowledgement must still replay only the exact
-                // committed payload, under the same transaction and fence.
+
+
                 return mapMaybePromise(loadSqliteState(query, stateId), (state) =>
                   state.payload === request.payload
                     ? { status: "replaced", revision: actualRevision }

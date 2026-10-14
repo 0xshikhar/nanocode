@@ -1,13 +1,13 @@
-// Ported from openai/codex 36430b36881cf5c289cb48e671cfc9e8b542ae7b:
-// code-mode-runtime/src/runtime/{value,audio}.rs. Keep these pure helpers in
-// the guest realm as well, so validation and JSON exceptions are catchable.
-// Serialize one closed scope: bundlers may rename functions and dependencies.
-// Object method names stay stable even with minification and keepNames enabled.
+
+
+
+
+
 function createValueHelpers() {
   const helpers = {
     stringify(value) {
       if (value === null || ["undefined", "boolean", "number", "bigint", "string"].includes(typeof value)) return String(value);
-      // Caught tool failures are Errors: show their message, not "{}".
+
       if (Object.prototype.toString.call(value) === "[object Error]") return String(value);
       return JSON.stringify(value) ?? String(value);
     },
@@ -92,8 +92,8 @@ function createValueHelpers() {
       return [helpers.normalizeImage(value), ...(hint === undefined ? [] : [{ type: "input_text", text: hint }])];
     },
 
-    // Strict standard base64, including canonical padding bits, as in Rust base64.
-    // This small decoder also runs inside QuickJS, which has no atob global.
+
+
     decodeAudio(url) {
       const comma = url.indexOf(",");
       if (comma < 0 || !url.slice(0, comma).split(";").slice(1).some((s) => s.toLowerCase() === "base64")) return;

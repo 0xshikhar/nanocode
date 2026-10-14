@@ -4,27 +4,22 @@ use crate::{Error, Result};
 use serde::{Serialize, de::DeserializeOwned};
 
 const STATE_FORMAT: u8 = 4;
-/// Payloads below this size remain one inline `=` record.
+
 const INLINE_BYTES: usize = 16 * 1024;
-/// Content-defined chunk bounds. These constants and [`GEAR`] define stored
-/// chunk identities; changing them only loses cross-version deduplication,
-/// never readability, because manifests list their exact chunk hashes.
+
 const CHUNK_MIN: usize = 2 * 1024;
 const CHUNK_AVG: usize = 8 * 1024;
 const CHUNK_MAX: usize = 32 * 1024;
-/// Harder cut condition before the average size, easier after it (FastCDC
-/// normalized chunking). The gear hash shifts left, so its top bits cover the
-/// most recent 64 bytes.
+
 const CHUNK_MASK_SMALL: u64 = !(u64::MAX >> 15);
 const CHUNK_MASK_LARGE: u64 = !(u64::MAX >> 11);
-/// A manifest record lists the SHA-256 identities of its `c:` chunk records.
-/// Legacy `=` inline and `+N` offset-chunked records remain readable.
+
 const MANIFEST_PREFIX: char = '#';
 
 const GEAR: [u64; 256] = gear_table();
 
 const fn gear_table() -> [u64; 256] {
-    // SplitMix64 from a fixed seed: deterministic across builds and targets.
+
     let mut table = [0_u64; 256];
     let mut state: u64 = 0x6e61_6e6f_636f_6465;
     let mut index = 0;
@@ -39,13 +34,10 @@ const fn gear_table() -> [u64; 256] {
     table
 }
 
-/// Returns the byte length of the next content-defined chunk, on a UTF-8
-/// character boundary. Cut decisions depend only on nearby content, so an edit
-/// changes the chunks around it and later boundaries resynchronize.
 fn chunk_end(content: &str) -> usize {
     let bytes = content.as_bytes();
     let length = bytes.len();
-    // Avoid tiny tails: a short remainder stays one final chunk.
+
     if length <= CHUNK_MIN * 2 {
         return length;
     }
@@ -77,7 +69,6 @@ fn chunk_key(hash: &str) -> String {
     format!("c:{hash}")
 }
 
-/// An immutable payload reference. Content is loaded only for its consumer.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(transparent)]
 pub struct EncodedPayload {
@@ -98,7 +89,6 @@ impl EncodedPayload {
         })
     }
 
-    /// Addresses caller-encoded JSON by its content, without re-encoding it.
     pub(crate) fn from_json(json: Arc<str>) -> Self {
         Self {
             key: record_key(&json).into(),
@@ -107,7 +97,6 @@ impl EncodedPayload {
         }
     }
 
-    /// References a stored record whose content is loaded on demand.
     pub(crate) fn by_key(key: &str) -> Self {
         Self {
             key: key.into(),
@@ -116,12 +105,10 @@ impl EncodedPayload {
         }
     }
 
-    /// Decodes a payload loaded by its durable session.
     pub fn decode<T: DeserializeOwned>(&self) -> Result<T> {
         serde_json::from_str(self.json()?).map_err(Error::InvalidPayload)
     }
 
-    /// Returns content loaded by a session operation.
     pub fn json(&self) -> Result<&str> {
         self.content.as_deref().ok_or_else(|| {
             Error::InvalidState(
@@ -130,7 +117,6 @@ impl EncodedPayload {
         })
     }
 
-    /// A stored payload addressed by its content key.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub(crate) fn from_key(key: &str) -> Self {
         Self {
@@ -165,10 +151,7 @@ impl EncodedPayload {
             });
             return;
         }
-        // Content-defined chunks: an unchanged transcript prefix (and any
-        // repeated region, such as a conversation retained twice by one
-        // cursor) yields the same chunk identities across model rounds, so
-        // the store's content-addressed insert writes only new chunks.
+
         let mut manifest = String::with_capacity(1 + content.len() / CHUNK_MIN * 64);
         manifest.push(MANIFEST_PREFIX);
         let mut offset = 0;
@@ -308,140 +291,134 @@ impl PartialEq for EncodedPayload {
 }
 impl Eq for EncodedPayload {}
 
-/// One Rust-owned durable state entry.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Transition {
-    /// Replaces the current execution position after all preceding effects settled.
-    /// The conversation in this value subsumes those effects' recovery receipts.
+
     ExecutionAdvanced {
-        /// Accepted operation identity.
+
         operation_id: String,
-        /// Opaque current agent state, rather than a history of requests.
+
         continuation: EncodedPayload,
     },
-    /// A host-visible operation was durably accepted.
+
     OperationAccepted {
-        /// Caller-provided idempotency identity.
+
         operation_id: String,
-        /// Opaque typed input encoded by the Rust consumer.
+
         input: EncodedPayload,
     },
-    /// An external step began.
+
     StepStarted {
-        /// Accepted operation identity.
+
         operation_id: String,
-        /// Stable step identity within the operation.
+
         step_id: String,
-        /// Semantic step kind used for diagnostics.
+
         kind: String,
-        /// Opaque typed step input.
+
         input: EncodedPayload,
     },
-    /// An external step completed with a replayable output.
+
     StepCompleted {
-        /// Accepted operation identity.
+
         operation_id: String,
-        /// Stable step identity within the operation.
+
         step_id: String,
-        /// Opaque typed output returned during replay.
+
         output: EncodedPayload,
     },
-    /// Live steering input was accepted for an active operation.
+
     SteerAccepted {
-        /// Caller identity atomically retained with this acceptance.
+
         #[serde(default, skip_serializing_if = "Option::is_none")]
         message_id: Option<String>,
-        /// Accepted operation identity.
+
         operation_id: String,
-        /// Stable one-based FIFO position within the operation.
+
         steer_index: u32,
-        /// Model call that was current when the steering input was accepted.
+
         accepted_after_model_call_index: u32,
-        /// Exact typed steering prompt.
+
         input: EncodedPayload,
     },
-    /// The latest unbound steer was withdrawn before model consumption.
+
     SteerWithdrawn {
-        /// Accepted operation identity.
+
         operation_id: String,
-        /// One-based position of the latest accepted steer.
+
         steer_index: u32,
     },
-    /// Accepted steering input was bound to its consuming model boundary.
+
     SteerBound {
-        /// Accepted operation identity.
+
         operation_id: String,
-        /// Stable one-based FIFO position within the operation.
+
         steer_index: u32,
-        /// Model-call ordinal before which the steer is applied.
+
         model_call_index: u32,
     },
-    /// An operation completed and advanced the durable session checkpoint.
+
     OperationCompleted {
-        /// Accepted operation identity.
+
         operation_id: String,
-        /// Opaque resumable agent checkpoint.
+
         checkpoint: EncodedPayload,
-        /// Opaque completed result returned to duplicate submissions.
+
         output: EncodedPayload,
     },
-    /// An operation failed and advanced the durable session checkpoint.
+
     OperationFailed {
-        /// Accepted operation identity.
+
         operation_id: String,
-        /// Opaque resumable agent checkpoint.
+
         checkpoint: EncodedPayload,
-        /// Stable terminal failure detail.
+
         error: String,
     },
-    /// An operation was explicitly cancelled.
+
     OperationCancelled {
-        /// Accepted operation identity.
+
         operation_id: String,
-        /// Safe interrupted checkpoint for an active operation. A queued
-        /// cancellation has no new model boundary.
+
         #[serde(default, skip_serializing_if = "Option::is_none")]
         checkpoint: Option<EncodedPayload>,
     },
-    /// A model-only boundary, such as explicit standalone compaction, advanced
-    /// the resumable session without terminalizing an operation.
+
     CheckpointCommitted {
-        /// Opaque resumable agent checkpoint.
+
         checkpoint: EncodedPayload,
     },
 }
 
-/// Reduced status of one operation.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum OperationStatus {
-    /// Accepted work may be attempted or resumed.
+
     Pending,
-    /// Work completed with an opaque result and checkpoint.
+
     Completed {
-        /// Resumable checkpoint committed atomically with the result.
+
         checkpoint: EncodedPayload,
-        /// Result returned to duplicate submissions.
+
         output: EncodedPayload,
     },
-    /// Work failed with a resumable checkpoint and retained diagnostic.
+
     Failed {
-        /// Resumable checkpoint committed atomically with the failure.
+
         checkpoint: EncodedPayload,
-        /// Failure returned to duplicate submissions.
+
         error: String,
     },
-    /// Work was explicitly cancelled, optionally after advancing the safe
-    /// interrupted checkpoint.
+
     Cancelled {
-        /// Safe checkpoint committed by active cancellation.
+
         checkpoint: Option<EncodedPayload>,
     },
 }
 
 impl OperationStatus {
-    /// Returns whether this operation cannot execute again.
+
     #[must_use]
     pub const fn is_terminal(&self) -> bool {
         matches!(
@@ -451,79 +428,74 @@ impl OperationStatus {
     }
 }
 
-/// Reduced status of one step.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StepStatus {
-    /// The step started but has no committed output yet.
+
     EffectPending,
-    /// The external effect's exact output settled durably.
+
     Completed(EncodedPayload),
 }
 
-/// Reduced durable step state.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct StepState {
-    /// Semantic kind recorded by the caller.
+
     pub kind: String,
-    /// Original opaque step input.
+
     pub input: EncodedPayload,
-    /// Current reduced status.
+
     pub status: StepStatus,
-    /// Number of committed starts for this step.
+
     pub attempts: u32,
 }
 
-/// One live steering input retained for deterministic operation recovery.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SteerState {
-    /// Optional caller identity for pending withdrawal after recovery.
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message_id: Option<String>,
-    /// Exact typed steering prompt.
+
     pub input: EncodedPayload,
-    /// Model call that was current when the steering input was accepted.
+
     pub accepted_after_model_call_index: u32,
-    /// Model-call ordinal before which the steer is applied, once known.
+
     pub model_call_index: Option<u32>,
 }
 
-/// A small durable caller receipt retained after consumption or withdrawal.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct IdentifiedSteerReceipt {
-    /// Fingerprint of the exact serialized prompt.
+
     pub input_key: String,
-    /// Original acceptance ordinal.
+
     pub index: u32,
-    /// Withdrawn identities cannot be accepted again.
+
     pub withdrawn: bool,
 }
 
-/// Reduced durable operation state.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct OperationState {
-    /// Caller receipts survive retirement of live steering bodies.
+
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub steer_receipts: BTreeMap<String, IdentifiedSteerReceipt>,
-    /// Current conversation and execution position; settled batches are retired atomically.
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continuation: Option<EncodedPayload>,
-    /// Model batches already incorporated in the current conversation.
+
     #[serde(default)]
     pub retired_model_calls: u32,
-    /// Steering inputs already incorporated in the current conversation.
+
     pub retired_steers: u32,
-    /// Original opaque operation input.
+
     pub input: EncodedPayload,
-    /// Current operation status.
+
     pub status: OperationStatus,
-    /// Ordered durable steps by identity.
+
     pub steps: BTreeMap<String, StepState>,
-    /// Live steering inputs in their accepted FIFO order.
+
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub steers: Vec<SteerState>,
     pub(crate) accepted_order: u64,
@@ -558,13 +530,12 @@ impl OperationState {
                     .is_some_and(|index| index <= self.retired_model_calls)
             })
             .count();
-        // Accepted indexes already fit u32; retirement preserves that total.
+
         self.retired_steers += consumed as u32;
         self.steers.drain(..consumed);
     }
 }
 
-/// Complete state reduced from an complete retained state.
 #[derive(Clone, Debug, Default)]
 pub struct DurableState {
     revision: u64,
@@ -585,7 +556,7 @@ pub(crate) struct DurableCheckpoint {
 #[serde(deny_unknown_fields)]
 pub(crate) struct RetainedCheckpoint {
     pub(crate) nanocodex_durable_state: DurableCheckpoint,
-    /// Family-neutral catalog metadata; absent in journals written before it existed.
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) nanocodex_session: Option<crate::catalog::SessionRecord>,
 }
@@ -641,25 +612,21 @@ impl DurableState {
         records
     }
 
-    /// Current optimistic store revision.
     #[must_use]
     pub const fn revision(&self) -> u64 {
         self.revision
     }
 
-    /// Operations keyed by caller-provided identity.
     #[must_use]
     pub const fn operations(&self) -> &BTreeMap<String, OperationState> {
         &self.operations
     }
 
-    /// Looks up one operation.
     #[must_use]
     pub fn operation(&self, operation_id: &str) -> Option<&OperationState> {
         self.operations.get(operation_id)
     }
 
-    /// Returns accepted non-terminal operations in submission order.
     #[must_use]
     pub fn pending_operations(&self) -> Vec<(&str, &OperationState)> {
         let mut operations = self
@@ -687,7 +654,6 @@ impl DurableState {
             .map(|(id, operation)| (id.as_str(), operation))
     }
 
-    /// Family-neutral catalog metadata recorded for this session, if any.
     #[must_use]
     pub const fn session(&self) -> Option<&crate::catalog::SessionRecord> {
         self.session.as_ref()
@@ -706,7 +672,6 @@ impl DurableState {
         self.session.as_mut()
     }
 
-    /// Returns the latest terminal checkpoint in operation order.
     #[must_use]
     pub fn latest_checkpoint(&self) -> Option<&EncodedPayload> {
         self.latest_checkpoint
@@ -731,8 +696,7 @@ impl DurableState {
         Self::retain_terminal_operations(&mut self.operations, limit);
         let mut changed = self.operations.len() != before;
         if changed && let Some(session) = &mut self.session {
-            // Branching before the oldest retained turn can no longer prove
-            // that it was the conversation's first turn.
+
             session.history_pruned = true;
         }
         for operation in self
@@ -740,9 +704,7 @@ impl DurableState {
             .values_mut()
             .filter(|operation| operation.status.is_terminal())
         {
-            // Terminal replay uses only input, result, and checkpoint. Keeping
-            // every intermediate full-history model request multiplies memory
-            // and write volume across long conversations.
+
             changed |= !operation.steps.is_empty() || !operation.steers.is_empty();
             operation.steps.clear();
             changed |= operation.continuation.take().is_some();
@@ -857,10 +819,7 @@ impl DurableState {
                 )));
             }
         }
-        // Live transitions share the latest checkpoint with their terminal
-        // receipt. Deserialization loses that Arc sharing; restore it before
-        // constructing the agent so a cold reopen does not retain a second
-        // full conversation. Standalone checkpoints can differ and stay intact.
+
         let latest_checkpoint = checkpoint.latest_checkpoint.map(|latest| {
             let shared = checkpoint.operations.values().rev().find_map(|operation| {
                 let candidate = match &operation.status {
@@ -916,8 +875,6 @@ impl DurableState {
         Ok(())
     }
 
-    /// An empty head published at `revision`, retracting an unused state's
-    /// catalog record and checkpoint.
     pub(crate) fn retracted(revision: u64) -> Self {
         Self {
             revision,
@@ -1435,8 +1392,6 @@ fn ensure_nonempty(value: &str, name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Pins the checkpoint a fork or side conversation holds before its first
-/// turn, so a later edit of that turn continues its inherited history.
 fn pin_start(session: Option<&mut crate::catalog::SessionRecord>, checkpoint: &EncodedPayload) {
     if let Some(record) = session
         && record.branch.is_none()

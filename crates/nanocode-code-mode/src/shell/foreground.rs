@@ -1,23 +1,17 @@
-//! Bounded foreground execution shared by provider tool adapters.
 use super::{process, selection};
 use std::{path::Path, time::Duration};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
-/// Output of a completed foreground command.
 pub struct ForegroundOutput {
-    /// Bounded standard output.
     pub stdout: String,
-    /// Bounded standard error.
+
     pub stderr: String,
-    /// Command exit status.
+
     pub exit_code: i32,
-    /// Whether either output stream exceeded its limit.
+
     pub truncated: bool,
 }
 
-/// Runs Bash with the shared shell environment and process lifecycle.
-/// This is local execution with host permissions, not an OS sandbox.
-/// Cancellation and deadlines terminate the process group; capture stays bounded.
 pub async fn run_bash(
     workspace: &Path,
     command: &str,

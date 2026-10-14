@@ -20,20 +20,17 @@ use tokio::sync::mpsc;
 use crate::client::stream::{CompactionOutput, GenerationOutput};
 
 const RESPONSE_MAX_ATTEMPTS: NonZeroU32 = NonZeroU32::new(5).unwrap();
-// Match codex-rs remote compaction: the initial request plus two retries
-// on each transport, before fallback or returning the exhausted error.
+
 const COMPACTION_MAX_ATTEMPTS: u32 = 3;
 
-/// Kind of Responses operation passed through the Tower service stack.
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ResponsesAttemptKind {
-    /// Optional WebSocket connection warmup.
     Warmup,
-    /// A `response.create` operation.
+
     Generation,
-    /// A `response.compact` operation.
+
     Compaction,
 }
 
@@ -70,7 +67,6 @@ impl ResponsesObserver {
     }
 }
 
-/// Shared atomic counters for one transport family.
 #[derive(Default)]
 pub struct TransportStats {
     pub(crate) connection_attempts: AtomicU32,
@@ -81,7 +77,6 @@ pub struct TransportStats {
     pub(crate) retry_backoff_duration_ns: AtomicU64,
 }
 
-/// Point-in-time transport counter values used to calculate a delta.
 #[derive(Clone, Copy, Default)]
 pub struct TransportStatsSnapshot {
     connection_attempts: u32,
@@ -93,7 +88,6 @@ pub struct TransportStatsSnapshot {
 }
 
 impl TransportStats {
-    /// Captures the current counter values.
     #[must_use]
     pub fn snapshot(&self) -> TransportStatsSnapshot {
         TransportStatsSnapshot {
@@ -106,7 +100,6 @@ impl TransportStats {
         }
     }
 
-    /// Calculates counters accumulated since an earlier snapshot.
     #[must_use]
     pub fn since(&self, before: TransportStatsSnapshot) -> TransportStatsDelta {
         let after = self.snapshot();
@@ -133,24 +126,21 @@ impl TransportStats {
     }
 }
 
-/// Per-run transport counters derived from the process-wide service counters.
 #[derive(Clone, Copy, Default)]
 pub struct TransportStatsDelta {
-    /// Physical connection attempts.
     pub connection_attempts: u32,
-    /// Successful WebSocket replacements after the initial connection.
+
     pub websocket_reconnects: u32,
-    /// Physical Responses attempts.
+
     pub response_attempts: u32,
-    /// Responses retries after the first physical attempt.
+
     pub response_retries: u32,
-    /// Nanoseconds spent establishing connections.
+
     pub connection_duration_ns: u64,
-    /// Nanoseconds spent waiting for owned retry backoff.
+
     pub retry_backoff_duration_ns: u64,
 }
 
-/// One logical Responses operation, including the complete input required for a safe retry.
 #[derive(Clone)]
 pub struct ResponsesAttempt {
     pub(crate) kind: ResponsesAttemptKind,
@@ -293,72 +283,54 @@ impl ResponsesAttempt {
         }
     }
 
-    /// Returns the provider operation represented by this attempt.
     #[must_use]
     pub const fn kind(&self) -> ResponsesAttemptKind {
         self.kind
     }
 
-    /// Returns the session-monotonic model call index, if this is not warmup.
     #[must_use]
     pub const fn model_call_index(&self) -> Option<u32> {
         self.call_index
     }
 
-    /// Returns the reasoning effort fixed for this replayable attempt.
     #[must_use]
     pub const fn thinking(&self) -> Thinking {
         self.thinking
     }
 
-    /// Returns the model fixed for this replayable attempt.
     #[must_use]
     pub const fn model(&self) -> Model {
         self.model
     }
 
-    /// Returns the effective processing tier fixed for this replayable attempt.
     #[must_use]
     pub const fn service_tier(&self) -> ServiceTier {
         self.service_tier.effective_for_model(self.model)
     }
 
-    /// Returns whether accelerated processing was requested for this attempt.
     #[must_use]
     pub const fn fast_mode(&self) -> bool {
         !matches!(self.service_tier, ServiceTier::Standard)
     }
 
-    /// Returns the current physical attempt number.
     #[must_use]
     pub const fn attempt(&self) -> u32 {
         self.attempt
     }
 
-    /// Iterates over the exact input items this physical attempt will send.
     pub fn input_items(&self) -> impl Iterator<Item = &ResponseItem> {
         self.input().iter()
     }
 
-    /// Emits one normalized event for callers streaming this attempt.
-    ///
-    /// Custom Tower services installed with [`crate::client::OpenAiBuilder::service`]
-    /// use this method when they can expose live provider events. A service
-    /// that only returns a completed aggregate may omit it; the managed
-    /// response stream synthesizes its terminal completion event.
     pub async fn emit(&self, event: ResponseEvent) {
         self.observer.emit_response(event).await;
     }
 
-    /// Returns the exact number of input items this physical attempt will send.
     #[must_use]
     pub fn input_item_count(&self) -> usize {
         self.input().len()
     }
 
-    /// Returns the private provider continuation ID used by this attempt.
-    ///
-    /// Full-replay attempts deliberately return `None`.
     #[must_use]
     pub fn previous_response_id(&self) -> Option<&str> {
         (!self.full_replay)
@@ -366,7 +338,6 @@ impl ResponsesAttempt {
             .flatten()
     }
 
-    /// Returns whether this attempt sends complete authoritative history.
     #[must_use]
     pub const fn is_full_replay(&self) -> bool {
         self.full_replay
@@ -411,17 +382,14 @@ impl ResponsesAttempt {
     }
 }
 
-/// Complete output returned by one low-level Responses Tower call.
 pub enum ResponsesOutput {
-    /// WebSocket warmup completed.
     Warmup(WarmupResponse),
-    /// `response.create` completed.
+
     Generation(GenerationOutput),
-    /// `response.compact` completed.
+
     Compaction(CompactionOutput),
 }
 
-/// Complete result produced by a Tower service for one Responses attempt.
 pub struct ResponsesServiceResponse {
     pub(crate) output: ResponsesOutput,
     pub(crate) attempt: u32,
@@ -430,7 +398,6 @@ pub struct ResponsesServiceResponse {
 }
 
 impl ResponsesServiceResponse {
-    /// Wraps completed output from a caller-supplied Tower service.
     #[must_use]
     pub const fn new(output: ResponsesOutput) -> Self {
         Self {
@@ -441,53 +408,45 @@ impl ResponsesServiceResponse {
         }
     }
 
-    /// Records the physical attempt that produced this completed output.
     #[must_use]
     pub const fn with_attempt(mut self, attempt: u32) -> Self {
         self.attempt = attempt;
         self
     }
 
-    /// Records the transport connection generation that produced this output.
     #[must_use]
     pub const fn with_connection_generation(mut self, connection_generation: u32) -> Self {
         self.connection_generation = connection_generation;
         self
     }
 
-    /// Records whether the server already accounted for retained reasoning.
     #[must_use]
     pub const fn with_server_reasoning_included(mut self, included: bool) -> Self {
         self.server_reasoning_included = included;
         self
     }
 
-    /// Returns the physical attempt that produced this output.
     #[must_use]
     pub const fn attempt(&self) -> u32 {
         self.attempt
     }
 
-    /// Returns the transport connection generation that produced this output.
     #[must_use]
     pub const fn connection_generation(&self) -> u32 {
         self.connection_generation
     }
 
-    /// Returns whether the server already accounted for retained reasoning.
     #[must_use]
     pub const fn server_reasoning_included(&self) -> bool {
         self.server_reasoning_included
     }
 
-    /// Consumes the transport metadata and returns the completed output.
     #[must_use]
     pub fn into_output(self) -> ResponsesOutput {
         self.output
     }
 }
 
-/// Builds replayable low-level Responses attempts against one stable profile.
 #[must_use]
 pub struct ResponsesAttemptFactory {
     profile: Arc<RequestProfile>,
@@ -497,7 +456,6 @@ pub struct ResponsesAttemptFactory {
 }
 
 impl ResponsesAttemptFactory {
-    /// Creates a low-level attempt factory with shared events and counters.
     pub fn new(profile: RequestProfile, events: EventSink, stats: Arc<TransportStats>) -> Self {
         Self {
             profile: Arc::new(profile),
@@ -511,7 +469,6 @@ impl ResponsesAttemptFactory {
         }
     }
 
-    /// Replaces the event destination without changing request or retry state.
     pub fn set_events(&mut self, events: EventSink) {
         self.observer.events = events;
     }
@@ -524,7 +481,6 @@ impl ResponsesAttemptFactory {
         self
     }
 
-    /// Returns an attempt factory scoped to one client-side logical turn.
     pub fn for_logical_turn(&self, logical_turn: u64) -> Self {
         Self {
             profile: Arc::new((*self.profile).clone().with_logical_turn(logical_turn)),
@@ -534,13 +490,11 @@ impl ResponsesAttemptFactory {
         }
     }
 
-    /// Returns the immutable request profile shared by generated attempts.
     #[must_use]
     pub fn profile(&self) -> &RequestProfile {
         &self.profile
     }
 
-    /// Reconstructs retained request content on the current event and transport owner.
     #[doc(hidden)]
     pub fn with_request_content(
         &self,
@@ -564,7 +518,6 @@ impl ResponsesAttemptFactory {
         }
     }
 
-    /// Builds a WebSocket warmup attempt.
     #[must_use]
     pub fn warmup(
         &self,
@@ -584,7 +537,6 @@ impl ResponsesAttemptFactory {
         attempt
     }
 
-    /// Builds a replayable `response.create` attempt.
     #[must_use]
     pub fn generation(
         &self,
@@ -611,7 +563,6 @@ impl ResponsesAttemptFactory {
         attempt
     }
 
-    /// Builds a replayable `response.compact` attempt.
     #[must_use]
     pub fn compaction(
         &self,

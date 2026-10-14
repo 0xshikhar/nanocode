@@ -1,6 +1,6 @@
 import { retryAfterAdvice } from "./retry-after.mjs";
 
-/** Pull-based fetch ownership. Successful Responses bodies are never buffered. */
+
 export function createResponsesHttp(open) {
   const requests = new Map();
   let nextHandle = 1;
@@ -29,7 +29,7 @@ export function createResponsesHttp(open) {
           reasoning_included: response.headers.has("x-reasoning-included"),
           turn_state: response.headers.get("x-codex-turn-state") });
       });
-      // Rust can drop the request before ever awaiting readiness.
+
       void entry.ready.catch(() => {});
       return handle;
     },

@@ -1,5 +1,3 @@
-//! Typed request, event, and item model for the Responses protocol.
-
 mod content;
 #[doc(hidden)]
 pub mod image_reference;

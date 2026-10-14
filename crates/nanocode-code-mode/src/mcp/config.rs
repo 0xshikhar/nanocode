@@ -11,17 +11,15 @@ use serde_json::Value;
 const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_mins(5);
 
-/// Model-facing surfaces on which one MCP server's tools are available.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum McpToolExposure {
-    /// Discover tools through `tool_search` and call them from Code Mode.
     #[default]
     DeferredAndCodeMode,
-    /// Discover tools through `tool_search`, but omit them from Code Mode.
+
     DeferredOnly,
-    /// Expose tools only inside Code Mode, without provider-native discovery.
+
     CodeModeOnly,
-    /// Keep the server connected without exposing or dispatching its tools.
+
     Hidden,
 }
 
@@ -39,7 +37,6 @@ impl McpToolExposure {
     }
 }
 
-/// One MCP server transport and its lifecycle limits.
 #[derive(Clone)]
 pub struct McpServer {
     pub(crate) transport: McpTransport,
@@ -55,27 +52,20 @@ pub struct McpServer {
     pub(crate) unsupported_option: Option<&'static str>,
 }
 
-/// Creates and reconciles protocol-level MPP credentials for paid MCP calls.
 #[async_trait]
 pub trait McpPaymentProvider: Send + Sync {
-    /// Prepares one payment-required payload, or returns `None` when none of
-    /// its challenges are supported.
     async fn prepare(
         &self,
         payment_required: &Value,
     ) -> Result<Option<Box<dyn McpPendingPayment>>, String>;
 }
 
-/// One prepared MCP payment whose provider lifecycle follows request delivery.
 #[async_trait]
 pub trait McpPendingPayment: Send {
-    /// Returns the credential to attach to request metadata.
     fn credential(&self) -> &Value;
 
-    /// Commits provider state after the paid retry succeeds.
     async fn commit(self: Box<Self>) -> Result<(), String>;
 
-    /// Rolls provider state back after the credential was not sent or was rejected.
     async fn rollback(self: Box<Self>) -> Result<(), String>;
 }
 
@@ -101,7 +91,6 @@ pub(crate) enum SecretSource {
 }
 
 impl McpServer {
-    /// Creates a local MCP server launched over stdio.
     #[must_use]
     pub fn stdio(command: impl Into<String>) -> Self {
         Self {
@@ -124,7 +113,6 @@ impl McpServer {
         }
     }
 
-    /// Creates a remote MCP server using the Streamable HTTP transport.
     #[must_use]
     pub fn http(url: impl Into<String>) -> Self {
         Self {
@@ -146,76 +134,60 @@ impl McpServer {
         }
     }
 
-    /// Sets the source description included in `tool_search` instructions.
     #[must_use]
     pub fn description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
         self
     }
 
-    /// Sets the maximum duration for initialize and initial discovery.
     #[must_use]
     pub const fn startup_timeout(mut self, timeout: Duration) -> Self {
         self.startup_timeout = timeout;
         self
     }
 
-    /// Sets the maximum duration of one remote tool call.
     #[must_use]
     pub const fn tool_timeout(mut self, timeout: Duration) -> Self {
         self.tool_timeout = timeout;
         self
     }
 
-    /// Declares that every tool exposed by this server is safe to call in parallel.
-    ///
-    /// This is disabled by default. Individual tools may still opt in through
-    /// MCP's `annotations.readOnlyHint` metadata.
     #[must_use]
     pub const fn supports_parallel_tool_calls(mut self, supports: bool) -> Self {
         self.supports_parallel_tool_calls = supports;
         self
     }
 
-    /// Declares specific remote tools safe to call concurrently.
-    ///
-    /// This supplements MCP's `annotations.readOnlyHint` without opting every
-    /// tool on the server into parallel execution.
     #[must_use]
     pub fn parallel_tools(mut self, tools: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.parallel_tools = tools.into_iter().map(Into::into).collect();
         self
     }
 
-    /// Selects whether this server's tools are deferred, nested in Code Mode, both, or hidden.
     #[must_use]
     pub const fn tool_exposure(mut self, exposure: McpToolExposure) -> Self {
         self.tool_exposure = exposure;
         self
     }
 
-    /// Restricts discovery to the named remote tools.
     #[must_use]
     pub fn enabled_tools(mut self, tools: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.enabled_tools = Some(tools.into_iter().map(Into::into).collect());
         self
     }
 
-    /// Excludes the named remote tools from discovery.
     #[must_use]
     pub fn disabled_tools(mut self, tools: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.disabled_tools = tools.into_iter().map(Into::into).collect();
         self
     }
 
-    /// Enables protocol-level paid tool retries for this MCP server.
     #[must_use]
     pub fn payment_provider(mut self, provider: Arc<dyn McpPaymentProvider>) -> Self {
         self.payment = Some(provider);
         self
     }
 
-    /// Adds one argument to a stdio server command.
     #[must_use]
     pub fn arg(mut self, argument: impl Into<String>) -> Self {
         match &mut self.transport {
@@ -225,7 +197,6 @@ impl McpServer {
         self
     }
 
-    /// Adds arguments to a stdio server command.
     #[must_use]
     pub fn args(mut self, arguments: impl IntoIterator<Item = impl Into<String>>) -> Self {
         match &mut self.transport {
@@ -237,7 +208,6 @@ impl McpServer {
         self
     }
 
-    /// Adds an explicit environment value to a stdio server process.
     #[must_use]
     pub fn env(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         match &mut self.transport {
@@ -249,7 +219,6 @@ impl McpServer {
         self
     }
 
-    /// Sets the working directory for a stdio server process.
     #[must_use]
     pub fn cwd(mut self, cwd: impl Into<PathBuf>) -> Self {
         match &mut self.transport {
@@ -259,7 +228,6 @@ impl McpServer {
         self
     }
 
-    /// Sets a Streamable HTTP bearer token directly.
     #[must_use]
     pub fn bearer_token(mut self, token: impl Into<String>) -> Self {
         match &mut self.transport {
@@ -271,7 +239,6 @@ impl McpServer {
         self
     }
 
-    /// Resolves a Streamable HTTP bearer token from an environment variable.
     #[must_use]
     pub fn bearer_token_env(mut self, variable: impl Into<String>) -> Self {
         match &mut self.transport {
@@ -283,7 +250,6 @@ impl McpServer {
         self
     }
 
-    /// Adds a fixed Streamable HTTP header.
     #[must_use]
     pub fn header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         match &mut self.transport {
@@ -295,7 +261,6 @@ impl McpServer {
         self
     }
 
-    /// Resolves a Streamable HTTP header value from an environment variable.
     #[must_use]
     pub fn header_env(mut self, name: impl Into<String>, variable: impl Into<String>) -> Self {
         match &mut self.transport {

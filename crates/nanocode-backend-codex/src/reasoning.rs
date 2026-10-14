@@ -1,17 +1,12 @@
-//! Request-level effort and trusted, harness-authored overrides for one context window.
-
 use crate::client::Thinking;
 use serde::{Deserialize, Serialize};
 
-/// This sidecar is durable harness metadata, never reconstructed from provider items.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) struct ReasoningState {
     pin: ReasoningPin,
     latest_override: Option<AuthoredOverride>,
 }
 
-/// Position and value are checked against the retained history when restoring.
-/// Provider configuration items never create this provenance record.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 struct AuthoredOverride {
     history_index: usize,
@@ -32,7 +27,6 @@ enum ReasoningPin {
 
 #[cfg(feature = "openai")]
 impl ReasoningState {
-
     pub(crate) fn validate(
         &self,
         history: &[crate::client::responses::ResponseItem],
@@ -65,8 +59,6 @@ impl ReasoningState {
         Ok(())
     }
 
-    /// Tool-call repair preserves configuration items and their relative order,
-    /// but can add or remove tool outputs before the authored item.
     pub(crate) fn reconcile_history_repair<'a, 'b>(
         &mut self,
         before: impl Iterator<Item = &'a crate::client::responses::ResponseItem>,
@@ -89,7 +81,6 @@ impl ReasoningState {
         }
     }
 
-    /// Read-only lookup: a failed compaction must not change the live baseline.
     pub(crate) fn request_effort(
         &self,
         model: crate::client::Model,
@@ -134,7 +125,6 @@ impl ReasoningState {
         selected
     }
 
-    /// Called after user/steering input and before persisting the sampling boundary.
     pub(crate) fn sampling_update(
         &mut self,
         model: crate::client::Model,

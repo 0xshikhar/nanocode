@@ -11,8 +11,8 @@ import {
 import { namedTool } from "./namedTool.mjs";
 import { createProcessOutput } from "./processOutput.mjs";
 
-/** Native, explicitly authorized host execution. The workspace is the initial cwd,
- * not an OS sandbox. Credentials from the embedding process are never inherited. */
+
+
 export async function createNodeProcessTools({
   workspace,
   onActivity = () => {},
@@ -28,8 +28,8 @@ export async function createNodeProcessTools({
       .map((key) => [key, process.env[key]]),
   );
   if (process.platform === "darwin") {
-    // Finder launches apps with a minimal PATH. Discover common installations
-    // without sourcing shell profiles or importing their environment secrets.
+
+
     const candidates = [
       "/opt/homebrew/bin",
       "/usr/local/bin",
@@ -61,9 +61,9 @@ export async function createNodeProcessTools({
         kill(record, signal);
         return;
       } catch (error) {
-        // Darwin can briefly return EPERM during process-group startup/reaping
-        // before Node has delivered the close event. Bound retries regardless
-        // of that event's timing; still report a persistent permission refusal.
+
+
+
         if (process.platform !== "darwin" || error.code !== "EPERM" || attempt === 4)
           throw error;
         await delay(25);
@@ -77,15 +77,15 @@ export async function createNodeProcessTools({
         record.closed,
         delay(1_500, undefined, { ref: false }),
       ]);
-      // Kill descendants too, even if the shell itself exited first.
+
       await stopGroup(record, "SIGKILL");
       await record.closed;
       await record.output.close();
       sessions.delete(record.id);
       processes.delete(record);
     })().catch(error => {
-      // Keep the ownership record and allow cleanup to be attempted again after
-      // a transient refusal; never acknowledge stopped work on a failed kill.
+
+
       record.stopping = undefined;
       throw error;
     }));
@@ -110,7 +110,7 @@ export async function createNodeProcessTools({
     try {
       onActivity(event);
     } catch {
-      /* Observers cannot interrupt process cleanup. */
+
     }
   };
   const read = async (record, input, signal, maximumWait = 30_000) => {
@@ -146,7 +146,7 @@ export async function createNodeProcessTools({
       } else result.session_id = record.id;
       return result;
     } finally {
-      // A completed process must not retain a long-poll timer or its abort listener.
+
       timer.abort();
       record.reading = false;
     }
@@ -320,13 +320,13 @@ function integer(value, fallback, minimum, maximum) {
   return value;
 }
 
-/** Collection failures leave individual facts absent. Never run commands or expose host paths. */
+
 async function observeResources(workspace) {
   const resources = { observed_at_ms: Date.now() };
   try { resources.cpu_logical_count = availableParallelism(); } catch {}
   try { resources.memory_total_bytes = totalmem(); } catch {}
-  // Node freemem is free memory, not the OS's reclaimable available memory.
-  // Keep its distinct meaning rather than pretending it is available capacity.
+
+
   try { if (process.platform !== "win32") resources.load_average_1m = loadavg()[0]; } catch {}
   try {
     const disk = await statfs(workspace);

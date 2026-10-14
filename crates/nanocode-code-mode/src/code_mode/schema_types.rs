@@ -1,19 +1,14 @@
-// Ported from openai/codex 36430b36881cf5c289cb48e671cfc9e8b542ae7b.
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 
 use super::normalize_identifier as normalize_code_mode_identifier;
 
-// Expose one nested recursive shape, then fall back to `unknown` on the next
-// occurrence so generated tool declarations remain finite.
 const MAX_LOCAL_REF_EXPANSIONS_PER_PATH: usize = 2;
-// Bound repeated refs and DAG fan-out separately from cycle depth so one
-// compact schema cannot expand into an arbitrarily large model-visible item.
+
 const MAX_TOTAL_LOCAL_REF_EXPANSIONS: usize = 32;
-// Bound individual schema rendering before assembling the final declaration.
+
 const MAX_RENDERED_SCHEMA_BYTES: usize = 16_000;
-// Charge intermediate render strings as they are built so repeated local refs
-// cannot allocate unbounded expanded copies before the final schema cap runs.
+
 const MAX_RENDER_WORK_BYTES: usize = MAX_RENDERED_SCHEMA_BYTES * 4;
 
 pub fn render_json_schema_to_typescript(schema: &JsonValue) -> String {
@@ -51,8 +46,6 @@ impl<'a> JsonSchemaTypeRenderer<'a> {
             return "unknown".to_string();
         }
 
-        // A nested `$id` starts a new schema resource. Fragment-only refs below
-        // it are scoped to that resource, not to the outer document root.
         let enters_nested_schema_resource = !std::ptr::eq(schema, self.root)
             && schema
                 .as_object()
@@ -519,8 +512,7 @@ fn json_literal_serialization_upper_bound(value: &JsonValue) -> usize {
         JsonValue::Bool(false) => 5,
         JsonValue::Bool(true) => 4,
         JsonValue::Number(number) => number.to_string().len(),
-        // JSON escaping can expand one UTF-8 byte to at most one six-byte
-        // Unicode escape, so this bounds allocation before serialization.
+
         JsonValue::String(string) => string.len().saturating_mul(6).saturating_add(2),
         JsonValue::Array(values) => values.iter().fold(2, |size, value| {
             size.saturating_add(1)
