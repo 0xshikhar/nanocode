@@ -761,7 +761,8 @@ pub(super) fn restored_session(
     let terminal = matches!(agent.status, AgentStatus::Closing | AgentStatus::Closed);
     let running = !terminal
         && (agent.turn_in_flight
-            || matches!(agent.status, AgentStatus::Running | AgentStatus::Pending));
+            || matches!(agent.status, AgentStatus::Running | AgentStatus::Pending)
+            || (matches!(agent.status, AgentStatus::Interrupted) && agent.resume_attempts > 0));
 
     let accepted = running.then_some(agent.accepted_output).flatten();
     let in_flight = running && accepted.is_none();

@@ -104,7 +104,15 @@ pub(super) enum SubmissionOutcome {
     Superseded,
 }
 
-type RestorationOutcome = watch::Receiver<Option<Result<(), String>>>;
+#[derive(Clone)]
+enum RestorationState {
+    Loading,
+    Resuming,
+    Ready,
+    Failed(String),
+}
+
+type RestorationOutcome = watch::Receiver<RestorationState>;
 
 pub struct Registry {
     session_handles: std::sync::RwLock<HashMap<String, AgentHandle>>,
@@ -1244,7 +1252,7 @@ impl Registry {
             return;
         };
         let root = handle.session_id().to_owned();
-        let (ready, gate) = tokio::sync::watch::channel(None);
+        let (ready, gate) = tokio::sync::watch::channel(RestorationState::Loading);
         {
             let mut restored = self
                 .restored
@@ -1285,13 +1293,14 @@ impl Registry {
                 Ok(_) => {}
                 Err(error) => {
                     tracing::warn!(%error, %root, "could not restore durable subagent task tree");
-                    let _ = ready.send(Some(Err(format!(
+                    let _ = ready.send(RestorationState::Failed(format!(
                         "could not restore subagent journal for {root}: {error}"
-                    ))));
+                    )));
                     return;
                 }
             }
 
+            let _ = ready.send(RestorationState::Resuming);
             registry
                 .announce_restored_completions(&root, &completed)
                 .await;
@@ -1299,9 +1308,13 @@ impl Registry {
             for (id, result) in registry.resume_interrupted(&root).await {
                 if let Err(error) = result {
                     tracing::warn!(%id, %error, "could not resume restored subagent");
+                    let _ = ready.send(RestorationState::Failed(format!(
+                        "could not resume restored subagent {id}: {error}"
+                    )));
+                    return;
                 }
             }
-            let _ = ready.send(Some(Ok(())));
+            let _ = ready.send(RestorationState::Ready);
         }));
     }
 
@@ -1344,14 +1357,20 @@ impl Registry {
             .cloned();
         if let Some(mut gate) = gate {
             let outcome = gate
-                .wait_for(|outcome| outcome.is_some())
+                .wait_for(|outcome| {
+                    matches!(
+                        outcome,
+                        RestorationState::Ready | RestorationState::Failed(_)
+                    )
+                })
                 .await
                 .map_err(|_| {
                     std::io::Error::other("subagent journal restoration ended without an outcome")
                 })?
-                .clone()
-                .expect("restoration outcome is available");
-            outcome.map_err(std::io::Error::other)?;
+                .clone();
+            if let RestorationState::Failed(error) = outcome {
+                return Err(std::io::Error::other(error));
+            }
         }
         Ok(())
     }
@@ -1482,7 +1501,7 @@ impl Registry {
             .filter(|(root, _)| {
                 restored
                     .get(root)
-                    .is_none_or(|gate| matches!(&*gate.borrow(), Some(Ok(()))))
+                    .is_none_or(|gate| matches!(&*gate.borrow(), RestorationState::Ready))
             })
             .collect()
     }
@@ -2375,7 +2394,12 @@ impl Registry {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(root_session_id)
-            .is_some_and(|gate| !matches!(&*gate.borrow(), Some(Ok(()))));
+            .is_some_and(|gate| {
+                !matches!(
+                    &*gate.borrow(),
+                    RestorationState::Resuming | RestorationState::Ready
+                )
+            });
         if restoring {
             return Err(std::io::Error::other(
                 "subagent task tree is still restoring",
@@ -2723,9 +2747,8 @@ impl Registry {
             let settled = revision.unwrap_or(session.next_instruction_revision);
             session.settled_revision = Some(settled);
 
-            let completion = (session.status.wakes_parent()
-                && session.descriptor.parent.is_none())
-            .then_some(settled);
+            let completion = (session.status.wakes_parent() && session.descriptor.parent.is_none())
+                .then_some(settled);
             if completion.is_some() {
                 session.pending_completion = completion;
             }
@@ -3025,8 +3048,7 @@ impl Registry {
                 .copied()
                 .filter(|id| {
                     scope.sessions.get_mut(id).is_some_and(|session| {
-                        session.status.wakes_parent()
-                            && session.pending_completion.take().is_some()
+                        session.status.wakes_parent() && session.pending_completion.take().is_some()
                     })
                 })
                 .collect::<Vec<_>>()
