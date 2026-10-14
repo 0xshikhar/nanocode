@@ -44,14 +44,21 @@ const RESUME_KEYS = new Set(["harness", "instructions"]);
 /**
  * @param {{ placement: string, createAgent(options: object): Promise<object>,
  *   loadCatalog(options: { module?: unknown }): Promise<readonly object[]> | readonly object[],
- *   requiresEvaluator?: () => boolean }} platform
+ *   requiresEvaluator?: () => boolean, connectCua?: () => Promise<object> }} platform
  */
 export function createNanocodexFactory(platform) {
   return async function create(options) {
     const initial = snapshotRuntime(options, platform);
     const catalog = catalogIndex(await platform.loadCatalog({ module: initial.module }));
     const defaults = resolveDefaults(initial, catalog);
-    const config = await prepareWorkspace(initial, platform);
+    let config = await prepareWorkspace(initial, platform);
+    if (initial.cua === undefined && platform.connectCua) {
+      const cua = await platform.connectCua();
+      try {
+        config = { ...config, cua: snapshotCua(cua), closeCua: () => cua.close() };
+        return createRuntime(config, catalog, defaults, platform);
+      } catch (error) { await cua.close(); throw error; }
+    }
     return createRuntime(config, catalog, defaults, platform);
   };
 }
@@ -109,6 +116,7 @@ function snapshotRuntime(options, platform) {
 // own sessions; closing one agent must not dispose another backend's provider.
 function snapshotCua(cua) {
   if (cua === undefined) return undefined;
+  if (cua === false) return Object.freeze([]);
   if (!cua || !Array.isArray(cua.tools)) throw new TypeError("cua must be a connected Sky tools capability");
   const names = new Set();
   return Object.freeze(cua.tools.map(tool => {
@@ -524,6 +532,7 @@ function createRuntime(config, catalog, defaults, platform) {
       await Promise.allSettled([...admissions]);
       const results = await Promise.allSettled([...owned].map((agent) => shutdownOwnedAgent(agent)));
       const errors = results.filter((result) => result.status === "rejected").map((result) => result.reason);
+      try { await config.closeCua?.(); } catch (error) { errors.push(error); }
       if (errors.length) throw new AggregateError(errors, "one or more Nanocodex agents failed to shut down");
     })();
   }

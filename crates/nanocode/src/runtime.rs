@@ -216,6 +216,7 @@ pub struct NanocodexBuilder {
     settings: Settings,
     workspace: Option<PathBuf>,
     cua: Option<crate::ComputerTools>,
+    cua_disabled: bool,
 }
 
 impl NanocodexBuilder {
@@ -241,6 +242,15 @@ impl NanocodexBuilder {
     #[must_use]
     pub fn cua(mut self, tools: crate::ComputerTools) -> Self {
         self.cua = Some(tools);
+        self.cua_disabled = false;
+        self
+    }
+
+    /// Explicitly omit local CUA for headless runtimes without a Sky installation.
+    #[must_use]
+    pub fn without_cua(mut self) -> Self {
+        self.cua = None;
+        self.cua_disabled = true;
         self
     }
 
@@ -325,19 +335,20 @@ impl NanocodexBuilder {
         }
         let workspace: Arc<Path> = resolve_workspace(self.workspace)?.into();
 
+        let cua = (!self.cua_disabled).then(|| Arc::new(tokio::sync::OnceCell::new_with(self.cua)));
         let ownership = Arc::new(Ownership::default());
         let mut recipes: Vec<(HarnessFamily, Recipe)> = Vec::new();
         #[cfg(feature = "openai")]
         if let Some(codex) = self.codex {
             recipes.push((
                 HarnessFamily::Codex,
-                codex_recipe(codex, &self.settings, &workspace, self.cua.clone()),
+                codex_recipe(codex, &self.settings, &workspace, cua.clone()),
             ));
         }
         if let Some(claude) = self.claude {
             recipes.push((
                 HarnessFamily::Claude,
-                claude_recipe(claude, &self.settings, &workspace, self.cua.clone()),
+                claude_recipe(claude, &self.settings, &workspace, cua.clone()),
             ));
         }
         let mut router = Harness::builder();
@@ -651,7 +662,7 @@ fn codex_recipe(
     harness: CodexHarness,
     runtime: &Settings,
     workspace: &Arc<Path>,
-    cua: Option<crate::ComputerTools>,
+    cua: Option<Arc<tokio::sync::OnceCell<crate::ComputerTools>>>,
 ) -> Recipe {
     let CodexHarness {
         client,
@@ -667,6 +678,20 @@ fn codex_recipe(
         let configure = configure.clone();
         let workspace = Arc::clone(&workspace);
         Box::pin(async move {
+            let cua = if let Some(cua) = cua {
+                Some(
+                    cua.get_or_try_init(|| async {
+                        crate::ComputerTools::connect(crate::ComputerConfig::installed()?).await
+                    })
+                    .await
+                    .map_err(|error: nanocode_tools::ToolError| {
+                        NanocodexError::InvalidRequest(error.to_string())
+                    })?
+                    .clone(),
+                )
+            } else {
+                None
+            };
             let HarnessModel::Codex(model) = spec.model else {
                 return Err(NanocodexError::InvalidRequest(
                     "the Codex harness requires a Codex model".into(),
@@ -708,7 +733,7 @@ fn claude_recipe(
     harness: ClaudeHarness,
     runtime: &Settings,
     workspace: &Arc<Path>,
-    cua: Option<crate::ComputerTools>,
+    cua: Option<Arc<tokio::sync::OnceCell<crate::ComputerTools>>>,
 ) -> Recipe {
     let ClaudeHarness {
         client,
@@ -724,6 +749,20 @@ fn claude_recipe(
         let configure = configure.clone();
         let workspace = Arc::clone(&workspace);
         Box::pin(async move {
+            let cua = if let Some(cua) = cua {
+                Some(
+                    cua.get_or_try_init(|| async {
+                        crate::ComputerTools::connect(crate::ComputerConfig::installed()?).await
+                    })
+                    .await
+                    .map_err(|error: nanocode_tools::ToolError| {
+                        NanocodexError::InvalidRequest(error.to_string())
+                    })?
+                    .clone(),
+                )
+            } else {
+                None
+            };
             if spec.model.family() != HarnessFamily::Claude {
                 return Err(NanocodexError::InvalidRequest(
                     "the Claude harness requires a Claude model".into(),

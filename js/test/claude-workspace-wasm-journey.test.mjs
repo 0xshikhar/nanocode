@@ -174,7 +174,7 @@ test('Node automatically opens the global workspace and rejects local overrides'
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
   const transport = NodeTransport.anthropic({ apiKey: 'synthetic', endpoint: `http://127.0.0.1:${server.address().port}/v1/messages` });
-  const options = { workspace: directory, model: 'claude-sonnet-4-6', backends: { claude: { transport, codeMode: false } } };
+  const options = { cua: false, workspace: directory, model: 'claude-sonnet-4-6', backends: { claude: { transport, codeMode: false } } };
   let nano, failure;
   try {
     await assert.rejects(NodeNanocodex.create({ ...options, backends: { claude: { ...options.backends.claude, workspace: directory } } }), /workspace belongs on Nanocodex.create/);

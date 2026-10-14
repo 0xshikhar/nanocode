@@ -55,6 +55,50 @@ pub struct ComputerConfig {
 }
 
 impl ComputerConfig {
+    /// Use the installed ChatGPT Node REPL and Codex Sky service on macOS.
+    pub fn installed() -> Result<Self, ToolError> {
+        if !cfg!(target_os = "macos") {
+            return Err(
+                "Default Sky CUA requires macOS; supply an explicit ComputerTools connection"
+                    .into(),
+            );
+        }
+        let home = std::env::var_os("HOME").ok_or("Default Sky CUA requires HOME")?;
+        let codex_home = std::env::var_os("CODEX_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(home).join(".codex"));
+        let base = PathBuf::from("/Applications/ChatGPT.app/Contents/Resources/cua_node");
+        let mut config = Self::new(base.join("bin/node_repl"));
+        let service = codex_home.join("computer-use/Codex Computer Use.app");
+        if !config.executable.is_file() || !service.is_dir() {
+            return Err("Default Sky CUA installation missing: expected ChatGPT.app/Contents/Resources/cua_node/bin/node_repl and CODEX_HOME/computer-use/Codex Computer Use.app".into());
+        }
+        config.environment = [
+            (
+                "NODE_REPL_NODE_PATH",
+                base.join("bin/node").into_os_string(),
+            ),
+            (
+                "NODE_REPL_NODE_MODULE_DIRS",
+                base.join("lib/node_modules").into_os_string(),
+            ),
+            (
+                "NODE_REPL_TRUSTED_CODE_PATHS",
+                base.join("lib/node_modules").into_os_string(),
+            ),
+            (
+                "NODE_REPL_TRUSTED_SERVICES",
+                OsString::from(r#"{"sky":"@oai/sky/service"}"#),
+            ),
+            ("SKY_CUA_SERVICE_PATH", service.into_os_string()),
+            ("CODEX_HOME", codex_home.into_os_string()),
+        ]
+        .into_iter()
+        .map(|(key, value)| (OsString::from(key), value))
+        .collect();
+        Ok(config)
+    }
+
     pub fn new(executable: impl Into<PathBuf>) -> Self {
         Self {
             executable: executable.into(),

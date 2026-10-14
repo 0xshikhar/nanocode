@@ -1,3 +1,4 @@
+import { connect as connectCua } from "./cua.mjs";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { open as openWorkspace } from "./workspace.mjs";
@@ -8,6 +9,7 @@ import { createNanocodexFactory } from "../runtime/nanocodex.mjs";
 /** Configures backends once; every spawn is an independent Node WASM root Agent. */
 export const create = createNanocodexFactory({
   placement: "node",
+  connectCua,
   createAgent,
   async prepareWorkspace({ workspace, filesystem, needsFiles }) {
     if (filesystem) return { workspace: filesystem.root, filesystem };

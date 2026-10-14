@@ -70,8 +70,8 @@ export type Options<Transport> = Readonly<{
   workspace?: string | undefined;
   /** Shared file capability. Node opens workspace automatically; Web API hosts supply an adapter. */
   filesystem?: Workspace | undefined;
-  /** Shared upstream Sky tools, additive to either backend. Caller owns closing the capability after nano.shutdown(). */
-  cua?: Readonly<{ tools: readonly import("../types.mjs").NamedTool[] }> | undefined;
+  /** Shared upstream Sky tools, additive to either backend. Node connects to the installed Sky provider by default and closes it on shutdown. Explicit connections remain caller-owned. Set false for a headless runtime. */
+  cua?: Readonly<{ tools: readonly import("../types.mjs").NamedTool[] }> | false | undefined;
   codeEvaluator?: CodeEvaluator | undefined;
   /** Compiled WASM module for Web API placements. */
   module?: unknown;

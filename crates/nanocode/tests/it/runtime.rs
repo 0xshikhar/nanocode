@@ -238,11 +238,12 @@ async fn journey() {
 
     // Backend and selection errors are reported before any provider request.
     assert!(matches!(
-        Nanocodex::builder().build(),
+        Nanocodex::builder().without_cua().build(),
         Err(NanocodexError::InvalidRequest(_))
     ));
     assert!(matches!(
         Nanocodex::builder()
+            .without_cua()
             .claude(claude.clone())
             .harness(HarnessFamily::Codex)
             .build(),
@@ -250,13 +251,18 @@ async fn journey() {
     ));
     assert!(matches!(
         Nanocodex::builder()
+            .without_cua()
             .claude(claude.clone())
             .model(ClaudeModel::Haiku45)
             .thinking(Thinking::High)
             .build(),
         Err(NanocodexError::InvalidRequest(_))
     ));
-    let claude_only = Nanocodex::builder().claude(claude.clone()).build().unwrap();
+    let claude_only = Nanocodex::builder()
+        .without_cua()
+        .claude(claude.clone())
+        .build()
+        .unwrap();
     assert_eq!(claude_only.harness(), HarnessFamily::Claude);
     assert_eq!(claude_only.model(), HarnessFamily::Claude.default_model());
     assert!(matches!(
@@ -273,6 +279,7 @@ async fn journey() {
     let (registry, _control, _updates) = channel(4);
     let handles: Handles = Arc::default();
     let nano = Nanocodex::builder()
+        .without_cua()
         .openai(CodexHarness::new(openai.clone()).tools_factory({
             let (handles, registry) = (Arc::clone(&handles), Arc::clone(&registry));
             move |handle| Ok(registry_tools(&handles, handle, Arc::clone(&registry)))
@@ -446,6 +453,7 @@ async fn journey() {
     let entered = Arc::new(tokio::sync::Notify::new());
     let release = Arc::new(tokio::sync::Semaphore::new(0));
     let barrier = Nanocodex::builder()
+        .without_cua()
         .claude(
             ClaudeHarness::new(claude_for_barrier)
                 .tools(echo_tools())

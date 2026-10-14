@@ -5,7 +5,13 @@ provider owns the JavaScript REPL, computer/browser APIs, tool descriptions,
 schemas, and confirmation behavior. This crate discovers and forwards its
 catalog; it does not install Sky or implement computer control.
 
-Connect once and add the tools to the shared native Rust runtime:
+The native Rust runtime enables CUA by default for both backends. It connects
+on the first spawn, using `/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl`
+and `$CODEX_HOME/computer-use/Codex Computer Use.app` (`CODEX_HOME` defaults to
+`~/.codex`). Missing installations produce an error; no installer runs. Headless embeddings
+can explicitly use `.without_cua()` (Rust) or `cua: false` (Node).
+
+An explicit connection overrides that default:
 
 ```rust,no_run
 use nanocode::{ComputerConfig, ComputerTools, Nanocodex, OpenAi};
@@ -32,12 +38,16 @@ Catalog changes require reconnecting. Cancellation after dispatch reports
 uncertain effects and requires a reset before further input; it does not replay
 input. Provider resources are retained by the connected transport's handles.
 
+Node `Nanocodex.create({ backends })` also enables the installed provider by
+default and closes its owned connection on shutdown. Browser/WASM placements
+cannot launch a local process and still require a supplied capability.
+
 The Node adapter is part of the main JS package:
 
 ```js
 import { Cua } from "nanocodex/node";
 
-const cua = await Cua.connect({ executable: "/path/to/upstream-provider" });
+const cua = await Cua.connect(); // Installed upstream provider; explicit launch options also accepted.
 // Pass `cua` alongside `backends` in your Nanocodex runtime options.
 // After nano.shutdown():
 await cua.close();

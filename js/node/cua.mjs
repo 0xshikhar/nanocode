@@ -1,9 +1,28 @@
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { namedTool } from "nanocodex-tools/named-tool";
 import { toolResult } from "nanocodex-tools/runtime/code-runtime";
 const interruptedGuidance = "Upstream/native input may still be running and effects are uncertain; do not replay uncertain input. Call cua_repl.js_reset, then inspect the surface before continuing. Reset does not prove earlier input stopped.";
 /** Discover the provider's actual MCP declarations before publishing tools. */
-export async function connectComputerTools(options) {
+export function installedConfig() {
+  if (process.platform !== "darwin") throw new Error("Default Sky CUA requires macOS; supply an explicit cua connection");
+  const base = "/Applications/ChatGPT.app/Contents/Resources/cua_node";
+  const home = process.env.CODEX_HOME || join(homedir(), ".codex");
+  const executable = join(base, "bin/node_repl");
+  const service = join(home, "computer-use/Codex Computer Use.app");
+  if (!existsSync(executable) || !existsSync(service)) throw new Error(`Default Sky CUA installation missing: expected ${executable} and ${service}`);
+  return { executable, environment: {
+    NODE_REPL_NODE_PATH: join(base, "bin/node"),
+    NODE_REPL_NODE_MODULE_DIRS: join(base, "lib/node_modules"),
+    NODE_REPL_TRUSTED_CODE_PATHS: join(base, "lib/node_modules"),
+    NODE_REPL_TRUSTED_SERVICES: JSON.stringify({ sky: "@oai/sky/service" }),
+    SKY_CUA_SERVICE_PATH: service,
+    CODEX_HOME: home,
+  } };
+}
+export async function connectComputerTools(options = installedConfig()) {
   if (!options?.executable) throw new TypeError("A trusted CUA executable is required");
   const providerProcess = new ComputerProcess(options.executable, options.args ?? [], options.environment ?? {});
   try {

@@ -312,6 +312,7 @@ async fn journey() {
     // No tools configured: both families get their canonical coding tools,
     // rooted at the one runtime workspace, behind Code Mode by default.
     let nano = Nanocodex::builder()
+        .without_cua()
         .openai(openai.clone())
         .claude(claude.clone())
         .workspace(&workspace)
@@ -362,6 +363,7 @@ async fn journey() {
     // Code Mode preserves canonical Claude file tools. A
     // configure hook cannot move an agent out of the runtime workspace.
     let configured = Nanocodex::builder()
+        .without_cua()
         .openai(CodexHarness::new(openai).configure(|builder| {
             Ok(builder.workspace(std::env::temp_dir().join("nanocode-elsewhere")))
         }))
@@ -402,6 +404,7 @@ async fn journey() {
 
     // An explicit empty selection still replaces the default catalog.
     let empty = Nanocodex::builder()
+        .without_cua()
         .claude(
             ClaudeHarness::new(claude.clone())
                 .tools(Tools::builder().without_defaults().build().unwrap()),
@@ -425,6 +428,7 @@ async fn journey() {
     // A workspace that is not a directory fails before any provider request.
     let before = transcript.lock().unwrap().len();
     let missing = Nanocodex::builder()
+        .without_cua()
         .claude(claude)
         .workspace(workspace.join("missing"))
         .build()

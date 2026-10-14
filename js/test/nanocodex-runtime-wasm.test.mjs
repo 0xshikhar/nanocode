@@ -132,13 +132,13 @@ test("Nanocodex.create configures backends once and owns independent roots", { t
     await rejects("ChatGPT subscription as Claude credential", async () => Transport.anthropic({ subscription }), /open ClaudeSubscription/);
     await rejects("createTools instance", () => Nanocodex.create({ backends: { codex: { ...backends.codex, tools: { attach() {}, close() {} } } } }), /createTools\(\) instance/);
 
-    const nano = await Nanocodex.create({ backends, instructions: "RUNTIME_INSTRUCTIONS", workspace: "/workspace/runtime" });
+    const nano = await Nanocodex.create({ cua: false, backends, instructions: "RUNTIME_INSTRUCTIONS", workspace: "/workspace/runtime" });
     runtimes.push(nano);
     observations.defaults = nano.defaults;
     assert.deepEqual(nano.defaults, { harness: "codex", model: "gpt-6.1-sol", thinking: nano.defaults.thinking }, "codex is the default family when configured; its catalog default model");
     assert.deepEqual([...nano.backends], ["codex", "claude"]);
 
-    const onlyCodex = await Nanocodex.create({ backends: { codex: backends.codex }, model: "gpt-6.1-sol", thinking: "low" });
+    const onlyCodex = await Nanocodex.create({ cua: false, backends: { codex: backends.codex }, model: "gpt-6.1-sol", thinking: "low" });
     runtimes.push(onlyCodex);
     await rejects("family without a backend", () => onlyCodex.spawn({ harness: "claude" }), /no claude backend is configured/);
     await rejects("spawn model of a missing family", () => onlyCodex.spawn({ model: "claude-sonnet-5-5" }), /no claude backend/);
