@@ -126,6 +126,7 @@ type ToolResultFuture = Pin<Box<dyn Future<Output = std::result::Result<ClaudeTo
 type Handler = Arc<dyn Fn(Value, ClaudeToolInvocation) -> ToolResultFuture + Send + Sync>;
 type ToolCleanup = Arc<dyn Fn() -> BackendFuture<()> + Send + Sync>;
 type CodeTurnCleanup = Arc<dyn Fn(ClaudeToolProgress) -> BackendFuture<()> + Send + Sync>;
+type NestedToolLookup = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 
 #[derive(Clone, Debug)]
 pub struct ClaudeToolInvocation {
@@ -201,6 +202,7 @@ pub struct ClaudeTools {
     adapter_cleanup: Vec<ToolCleanup>,
     adapter_shutdown: Vec<ToolCleanup>,
     pub(crate) code_turn_cleanup: Vec<CodeTurnCleanup>,
+    pub(crate) nested_tools: Option<NestedToolLookup>,
     #[cfg(not(target_family = "wasm"))]
     pub(crate) shared_catalog: Option<(nanocode_code_mode::Tools, std::path::PathBuf, AgentHandle)>,
 }
@@ -217,6 +219,7 @@ impl nanocode_tools::ToolCollection for ClaudeTools {
             self.tools.extend(replacement.tools);
             self.adapter_cleanup.extend(replacement.adapter_cleanup);
             self.code_turn_cleanup = replacement.code_turn_cleanup;
+            self.nested_tools = replacement.nested_tools;
             self.shared_catalog = replacement.shared_catalog;
             return Ok(self);
         }
@@ -1126,8 +1129,10 @@ impl ClaudeBuilder {
         let mut adapter_cleanup = Vec::new();
         let mut adapter_shutdown = Vec::new();
         let mut code_turn_cleanup = Vec::new();
+        let mut nested_tools = None;
         if let Some(factory) = &self.tools_factory {
             let native = factory(handle.clone())?;
+            nested_tools = native.nested_tools;
             custom_tool_search = native.custom_tool_search;
             self.client_tool_search |= custom_tool_search;
             self.tools.extend(native.tools);
@@ -1318,10 +1323,12 @@ impl ClaudeBuilder {
                 adapter_cleanup: Vec::new(),
                 adapter_shutdown: Vec::new(),
                 code_turn_cleanup: Vec::new(),
+                nested_tools: nested_tools.clone(),
                 #[cfg(not(target_family = "wasm"))]
                 shared_catalog: None,
             };
             let adapted = adapter(catalog)?;
+            nested_tools = adapted.nested_tools;
             for (definition, handler) in adapted.tools {
                 if definition.name.is_empty()
                     || !definition.input_schema.is_object()
@@ -1422,12 +1429,17 @@ impl ClaudeBuilder {
             child_workspace_init: self.child_workspace_init,
             system_resolver: self.system_resolver,
             host_context: self.host_context,
-            system: self.system,
+            system: if self.system.is_empty() {
+                crate::instructions::default_system(self.code_only)
+            } else {
+                self.system
+            },
             system_blocks: self.system_blocks,
             tools: definitions,
             adapter_cleanup,
             adapter_shutdown,
             code_turn_cleanup,
+            nested_tools,
             dynamic_tools: self.dynamic_tools,
             tool_hooks: self.tool_hooks,
             server_tools: self.server_tools,
@@ -2617,6 +2629,7 @@ struct State {
     discovered: Arc<Mutex<HashSet<String>>>,
     client_tool_search: bool,
     code_only: bool,
+    nested_tools: Option<NestedToolLookup>,
     parallel_tools: bool,
 
     parallel_safe_tools: HashSet<String>,

@@ -27,6 +27,8 @@ pub(super) fn install(
 
     let guard = Arc::new(RuntimeGuard(runtime.control()));
     let mut native = ClaudeTools::new();
+    let nested = Arc::clone(&runtime);
+    native.nested_tools = Some(Arc::new(move |name| nested.contains(name)));
     native.code_turn_cleanup.push(Arc::new(move |progress| {
         let guard = Arc::clone(&guard);
         Box::pin(async move {

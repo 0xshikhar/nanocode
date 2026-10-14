@@ -118,7 +118,19 @@ pub(crate) fn exec_description(
     has_deferred_tools: bool,
     code_mode_only: bool,
 ) -> String {
-    let mut description = EXEC_DESCRIPTION.to_owned();
+    let example = definitions
+        .iter()
+        .find(|spec| spec.name() == "exec_command")
+        .or_else(|| definitions.first())
+        .map(|spec| normalize_identifier(spec.name()));
+    let mut description = match example {
+        Some(example) if example != "exec_command" => EXEC_DESCRIPTION.replacen(
+            "tools.exec_command(...)",
+            &format!("tools.{example}(...)"),
+            1,
+        ),
+        _ => EXEC_DESCRIPTION.to_owned(),
+    };
     if code_mode_only {
         description.push_str("\n- `ALL_TOOLS` is the catalog of callable nested tools for this execution. All tools must be called through `tools` inside `exec`; only `exec` and `wait` are top-level entrypoints.");
     } else {

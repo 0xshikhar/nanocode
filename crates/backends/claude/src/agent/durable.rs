@@ -501,6 +501,24 @@ impl State {
                 )),
                 true,
             )
+        } else if self.code_only
+            && self
+                .nested_tools
+                .as_ref()
+                .is_some_and(|nested| nested(name))
+        {
+            let call = if name.contains('-') || name.starts_with(|c: char| c.is_ascii_digit()) {
+                format!("use the `tools` entry listed as {name} in `ALL_TOOLS`")
+            } else {
+                format!("`await tools.{name}(...)`")
+            };
+            ContentBlock::tool_result_content(
+                id,
+                ToolResultContent::Text(format!(
+                    "{name} is not a top-level tool; no handler was invoked. Only exec and wait are top-level. Call {name} from JavaScript inside exec through the global tools object: {call}."
+                )),
+                true,
+            )
         } else {
             ContentBlock::tool_result_content(
                 id,

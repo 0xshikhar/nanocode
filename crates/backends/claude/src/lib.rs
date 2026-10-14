@@ -9,6 +9,7 @@ mod auth;
 #[cfg(not(target_family = "wasm"))]
 mod claude_code;
 mod hooks;
+mod instructions;
 mod prompt;
 pub use hooks::{
     ClaudeHookFuture, ClaudeLifecycleDecision, ClaudeLifecycleEvent, ClaudeLifecycleInvocation,
