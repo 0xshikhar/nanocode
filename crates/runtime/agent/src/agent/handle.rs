@@ -21,6 +21,17 @@ pub(super) struct SeedState {
     in_flight: bool,
 }
 
+struct SeedClaim {
+    seed: Arc<std::sync::Mutex<SeedState>>,
+    completed: bool,
+}
+
+impl Drop for SeedClaim {
+    fn drop(&mut self) {
+        release_seed(&self.seed, self.completed);
+    }
+}
+
 fn release_seed(seed: &std::sync::Mutex<SeedState>, completed: bool) {
     let mut state = seed.lock().expect("transcript seed lock poisoned");
     state.in_flight = false;
@@ -420,15 +431,7 @@ impl Nanocodex {
                 events,
             })
             .await;
-        let BackendTurn { request_id, result } = match submitted {
-            Ok(turn) => turn,
-            Err(error) => {
-                if claimed {
-                    release_seed(&self.seed, false);
-                }
-                return Err(error);
-            }
-        };
+        let BackendTurn { request_id, result } = submitted?;
         let result = self.settle_seed(claimed, result);
         let turn_id = self.canonical_turn_id(turn_id, request_id.as_deref());
         Ok(Turn {
@@ -460,9 +463,29 @@ impl Nanocodex {
 
     pub async fn route_prompt(&self, prompt: impl Into<Prompt>) -> Result<PromptRoute> {
         let prompt = prompt.into();
+        self.route_prompt_request(PromptRequest::new(prompt)).await
+    }
+
+    pub async fn route_prompt_request(
+        &self,
+        request: impl Into<PromptRequest>,
+    ) -> Result<PromptRoute> {
+        let PromptRequest {
+            prompt,
+            request_id,
+            cancel_on_admission,
+        } = request.into();
         prompt
             .validate()
             .map_err(|error| NanocodexError::InvalidRequest(error.to_string()))?;
+        if request_id
+            .as_deref()
+            .is_some_and(|request_id| request_id.trim().is_empty())
+        {
+            return Err(NanocodexError::InvalidRequest(
+                "request ID must not be empty".to_owned(),
+            ));
+        }
         let key = BackendTurnKey(self.next_turn.fetch_add(1, Ordering::Relaxed));
         let (events, event_stream) = self.events.mirrored_channel();
         let turn_id = uuid::Uuid::now_v7().to_string();
@@ -473,14 +496,11 @@ impl Nanocodex {
             .route(BackendPrompt {
                 key,
                 prompt,
-                request_id: None,
-                cancel_on_admission: false,
+                request_id,
+                cancel_on_admission,
                 events,
             })
             .await;
-        if claimed && !matches!(routed, Ok(BackendPromptRoute::Started(_))) {
-            release_seed(&self.seed, false);
-        }
         match routed {
             Ok(BackendPromptRoute::Started(BackendTurn { request_id, result })) => {
                 let result = self.settle_seed(claimed, result);
@@ -568,7 +588,7 @@ impl Nanocodex {
             .clone()
     }
 
-    async fn claim_seed(&self, prompt: Prompt) -> Result<(Prompt, bool)> {
+    async fn claim_seed(&self, prompt: Prompt) -> Result<(Prompt, Option<SeedClaim>)> {
         let pending = {
             let state = self.seed.lock().expect("transcript seed lock poisoned");
             if state.in_flight {
@@ -578,7 +598,7 @@ impl Nanocodex {
             }
         };
         let Some(seed) = pending else {
-            return Ok((prompt, false));
+            return Ok((prompt, None));
         };
         let committed = match self.backend.transcript().await {
             Ok(transcript) => !transcript.is_empty(),
@@ -588,10 +608,10 @@ impl Nanocodex {
         let mut state = self.seed.lock().expect("transcript seed lock poisoned");
         if committed {
             state.transcript = None;
-            return Ok((prompt, false));
+            return Ok((prompt, None));
         }
         if state.in_flight || state.transcript.is_none() {
-            return Ok((prompt, false));
+            return Ok((prompt, None));
         }
         state.in_flight = true;
         drop(state);
@@ -599,21 +619,27 @@ impl Nanocodex {
             .into_iter()
             .chain(prompt.transcript().iter().cloned())
             .collect::<Vec<_>>();
-        Ok((prompt.with_transcript(transcript), true))
+        Ok((
+            prompt.with_transcript(transcript),
+            Some(SeedClaim {
+                seed: Arc::clone(&self.seed),
+                completed: false,
+            }),
+        ))
     }
 
     fn settle_seed(
         &self,
-        claimed: bool,
+        claimed: Option<SeedClaim>,
         result: super::backend::BackendFuture<Result<TurnResult>>,
     ) -> super::backend::BackendFuture<Result<TurnResult>> {
-        if !claimed {
+        let Some(mut claim) = claimed else {
             return result;
-        }
-        let seed = Arc::clone(&self.seed);
+        };
         Box::pin(async move {
             let outcome = result.await;
-            release_seed(&seed, outcome.is_ok());
+            claim.completed = outcome.is_ok();
+            drop(claim);
             outcome
         })
     }
