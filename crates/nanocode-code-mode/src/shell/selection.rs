@@ -200,6 +200,10 @@ fn ultimate_fallback_shell() -> Shell {
     }
 }
 
+pub(super) fn bash_shell() -> Option<Shell> {
+    shell(ShellType::Bash, None)
+}
+
 pub(super) fn get_shell_by_model_provided_path(path: &str) -> Shell {
     let path = Path::new(path);
     detect_shell_type(path)

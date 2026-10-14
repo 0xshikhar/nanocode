@@ -1,7 +1,6 @@
-//! Claude-style Bash capability adapter, not an ambient shell implementation.
+//! Claude-style Bash capability adapter backed by an injected executor.
 //!
-//! A host must inject an executor whose command execution is confined to its
-//! authorized sandbox. In particular the executor must enforce the requested
+//! A host supplies its authorized execution environment. The executor enforces the requested
 //! wall-clock deadline (including termination of the command and descendants)
 //! and bound output *while capturing it*. Truncating a returned value here is
 //! only a second line of defense; it cannot bound an executor's own memory use.
@@ -24,11 +23,11 @@ pub const MAX_TIMEOUT_MS: u64 = 600_000;
 /// One foreground command, with limits that the host executor must enforce.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BashRequest {
-    /// UTF-8 shell command, to interpret only inside the authorized sandbox.
+    /// UTF-8 shell command, to interpret in the host-authorized environment.
     pub command: String,
     /// Optional human-readable intent (never shell input).
     pub description: Option<String>,
-    /// Deadline including sandbox command termination and cleanup.
+    /// Deadline including command termination and cleanup.
     pub timeout_ms: u64,
     /// Maximum stdout bytes to capture before truncation.
     pub max_stdout_bytes: usize,
@@ -50,7 +49,7 @@ impl BashRequest {
     }
 }
 
-/// Bounded command result supplied by a sandbox executor.
+/// Bounded command result supplied by the executor.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BashResult {
     /// Captured UTF-8 stdout (lossy decoding, if needed, is the host's job).
@@ -78,13 +77,29 @@ pub trait SandboxBashExecutor: Send + Sync {
     ) -> impl std::future::Future<Output = Result<BashResult, String>> + Send;
 }
 
-/// A Claude Bash tool facade backed only by the supplied sandbox capability.
-pub struct ClaudeBash<E: SandboxBashExecutor> {
+/// Host-authorized command execution, local or isolated by the embedding host.
+/// Implementations bound capture and terminate commands on timeout/cancellation.
+pub trait BashExecutor: Send + Sync {
+    /// Execute a bounded foreground command.
+    fn execute(
+        &self,
+        request: BashRequest,
+    ) -> impl std::future::Future<Output = Result<BashResult, String>> + Send;
+}
+
+impl<E: SandboxBashExecutor> BashExecutor for E {
+    async fn execute(&self, request: BashRequest) -> Result<BashResult, String> {
+        SandboxBashExecutor::execute(self, request).await
+    }
+}
+
+/// A Claude Bash tool facade backed by the supplied execution capability.
+pub struct ClaudeBash<E: BashExecutor> {
     executor: E,
 }
 
-impl<E: SandboxBashExecutor> ClaudeBash<E> {
-    /// Install an explicitly host-authorized sandbox executor.
+impl<E: BashExecutor> ClaudeBash<E> {
+    /// Install a host-authorized executor.
     pub const fn new(executor: E) -> Self {
         Self { executor }
     }
@@ -94,7 +109,7 @@ impl<E: SandboxBashExecutor> ClaudeBash<E> {
     pub fn definitions() -> Vec<Value> {
         vec![json!({
             "name": "Bash",
-            "description": "Run a foreground command in the host-authorized sandbox. Background execution and sandbox bypass are unavailable.",
+            "description": "Run a foreground command in the host-authorized execution environment. Background execution and sandbox bypass are unavailable.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -110,7 +125,7 @@ impl<E: SandboxBashExecutor> ClaudeBash<E> {
         })]
     }
 
-    /// Validate a Bash invocation and delegate it to the injected sandbox.
+    /// Validate a Bash invocation and delegate it to the injected executor.
     ///
     /// The return value is JSON text containing `stdout`, `stderr`,
     /// `exit_code`, and `truncated`. Escaped JSON is under 64 KiB even for
@@ -195,7 +210,7 @@ impl<E: SandboxBashExecutor> ClaudeBash<E> {
         };
         let result = self.executor.execute(request).await.map_err(|e| {
             let (bounded, _) = cap_utf8(&e, MAX_STREAM_BYTES);
-            format!("sandbox executor: {bounded}")
+            format!("command executor: {bounded}")
         })?;
         let (stdout, stdout_cut) = cap_utf8(&result.stdout, MAX_STREAM_BYTES);
         let (stderr, stderr_cut) = cap_utf8(&result.stderr, MAX_STREAM_BYTES);
@@ -342,7 +357,7 @@ mod tests {
             .execute("Bash", json!({"command":"pwd"}))
             .await
             .unwrap_err();
-        assert!(error.starts_with("sandbox executor: failed"));
+        assert!(error.starts_with("command executor: failed"));
         assert!(error.len() < MAX_STREAM_BYTES + 40);
     }
 }

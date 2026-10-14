@@ -23,12 +23,7 @@ export type ToolFactoryContext = Readonly<{ harness: HarnessFamily; role: "root"
 /** Declarative tools are copied per Agent. A factory may return (or resolve) a fresh createTools() instance each call; the Agent host that claims it closes it. */
 export type ToolSource<Tools> = Tools | ((context: ToolFactoryContext) => Tools | Promise<Tools>);
 
-type BackendBase = {
-  /** true (default): only exec/wait reach the model. false: host tools are exposed directly. */
-  codeMode?: boolean | undefined;
-};
-
-export type CodexBackend<Transport> = Readonly<BackendBase & {
+export type CodexBackend<Transport> = Readonly<{
   transport: Transport;
   /** Omit for built-in coding tools; an explicit selection replaces them. */
   tools?: ToolSource<ToolConfiguration<SubagentTool>> | undefined;
@@ -43,7 +38,7 @@ export type CodexBackend<Transport> = Readonly<BackendBase & {
   codeEffectJournal?: CodeEffectJournal | undefined;
 }>;
 
-export type ClaudeBackend = Readonly<BackendBase & {
+export type ClaudeBackend = Readonly<{
   transport: ClaudeTransport;
   /** Omit for Read/Edit/Write/Glob/Grep. Explicit arrays replace defaults. Claude tool arrays only; createTools() runtimes are a Codex tool contract. */
   tools?: ToolSource<readonly ClaudeTool[]> | undefined;

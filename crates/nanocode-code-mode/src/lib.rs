@@ -146,7 +146,7 @@ pub use selection::{ToolSource, ToolsBuildError, ToolsBuilder};
     docsrs,
     doc(cfg(all(not(target_family = "wasm"), feature = "code-mode")))
 )]
-pub use shell::ambient_sensitive_environment;
+pub use shell::{ForegroundOutput, ambient_sensitive_environment, run_bash};
 #[cfg(feature = "workspace-runtime")]
 pub(crate) use standard::StandardTool;
 

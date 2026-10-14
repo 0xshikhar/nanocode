@@ -17,7 +17,7 @@ import type { Tools } from "../tools/Tools.mjs";
 export type Agent = DefaultAgent;
 /** Code Mode (exec/wait) by default; `direct` exposes host tools to the provider without code evaluation. Remote MCP requires Code Mode. */
 type ToolExposureOptions =
-  | { mcp?: false | undefined; toolMode?: "code-only" | "direct" | undefined }
+  | { mcp?: false | undefined; toolMode?: "code-only" | undefined }
   | { mcp: McpServers; toolMode?: "code-only" | undefined };
 
 /** Creates Rust/WASM in the current Web API host isolate. */

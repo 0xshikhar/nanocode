@@ -31,6 +31,7 @@ import {
 
 /** Creates the Rust/WASM Agent in the current Web API host isolate. */
 export async function create(options = {}) {
+  if (options?.toolMode !== undefined && options.toolMode !== "code-only") throw new TypeError("toolMode must be code-only; direct tools are no longer supported");
   if (options.harness === 'claude') return createClaude(options);
   if (options.harness !== undefined && options.harness !== 'codex') throw new TypeError('unsupported harness family');
   const internalRuntime = options[Symbol.for("nanocodex.browser.internalRuntime")];

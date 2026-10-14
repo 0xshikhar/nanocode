@@ -129,7 +129,7 @@ export function createBrowserHost(options?: {
   /** @internal Trusted durable effect receipts, not available inside guest code. */
   codeEffectJournal?: CodeEffectJournal;
   /** Code Mode by default; direct exposes host tools without evaluation and rejects MCP. */
-  toolMode?: "code-only" | "direct";
+  toolMode?: "code-only";
   /** @internal Live host lifecycle for Rust-owned subagents. */
   subagentRouting?: Pick<import('../runtime/subagent-routing.mjs').SubagentRouting, 'resolve' | 'bind'>;
   subagentSessions?: {

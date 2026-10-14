@@ -18,7 +18,7 @@ nanocode-tools.workspace = true
 async-trait.workspace = true
 futures-util.workspace = true
 js-sys.workspace = true
-nanocode = { workspace = true, features = ["claude"] }
+nanocode.workspace = true
 nanocode-claude.workspace = true
 nanocode-runtime.workspace = true
 reqwest.workspace = true

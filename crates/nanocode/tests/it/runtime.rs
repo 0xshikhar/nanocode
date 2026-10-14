@@ -439,46 +439,7 @@ async fn journey() {
         "SHUTDOWN joined owned roots (including a dropped handle) and routed children; later spawn/resume rejected"
     );
 
-    // Direct tool mode is real on both harnesses.
-    let direct = Nanocodex::builder()
-        .openai(
-            CodexHarness::new(openai)
-                .code_mode(false)
-                .tools(echo_tools()),
-        )
-        .claude(
-            ClaudeHarness::new(claude.clone())
-                .code_mode(false)
-                .tools(echo_tools()),
-        )
-        .build()
-        .unwrap();
-    for (model, transport) in [
-        (HarnessModel::Codex(Model::Sol), "responses"),
-        (HarnessModel::Claude(ClaudeModel::Sonnet55), "messages"),
-    ] {
-        let (agent, _events) = direct.spawn().model(model).build().await.unwrap();
-        agent
-            .prompt("[echo] call the tool directly")
-            .await
-            .unwrap()
-            .result()
-            .await
-            .unwrap();
-        let request = last(&transcript, transport);
-        assert!(
-            declares(&request, "runtime_echo"),
-            "{model} declares the tool directly"
-        );
-        assert!(
-            request.to_string().contains("echo:ping"),
-            "{model} returns the direct result"
-        );
-    }
-    println!("DIRECT_TOOLS Codex and Claude called runtime_echo as a direct provider tool");
     let claude_for_barrier = claude;
-
-    direct.shutdown().await.unwrap();
 
     // A shutdown cancelled while an agent's turn cleanup is still running
     // leaves that agent owned; the next call joins it.

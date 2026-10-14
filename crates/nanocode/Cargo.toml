@@ -19,24 +19,14 @@ rustdoc-args = ["-D", "warnings"]
 
 [features]
 default = ["durability", "mcp", "openai", "tools"]
-claude = [
-    "dep:nanocode-claude",
-    "dep:nanocode-claude-tools",
-    "nanocode-durability?/claude",
-    "nanocode-code-mode?/code-mode",
-]
-claude-tools = ["claude", "dep:nanocode-claude-tools", "nanocode-claude/tools"]
+claude-tools = []
 durability = ["dep:nanocode-durability", "openai"]
 mcp = ["tools", "nanocode-code-mode/mcp"]
 observability = ["dep:nanocode-observability"]
 openai = ["nanocode-runtime/openai", "nanocode-codex/client"]
 realtime = ["openai", "nanocode-codex/realtime"]
 tools = ["oai-tools"]
-oai-tools = [
-    "dep:nanocode-codex-tools",
-    "dep:nanocode-code-mode",
-    "nanocode-code-mode/attachment",
-]
+oai-tools = []
 workspace-tools = [
     "tools",
     "nanocode-code-mode/workspace-runtime",
@@ -44,19 +34,19 @@ workspace-tools = [
 
 [dependencies]
 nanocode-tools.workspace = true
-nanocode-codex-tools = { workspace = true, optional = true }
+nanocode-codex-tools = { workspace = true }
 nanocode-runtime = { path = "../nanocode-runtime", version = "0.6.7", default-features = false }
-nanocode-claude = { workspace = true, optional = true }
-nanocode-durability = { workspace = true, optional = true }
+nanocode-claude = { workspace = true }
+nanocode-durability = { workspace = true, optional = true, features = ["claude"] }
 nanocode-codex = { path = "../nanocode-codex", version = "0.6.7", default-features = false, features = ["events"] }
-nanocode-code-mode = { path = "../nanocode-code-mode", version = "0.6.7", default-features = false, optional = true }
+nanocode-code-mode = { path = "../nanocode-code-mode", version = "0.6.7", default-features = false, features = ["code-mode", "attachment"] }
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 # Native runtime Claude agents default to the canonical Claude file tools.
-nanocode-claude = { workspace = true, optional = true, features = ["tools"] }
-nanocode-claude-tools = { workspace = true, optional = true }
+nanocode-claude = { workspace = true, features = ["tools"] }
+nanocode-claude-tools = { workspace = true }
 nanocode-observability = { workspace = true, optional = true }
 
 [dev-dependencies]

@@ -51,11 +51,11 @@ them (spawn > harness > runtime). The `workspace` is one runtime-wide
 directory shared by every agent of either family:
 
 ```rust,no_run
-# #[cfg(all(feature = "claude", feature = "openai"))]
+# #[cfg(feature = "openai")]
 # async fn mixed() -> Result<(), Box<dyn std::error::Error>> {
 use nanocode::{
     ClaudeHarness, ClaudeModel, HarnessFamily, Model, Nanocodex, OpenAi, Thinking, Tools,
-    claude::ClaudeClient,
+    ClaudeClient,
 };
 
 let openai = OpenAi::new(std::env::var("OPENAI_API_KEY")?)?;
@@ -65,7 +65,6 @@ let nano = Nanocodex::builder()
     .claude(
         ClaudeHarness::new(claude)
             .tools(Tools::builder().without_defaults().build()?)
-            .code_mode(false)
             .configure(|builder| Ok(builder.max_tokens(8_192))),
     )
     .harness(HarnessFamily::Codex)
@@ -100,21 +99,17 @@ Selection rules:
 Tools belong to each harness and are materialized separately for every agent.
 Without a tool selection each family gets its own canonical coding tools,
 rooted at the runtime workspace: Codex the standard Codex tools
-(`exec_command`, `write_stdin`, `apply_patch`, `view_image`), and Claude the
+(`exec_command`, `write_stdin`, `apply_patch`, `update_plan`, `view_image`), and Claude the
 Claude Code file tools of `nanocode-claude-tools` (`Read`, `Edit`, `Write`,
-`Glob`, `Grep`), executed by the same `ClaudeWorkspaceFiles` implementation and
-keeping their Claude names, schemas and results. Claude gets no `Bash`, which
-requires a host sandbox executor. `tools`/`tools_factory` replace that default,
-and an empty selection installs no tools. Codex installs a configured [`Tools`]
-natively; Claude bridges it into its native client catalog. Either family's
-`code_mode(true)` (the default) exposes its tools, default or configured,
-through Code Mode's `exec` and `wait`, so Claude cells call
-`tools.Read({file_path})`; `code_mode(false)` exposes each tool as a direct
-provider tool, registering the default Claude file tools natively (freeform
-tools take their raw text in `input`; deferred or asynchronous tools are
-rejected for Claude direct mode). Claude Code Mode returns PDF document blocks
-from `Read` as a text notice; use direct mode for them. OpenAI-hosted web search
-and image generation have no local handler and are not bridged.
+`Glob`, `Grep`) plus `Bash`. Bash uses the shared native process runner with
+workspace cwd, session identity, bounded stdout/stderr, and a foreground timeout.
+It runs with host permissions; background commands and sandbox bypass are not supported.
+`tools`/`tools_factory` replace the defaults. Both families always expose `exec`
+and `wait`; selected tools are called inside JavaScript, such as
+`tools.Read({file_path})` or `tools.Bash({command: "pwd"})`. An empty selection
+still exposes `exec` and `wait`, with no nested tools. Claude Code Mode returns
+PDF document blocks from `Read` as a text notice. OpenAI-hosted web search and
+image generation have no local handler and are not bridged to Claude.
 
 `workspace` fixes the working directory, context root, tool root and rollout
 workspace of every agent the runtime constructs, including resumed sessions and
@@ -147,7 +142,7 @@ through the runtime's recipes, so a Codex parent can start a Claude child and
 the reverse:
 
 ```rust,no_run
-# #[cfg(all(feature = "claude", feature = "openai"))]
+# #[cfg(feature = "openai")]
 # fn subagents(openai: nanocode::OpenAi, claude: nanocode::claude::ClaudeClient) -> nanocode::agent::Result<nanocode::Nanocodex> {
 use std::sync::Arc;
 use nanocode::{ClaudeHarness, CodexHarness, Nanocodex, Tools};
@@ -227,12 +222,12 @@ lifecycle and durability extension:
 
 ```toml
 [dependencies]
-nanocode = { version = "0.6.7", features = ["claude"] }
+nanocode = "0.6.7"
 reqwest = "0.13"
 ```
 
 ```rust,no_run
-# #[cfg(all(feature = "claude", feature = "durability"))]
+# #[cfg(feature = "durability")]
 # async fn claude_turn() -> Result<(), Box<dyn std::error::Error>> {
 use nanocode::{Agent, Claude, DurableAgentExt};
 use nanocode::claude::ClaudeClient;
@@ -257,15 +252,13 @@ agent.shutdown().await?;
 
 `MemoryStore` retains state in memory; use a persistent host store when state
 must survive process restarts. The facade automatically enables the Claude
-adapter whenever `claude` and `durability` are enabled together.
+adapter when `durability` is enabled.
 
-Default features remain `durability`, `mcp`, `openai`, and `tools`. For the minimal
-Claude provider path, use `default-features = false, features = ["claude"]`.
-Add `durability` for the extension above; durability retains its existing
-OpenAI dependency. Add `claude-tools` to expose Claude's optional tool adapters
-through `nanocode::claude_tools`. The separate `workspace-tools` feature enables
-the OpenAI workspace runtime. The reusable [`Nanocodex`] runtime is available on native
-targets; WebAssembly hosts use [`Agent`] and [`Harness`].
+Default features remain `durability`, `mcp`, `openai`, and `tools`. Claude and
+Code Mode are always available; no `claude` feature is required. With
+`default-features = false`, Claude remains available. Native Claude adapters
+are exported through `nanocode::claude_tools`. The reusable [`Nanocodex`]
+runtime is available on native targets; WebAssembly hosts use [`Agent`] and [`Harness`].
 
 ## Host-composed harnesses
 
@@ -275,13 +268,13 @@ router. Each recipe keeps its concrete provider, service type, authentication,
 tools and execution policy until `.build()` returns the common `(Agent, AgentEvents)`:
 
 ```rust,no_run
-# #[cfg(all(feature = "claude", feature = "openai"))]
+# #[cfg(feature = "openai")]
 # async fn mixed() -> Result<(), Box<dyn std::error::Error>> {
 use nanocode::{
     Agent, Claude, ClaudeModel, DurableAgentExt as _, Harness, HarnessFamily, HarnessModel,
     Model, OpenAi,
     agent::SpawnOptions,
-    claude::ClaudeClient,
+    ClaudeClient,
 };
 
 let openai = OpenAi::new(std::env::var("OPENAI_API_KEY")?)?;

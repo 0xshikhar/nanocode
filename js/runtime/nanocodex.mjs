@@ -16,7 +16,7 @@ const FAMILIES = Object.freeze(["codex", "claude"]);
 const RUNTIME_KEYS = new Set(["backends", "harness", "model", "thinking", "instructions", "workspace", "filesystem", "codeEvaluator", "module"]);
 const RUNTIME_REJECTED = Object.freeze({
   tools: "tools belong to each backend: backends.codex.tools / backends.claude.tools",
-  codeMode: "codeMode belongs to each backend",
+  codeMode: "Code Mode is always enabled",
   transport: "transports belong to backends.codex / backends.claude",
   auth: "Claude authentication belongs to backends.claude: Transport.anthropic()",
   harnesses: "Nanocodex.create wires alternate-family children from its backends",
@@ -25,7 +25,7 @@ const RUNTIME_REJECTED = Object.freeze({
   durabilityId: "durable sessions are per Agent; use Agent.create with durability",
   resume: "use nano.resume(checkpoint)",
 });
-const SHARED_BACKEND_KEYS = ["transport", "tools", "codeMode"];
+const SHARED_BACKEND_KEYS = ["transport", "tools"];
 const CODEX_KEYS = new Set([...SHARED_BACKEND_KEYS, "reasoningMode", "fastMode",
   "instantToolSteering", "rawApiEvents", "additionalInstructions", "mcp", "executionEnvironment",
   "beforeCompaction", "codeEffectJournal"]);
@@ -79,8 +79,7 @@ function snapshotRuntime(options, platform) {
   if (options.codeEvaluator !== undefined && typeof options.codeEvaluator !== "function") {
     throw new TypeError("codeEvaluator must be a function");
   }
-  const codeMode = Object.values(backends).some((backend) => backend.codeMode);
-  if (codeMode && options.codeEvaluator === undefined && platform.requiresEvaluator?.()) {
+  if (options.codeEvaluator === undefined && platform.requiresEvaluator?.()) {
     throw new TypeError("Code Mode in this " + platform.placement + " placement requires an explicit codeEvaluator, such as createQuickJsEvaluator()");
   }
   const filesystem = options.filesystem;
@@ -117,9 +116,6 @@ function snapshotShared(entry, family, keys) {
     if (key === "workspace" || key === "filesystem") throw new TypeError(key + " belongs on Nanocodex.create, shared by all harnesses");
     if (!keys.has(key)) throw new TypeError("unsupported backends." + family + " option: " + key);
   }
-  if (entry.codeMode !== undefined && typeof entry.codeMode !== "boolean") {
-    throw new TypeError("backends." + family + ".codeMode must be a boolean");
-  }
   const extras = {};
   for (const [key, value] of Object.entries(entry)) {
     if (!SHARED_BACKEND_KEYS.includes(key) && value !== undefined) extras[key] = CAPABILITY_KEYS.has(key) ? value : plain(value);
@@ -127,7 +123,6 @@ function snapshotShared(entry, family, keys) {
   return {
     transport: entry.transport,
     tools: snapshotTools(entry.tools, family),
-    codeMode: entry.codeMode !== false,
     extras: Object.freeze(extras),
   };
 }
@@ -313,7 +308,7 @@ function childSelection(catalog, defaults, family) {
 }
 
 function toolMode(backend) {
-  return backend.codeMode ? "code-only" : "direct";
+  return "code-only";
 }
 
 /** One workspace is shared by every harness, root and child in this runtime. */
@@ -414,11 +409,6 @@ function createRuntime(config, catalog, defaults, platform) {
   const admissions = new Set();
   let closing;
 
-  for (const backend of Object.values(config.backends)) {
-    if (!backend.codeMode && platform.supportsDirectTools?.() === false) {
-      throw capabilityError("direct tools (codeMode: false) are unavailable in the " + platform.placement + " placement", "directTools");
-    }
-  }
 
   const owner = Object.freeze({ admit: (start) => admit(start) });
 

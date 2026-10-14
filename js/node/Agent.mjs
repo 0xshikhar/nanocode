@@ -29,6 +29,7 @@ let initializedWeb;
 let NodeNanocodex;
 
 export function create(options = {}) {
+  if (options?.toolMode !== undefined && options.toolMode !== "code-only") throw new TypeError("toolMode must be code-only; direct tools are no longer supported");
   if (options.harness === 'claude') return createClaude(options);
   if (options.harness !== undefined && options.harness !== 'codex') throw new TypeError('unsupported harness family');
   const {

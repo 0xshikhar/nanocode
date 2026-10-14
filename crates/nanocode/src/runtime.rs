@@ -1,14 +1,6 @@
 //! Reusable configured runtime: shared provider clients and per-harness
 //! recipes, constructing many isolated agents with one lifecycle owner.
 
-use std::{
-    future::Future,
-    path::{Path, PathBuf},
-    pin::pin,
-    sync::{Arc, Mutex, MutexGuard, PoisonError},
-};
-
-#[cfg(feature = "claude")]
 use crate::claude::{ClaudeBuilder, ClaudeClient};
 use crate::{
     Agent, AgentEvents, HarnessFamily, HarnessModel, NanocodexError, SessionCheckpoint, Thinking,
@@ -16,25 +8,26 @@ use crate::{
 };
 #[cfg(feature = "openai")]
 use crate::{CodexBuilder, OpenAi};
-#[cfg(feature = "oai-tools")]
 use nanocode_runtime::AgentHandle;
 use nanocode_runtime::{
     ModelTransport, SpawnOptions, WeakAgent,
     backend::{AgentFactory, AgentOwner, BackendFuture, adopt},
 };
+use std::{
+    future::Future,
+    path::{Path, PathBuf},
+    pin::pin,
+    sync::{Arc, Mutex, MutexGuard, PoisonError},
+};
 
-#[cfg(all(feature = "claude", feature = "oai-tools"))]
 mod claude_files;
-#[cfg(all(feature = "claude", feature = "oai-tools"))]
 mod claude_tools;
 
 type Result<T> = nanocode_runtime::Result<T>;
 type Recipe = Arc<dyn Fn(AgentSpec) -> BackendFuture<AgentResult> + Send + Sync>;
 #[cfg(feature = "openai")]
 type CodexHook = Arc<dyn Fn(CodexBuilder) -> Result<CodexBuilder> + Send + Sync>;
-#[cfg(feature = "claude")]
 type ClaudeHook = Arc<dyn Fn(ClaudeBuilder) -> Result<ClaudeBuilder> + Send + Sync>;
-#[cfg(feature = "oai-tools")]
 type ToolsFactory = Arc<
     dyn Fn(AgentHandle) -> std::result::Result<crate::Tools, nanocode_code_mode::ToolsBuildError>
         + Send
@@ -42,14 +35,11 @@ type ToolsFactory = Arc<
 >;
 
 /// Tool selection materialized independently for every agent.
-#[cfg(feature = "oai-tools")]
 #[derive(Clone)]
 enum AgentTools {
     Shared(crate::Tools),
     PerAgent(ToolsFactory),
 }
-
-#[cfg(feature = "oai-tools")]
 impl AgentTools {
     fn materialize(
         &self,
@@ -67,7 +57,6 @@ impl AgentTools {
 #[derive(Clone, Default)]
 struct Settings {
     instructions: Option<Arc<str>>,
-    #[cfg(feature = "oai-tools")]
     tools: Option<AgentTools>,
 }
 
@@ -75,7 +64,6 @@ impl Settings {
     fn or(self, fallback: &Self) -> Self {
         Self {
             instructions: self.instructions.or_else(|| fallback.instructions.clone()),
-            #[cfg(feature = "oai-tools")]
             tools: self.tools.or_else(|| fallback.tools.clone()),
         }
     }
@@ -99,10 +87,8 @@ macro_rules! tool_methods {
         /// natively; Claude bridges the same tools into its native client
         /// catalog. An empty selection installs no tools. Without a selection,
         /// Codex uses the standard Codex tools and Claude the canonical Claude
-        /// file tools (`Read`, `Edit`, `Write`, `Glob`, `Grep`), both
+        /// tools (`Read`, `Edit`, `Write`, `Glob`, `Grep`, `Bash`), both
         /// rooted at the runtime workspace.
-        #[cfg(feature = "oai-tools")]
-        #[cfg_attr(docsrs, doc(cfg(feature = "oai-tools")))]
         #[must_use]
         pub fn tools(mut self, tools: crate::Tools) -> Self {
             self.settings.tools = Some(AgentTools::Shared(tools));
@@ -111,8 +97,6 @@ macro_rules! tool_methods {
 
         /// Builds a fresh tool selection for every agent from its weak
         /// capability, for agent-relative tools such as subagent tools.
-        #[cfg(feature = "oai-tools")]
-        #[cfg_attr(docsrs, doc(cfg(feature = "oai-tools")))]
         #[must_use]
         pub fn tools_factory<T>(mut self, factory: T) -> Self
         where
@@ -142,7 +126,6 @@ macro_rules! tool_methods {
 pub struct CodexHarness {
     client: OpenAi,
     settings: Settings,
-    code_mode: Option<bool>,
     configure: Option<CodexHook>,
 }
 
@@ -154,22 +137,12 @@ impl CodexHarness {
         Self {
             client,
             settings: Settings::default(),
-            code_mode: None,
             configure: None,
         }
     }
 
     settings_methods!();
     tool_methods!();
-
-    /// Exposes tools through Code Mode's `exec` (`true`) or as direct
-    /// provider tools (`false`). Omitted keeps the tools' own exposure,
-    /// Code Mode by default.
-    #[must_use]
-    pub const fn code_mode(mut self, enabled: bool) -> Self {
-        self.code_mode = Some(enabled);
-        self
-    }
 
     /// Applies native Codex builder settings to every Codex agent after the
     /// runtime's settings and before any checkpoint is resumed.
@@ -192,17 +165,12 @@ impl From<OpenAi> for CodexHarness {
 
 /// Claude recipe: a shared [`ClaudeClient`] plus the tools and Code Mode
 /// policy of every Claude agent the runtime constructs.
-#[cfg(feature = "claude")]
-#[cfg_attr(docsrs, doc(cfg(feature = "claude")))]
 #[derive(Clone)]
 pub struct ClaudeHarness {
     client: ClaudeClient,
     settings: Settings,
-    code_mode: Option<bool>,
     configure: Option<ClaudeHook>,
 }
-
-#[cfg(feature = "claude")]
 impl ClaudeHarness {
     /// Uses this client, with its API key or subscription authentication,
     /// for every Claude agent.
@@ -211,25 +179,12 @@ impl ClaudeHarness {
         Self {
             client,
             settings: Settings::default(),
-            code_mode: None,
             configure: None,
         }
     }
 
     settings_methods!();
     tool_methods!();
-
-    /// Exposes the tools through Code Mode's `exec` and `wait` (`true`) or
-    /// as direct Claude client tools (`false`). This applies to the default
-    /// Claude file tools as well as a configured selection. Omitted uses Code
-    /// Mode when the `tools` feature provides it and direct tools otherwise;
-    /// an explicit `true` without that feature fails agent construction with
-    /// [`NanocodexError::InvalidRequest`].
-    #[must_use]
-    pub const fn code_mode(mut self, enabled: bool) -> Self {
-        self.code_mode = Some(enabled);
-        self
-    }
 
     /// Applies native Claude builder settings to every Claude agent after
     /// the runtime's settings and before any checkpoint is resumed.
@@ -242,8 +197,6 @@ impl ClaudeHarness {
         self
     }
 }
-
-#[cfg(feature = "claude")]
 impl From<ClaudeClient> for ClaudeHarness {
     fn from(client: ClaudeClient) -> Self {
         Self::new(client)
@@ -255,7 +208,6 @@ impl From<ClaudeClient> for ClaudeHarness {
 pub struct NanocodexBuilder {
     #[cfg(feature = "openai")]
     codex: Option<CodexHarness>,
-    #[cfg(feature = "claude")]
     claude: Option<ClaudeHarness>,
     harness: Option<HarnessFamily>,
     model: Option<HarnessModel>,
@@ -275,8 +227,6 @@ impl NanocodexBuilder {
     }
 
     /// Configures the Claude harness from a client or a [`ClaudeHarness`].
-    #[cfg(feature = "claude")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "claude")))]
     #[must_use]
     pub fn claude(mut self, harness: impl Into<ClaudeHarness>) -> Self {
         self.claude = Some(harness.into());
@@ -335,7 +285,6 @@ impl NanocodexBuilder {
         if self.codex.is_some() {
             configured.push(HarnessFamily::Codex);
         }
-        #[cfg(feature = "claude")]
         if self.claude.is_some() {
             configured.push(HarnessFamily::Claude);
         }
@@ -374,7 +323,6 @@ impl NanocodexBuilder {
                 codex_recipe(codex, &self.settings, &workspace),
             ));
         }
-        #[cfg(feature = "claude")]
         if let Some(claude) = self.claude {
             recipes.push((
                 HarnessFamily::Claude,
@@ -672,24 +620,13 @@ impl AgentSpec {
         }
     }
 }
-
-#[cfg(feature = "oai-tools")]
 fn exposed(
     tools: crate::Tools,
-    code_mode: Option<bool>,
 ) -> std::result::Result<crate::Tools, nanocode_code_mode::ToolsBuildError> {
-    use nanocode_code_mode::ToolExposure;
-    match code_mode {
-        None => Ok(tools),
-        Some(code_mode) => tools
-            .into_builder()
-            .exposure(if code_mode {
-                ToolExposure::CodeModeOnly
-            } else {
-                ToolExposure::DirectOnly
-            })
-            .build(),
-    }
+    tools
+        .into_builder()
+        .exposure(nanocode_code_mode::ToolExposure::CodeModeOnly)
+        .build()
 }
 
 #[cfg(feature = "openai")]
@@ -697,7 +634,6 @@ fn codex_recipe(harness: CodexHarness, runtime: &Settings, workspace: &Arc<Path>
     let CodexHarness {
         client,
         settings,
-        code_mode,
         configure,
     } = harness;
     let settings = settings.or(runtime);
@@ -722,19 +658,15 @@ fn codex_recipe(harness: CodexHarness, runtime: &Settings, workspace: &Arc<Path>
             if let Some(instructions) = settings.instructions {
                 builder = builder.instructions(instructions);
             }
-            #[cfg(feature = "oai-tools")]
+            if let Some(configure) = configure {
+                // The workspace is runtime-wide: a hook cannot move one agent.
+                builder = configure(builder)?.workspace(workspace.to_path_buf());
+            }
             {
                 let tools = settings
                     .tools
                     .unwrap_or_else(|| AgentTools::Shared(crate::Tools::default()));
-                builder = builder
-                    .tools_factory(move |handle| exposed(tools.materialize(handle)?, code_mode));
-            }
-            #[cfg(not(feature = "oai-tools"))]
-            let _ = code_mode;
-            if let Some(configure) = configure {
-                // The workspace is runtime-wide: a hook cannot move one agent.
-                builder = configure(builder)?.workspace(workspace.to_path_buf());
+                builder = builder.tools_factory(move |handle| exposed(tools.materialize(handle)?));
             }
             if let Some(checkpoint) = spec.checkpoint {
                 builder = builder.resume(checkpoint)?;
@@ -748,13 +680,10 @@ fn codex_recipe(harness: CodexHarness, runtime: &Settings, workspace: &Arc<Path>
         })
     })
 }
-
-#[cfg(feature = "claude")]
 fn claude_recipe(harness: ClaudeHarness, runtime: &Settings, workspace: &Arc<Path>) -> Recipe {
     let ClaudeHarness {
         client,
         settings,
-        code_mode,
         configure,
     } = harness;
     let settings = settings.or(runtime);
@@ -770,13 +699,6 @@ fn claude_recipe(harness: ClaudeHarness, runtime: &Settings, workspace: &Arc<Pat
                     "the Claude harness requires a Claude model".into(),
                 ));
             }
-            let code_mode = code_mode.unwrap_or(cfg!(feature = "oai-tools"));
-            #[cfg(not(feature = "oai-tools"))]
-            if code_mode {
-                return Err(NanocodexError::InvalidRequest(
-                    "Claude Code Mode requires the nanocode `tools` feature".into(),
-                ));
-            }
             let mut builder = Agent::builder(crate::Claude::new(client, spec.model.as_str()))
                 .thinking(spec.thinking)?
                 .spawn_factory(spec.spawn_factory)
@@ -785,50 +707,32 @@ fn claude_recipe(harness: ClaudeHarness, runtime: &Settings, workspace: &Arc<Pat
             if let Some(instructions) = settings.instructions {
                 builder = builder.system(instructions.to_string());
             }
-            // A configured selection replaces the default canonical file
-            // tools. Code Mode nests either under `exec`; direct mode bridges a
-            // configured selection into the native client catalog
-            // (OpenAI-hosted tools have no local handler) and registers the
-            // file tools natively. Same-family children reuse this catalog.
-            #[cfg(feature = "oai-tools")]
-            let tools = match settings.tools {
-                Some(tools) => Some(tools),
-                None if code_mode => {
-                    let files = Arc::new(default_claude_files(&workspace)?);
-                    Some(AgentTools::PerAgent(Arc::new(
-                        move |handle: AgentHandle| {
-                            claude_files::selection(&files, handle.session_environment())
-                        },
-                    )))
-                }
-                None => None,
-            };
-            #[cfg(not(feature = "oai-tools"))]
-            let tools: Option<std::convert::Infallible> = None;
-            match tools {
-                #[cfg(feature = "oai-tools")]
-                Some(tools) => {
-                    let root = workspace.to_path_buf();
-                    builder = builder.code_only(code_mode).tools_factory(move |handle| {
-                        let selected = tools
-                            .materialize(handle.clone())
-                            .and_then(|tools| exposed(tools, Some(code_mode)))
-                            .map_err(|error| NanocodexError::InvalidRequest(error.to_string()))?;
-                        claude_tools::install(&selected, code_mode, root.clone(), &handle)
-                    });
-                }
-                #[cfg(not(feature = "oai-tools"))]
-                Some(never) => match never {},
-                None => {
-                    builder = builder.workspace_files(Arc::new(default_claude_files(&workspace)?));
-                }
-            }
-            #[cfg(not(feature = "oai-tools"))]
-            let _ = code_mode;
             if let Some(configure) = configure {
                 // The workspace is runtime-wide: a hook cannot move one agent.
-                builder = configure(builder)?.workspace(workspace.to_string_lossy().into_owned());
+                builder = configure(builder)?
+                    .workspace(workspace.to_string_lossy().into_owned())
+                    .code_only(true);
             }
+            // Each backend retains its own defaults, nested under exec/wait.
+            let tools = match settings.tools {
+                Some(tools) => tools,
+                None => {
+                    let files = Arc::new(default_claude_files(&workspace)?);
+                    let root = workspace.to_path_buf();
+                    AgentTools::PerAgent(Arc::new(move |handle: AgentHandle| {
+                        claude_files::selection(&files, root.clone(), handle.session_environment())
+                    }))
+                }
+            };
+            let root = workspace.to_path_buf();
+            builder = builder.tools_factory(move |handle| {
+                let selected = tools
+                    .materialize(handle.clone())
+                    .and_then(exposed)
+                    .map_err(|error| NanocodexError::InvalidRequest(error.to_string()))?;
+                claude_tools::install(&selected, root.clone(), &handle)
+            });
+            builder = builder.code_only(true);
             if let Some(checkpoint) = spec.checkpoint {
                 builder = builder.resume(checkpoint)?;
             }
@@ -843,7 +747,6 @@ fn claude_recipe(harness: ClaudeHarness, runtime: &Settings, workspace: &Arc<Pat
 }
 
 /// The canonical Claude Code file tools rooted at the runtime workspace.
-#[cfg(feature = "claude")]
 fn default_claude_files(workspace: &Path) -> Result<nanocode_claude_tools::ClaudeWorkspaceFiles> {
     nanocode_claude_tools::ClaudeWorkspaceFiles::new(workspace).map_err(|error| {
         NanocodexError::InvalidRequest(format!(

@@ -24,7 +24,7 @@ const filesystem = await Workspace.open({ path: "/tmp/nanocodex-types" });
 
 const nano: Nanocodex.Runtime = await Nanocodex.create({
   backends: {
-    codex: { transport: Transport.chatGpt({ subscription }), tools: () => createTools(), codeMode: true },
+    codex: { transport: Transport.chatGpt({ subscription }), tools: () => createTools() },
     claude: { transport: Transport.anthropic({ apiKey: "synthetic" }), tools: [], maxTokens: 1024 },
   },
   filesystem,

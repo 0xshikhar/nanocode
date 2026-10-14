@@ -14,9 +14,9 @@ import type { Workspace } from "./workspace.mjs";
 import type { Tools } from "../tools/Tools.mjs";
 
 export type Agent = DefaultAgent;
-/** Code Mode (exec/wait) by default; `direct` exposes host tools to the provider without code evaluation. Remote MCP requires Code Mode. */
+/** Code Mode always exposes exec/wait; host tools run inside exec. */
 type ToolExposureOptions =
-  | { mcp?: false | undefined; toolMode?: "code-only" | "direct" | undefined }
+  | { mcp?: false | undefined; toolMode?: "code-only" | undefined }
   | { mcp: McpServers; toolMode?: "code-only" | undefined };
 
 /** Creates a Node-hosted Rust/WASM Agent. */

@@ -18,7 +18,7 @@ const OPTION_KEYS = new Set([
 export function toClaudeConfig(options = {}) {
   if (!options || typeof options !== 'object' || Array.isArray(options)) throw new TypeError('Claude options must be an object');
   for (const key of Object.keys(options)) if (!OPTION_KEYS.has(key)) throw new TypeError('unsupported Claude option');
-  if (options.toolMode !== undefined && options.toolMode !== 'code-only' && options.toolMode !== 'direct') throw new TypeError('Claude toolMode must be code-only or direct');
+  if (options.toolMode !== undefined && options.toolMode !== 'code-only') throw new TypeError('Claude toolMode must be code-only');
   if (options.codeEvaluator !== undefined && typeof options.codeEvaluator !== 'function') throw new TypeError('Claude codeEvaluator must be a function');
   if (options.serverTools?.length || options.clientToolSearch) throw new TypeError('Claude does not expose provider or client search tools directly');
   if (options.harness !== undefined && options.harness !== 'claude') throw new TypeError('Claude requires harness claude');
@@ -53,7 +53,7 @@ export function toClaudeConfig(options = {}) {
       if (!['installId','accountUuid','userId','platform','arch','version'].includes(key) || typeof value !== 'string' || !value || value.length > 8192 || /[\u0000-\u001f\u007f]/.test(value)) throw new TypeError('invalid subscriptionIdentity');
     }
   }
-  // Code Mode stays the default; direct mode is an explicit opt-in.
+  // Both backends always expose exec/wait.
   const config = { toolMode: options.toolMode ?? 'code-only' };
   for (const key of OPTION_KEYS) if (!['codeEvaluator', 'auth', 'fetch', 'tools', 'module', 'durability', 'compatibilityProfile', 'harness', 'harnesses', 'subagents'].includes(key) && options[key] !== undefined) config[key] = options[key];
   if (options.compatibilityProfile !== undefined) {

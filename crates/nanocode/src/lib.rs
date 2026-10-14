@@ -24,29 +24,13 @@ mod harness;
 pub use harness::{Harness, HarnessBuilder, HarnessRequest};
 #[cfg(not(target_family = "wasm"))]
 mod runtime;
-#[cfg(feature = "claude")]
-#[cfg_attr(docsrs, doc(cfg(feature = "claude")))]
-pub use nanocode_claude::Claude;
-#[cfg(feature = "oai-tools")]
-#[cfg_attr(docsrs, doc(cfg(feature = "oai-tools")))]
+pub use nanocode_claude::{Claude, ClaudeClient};
 pub use nanocode_code_mode::Tool;
-#[cfg(all(
-    feature = "oai-tools",
-    any(feature = "openai", not(target_family = "wasm"))
-))]
-#[cfg_attr(
-    docsrs,
-    doc(cfg(all(
-        feature = "oai-tools",
-        any(feature = "openai", not(target_family = "wasm"))
-    )))
-)]
+#[cfg(any(feature = "openai", not(target_family = "wasm")))]
+#[cfg_attr(docsrs, doc(cfg(any(feature = "openai", not(target_family = "wasm")))))]
 pub use nanocode_code_mode::Tools;
-#[cfg(all(feature = "openai", feature = "oai-tools", not(target_family = "wasm")))]
-#[cfg_attr(
-    docsrs,
-    doc(cfg(all(feature = "openai", feature = "oai-tools", not(target_family = "wasm"))))
-)]
+#[cfg(not(target_family = "wasm"))]
+#[cfg_attr(docsrs, doc(cfg(not(target_family = "wasm"))))]
 pub use nanocode_code_mode::tool;
 #[cfg(feature = "openai")]
 #[cfg_attr(docsrs, doc(cfg(feature = "openai")))]
@@ -55,8 +39,8 @@ pub use nanocode_codex::{Model, ReasoningMode, Thinking};
 #[cfg(feature = "durability")]
 #[cfg_attr(docsrs, doc(cfg(feature = "durability")))]
 pub use nanocode_durability::DurableAgentExt;
-#[cfg(all(not(target_family = "wasm"), feature = "claude"))]
-#[cfg_attr(docsrs, doc(cfg(all(not(target_family = "wasm"), feature = "claude"))))]
+#[cfg(not(target_family = "wasm"))]
+#[cfg_attr(docsrs, doc(cfg(not(target_family = "wasm"))))]
 pub use runtime::ClaudeHarness;
 #[cfg(all(not(target_family = "wasm"), feature = "openai"))]
 #[cfg_attr(docsrs, doc(cfg(all(not(target_family = "wasm"), feature = "openai"))))]
@@ -93,8 +77,6 @@ pub mod agent {
 }
 
 /// Anthropic Messages client, provider-native builder, protocol, and authentication.
-#[cfg(feature = "claude")]
-#[cfg_attr(docsrs, doc(cfg(feature = "claude")))]
 #[doc(inline)]
 pub use nanocode_claude as claude;
 
@@ -114,24 +96,17 @@ pub use nanocode_codex as codex;
 /// OpenAI Responses tool registry, built-ins, MCP, tool search, and Code Mode.
 ///
 /// Compatibility facade for [`crate::oai_tools`]; Claude adapters live under
-/// `nanocode::claude_tools` with the `claude-tools` feature.
-#[cfg(feature = "oai-tools")]
-#[cfg_attr(docsrs, doc(cfg(feature = "oai-tools")))]
+/// `nanocode::claude_tools` on native targets.
 #[doc(inline)]
 pub use nanocode_code_mode as tools;
 
 /// OpenAI-specific tool contracts, catalog and execution runtime.
-#[cfg(feature = "oai-tools")]
-#[cfg_attr(docsrs, doc(cfg(feature = "oai-tools")))]
 #[doc(inline)]
 pub use nanocode_code_mode as oai_tools;
 
 /// Claude-native tool adapters and host capability contracts.
-#[cfg(all(feature = "claude-tools", not(target_family = "wasm")))]
-#[cfg_attr(
-    docsrs,
-    doc(cfg(all(feature = "claude-tools", not(target_family = "wasm"))))
-)]
+#[cfg(not(target_family = "wasm"))]
+#[cfg_attr(docsrs, doc(cfg(not(target_family = "wasm"))))]
 #[doc(inline)]
 pub use nanocode_claude_tools as claude_tools;
 
@@ -146,11 +121,8 @@ pub use nanocode_observability as observability;
 
 /// Common imports for the golden owned-agent path.
 pub mod prelude {
-    #[cfg(feature = "claude")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "claude")))]
-    pub use crate::Claude;
-    #[cfg(all(not(target_family = "wasm"), feature = "claude"))]
-    #[cfg_attr(docsrs, doc(cfg(all(not(target_family = "wasm"), feature = "claude"))))]
+    #[cfg(not(target_family = "wasm"))]
+    #[cfg_attr(docsrs, doc(cfg(not(target_family = "wasm"))))]
     pub use crate::ClaudeHarness;
     #[cfg(all(not(target_family = "wasm"), feature = "openai"))]
     #[cfg_attr(docsrs, doc(cfg(all(not(target_family = "wasm"), feature = "openai"))))]
@@ -161,44 +133,29 @@ pub mod prelude {
     #[cfg(not(target_family = "wasm"))]
     #[cfg_attr(docsrs, doc(cfg(not(target_family = "wasm"))))]
     pub use crate::Nanocodex;
-    #[cfg(feature = "oai-tools")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "oai-tools")))]
     pub use crate::Tool;
-    #[cfg(all(
-        feature = "oai-tools",
-        any(feature = "openai", not(target_family = "wasm"))
-    ))]
-    #[cfg_attr(
-        docsrs,
-        doc(cfg(all(
-            feature = "oai-tools",
-            any(feature = "openai", not(target_family = "wasm"))
-        )))
-    )]
+    #[cfg(any(feature = "openai", not(target_family = "wasm")))]
+    #[cfg_attr(docsrs, doc(cfg(any(feature = "openai", not(target_family = "wasm")))))]
     pub use crate::Tools;
-    #[cfg(all(feature = "openai", feature = "oai-tools", not(target_family = "wasm")))]
-    #[cfg_attr(
-        docsrs,
-        doc(cfg(all(feature = "openai", feature = "oai-tools", not(target_family = "wasm"))))
-    )]
+    #[cfg(not(target_family = "wasm"))]
+    #[cfg_attr(docsrs, doc(cfg(not(target_family = "wasm"))))]
     pub use crate::tool;
     pub use crate::{Agent, ClaudeModel, HarnessFamily, HarnessModel, Model, Thinking};
+    pub use crate::{Claude, ClaudeClient};
     #[cfg(feature = "openai")]
     #[cfg_attr(docsrs, doc(cfg(feature = "openai")))]
     pub use crate::{CodexBuilder, OpenAi};
 }
 
-#[cfg(all(feature = "openai", feature = "oai-tools", not(target_family = "wasm")))]
+#[cfg(not(target_family = "wasm"))]
 #[doc(hidden)]
 pub mod __private {
     pub use nanocode_code_mode::__private::*;
 }
 
 /// Shared Code Mode and tool execution runtime.
-#[cfg(feature = "oai-tools")]
 pub use nanocode_code_mode as code_mode;
 /// Codex-specific web and image tools.
-#[cfg(feature = "oai-tools")]
 pub use nanocode_codex_tools as codex_tools;
 /// Shared tool contracts and typed macros for all harnesses.
 pub use nanocode_tools as tool_contract;

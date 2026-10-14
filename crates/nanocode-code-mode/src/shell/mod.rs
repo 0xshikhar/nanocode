@@ -1,3 +1,5 @@
+mod foreground;
+pub use foreground::{ForegroundOutput, run_bash};
 mod output;
 mod process;
 mod selection;

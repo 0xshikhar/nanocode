@@ -15,7 +15,7 @@ use std::{
 };
 
 const DEADLINE: Duration = Duration::from_secs(60);
-const CLAUDE_FILE_TOOLS: [&str; 5] = ["Read", "Edit", "Write", "Glob", "Grep"];
+const CLAUDE_FILE_TOOLS: [&str; 6] = ["Read", "Edit", "Write", "Glob", "Grep", "Bash"];
 type Transcript = Arc<Mutex<Vec<Value>>>;
 
 /// The file named after a marker in the latest prompt.
@@ -90,6 +90,7 @@ fn messages(body: &Value, ordinal: usize) -> String {
                 json!({"code": format!(
                     "const read = await tools.Read({{file_path: \"{name}\"}}); \
                      await tools.Edit({{file_path: \"{name}\", old_string: \"alpha\", new_string: \"claude-edited\"}}); \
+                     const bash = await tools.Bash({{command: \"printf bash-ok\"}}); text(JSON.stringify(bash)); \
                      text(\"read:\" + JSON.stringify(read));"
                 )}),
             )),
@@ -223,6 +224,16 @@ async fn edits(agent: &nanocode::Agent, transcript: &Transcript, workspace: &Pat
                 observed.contains("read:") && observed.contains("alpha"),
                 "{observed}"
             );
+            let results = requests[1]["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|message| message["content"].as_array())
+                .flatten()
+                .filter(|block| block["type"] == "tool_result")
+                .map(Value::to_string)
+                .collect::<String>();
+            assert!(results.contains("bash-ok"), "Bash must execute: {results}");
             let exec = requests[0]["tools"][0]["description"].to_string();
             for name in CLAUDE_FILE_TOOLS {
                 assert!(exec.contains(name), "exec describes nested {name}: {exec}");
@@ -324,23 +335,22 @@ async fn journey() {
     );
     nano.shutdown().await.unwrap();
 
-    // Direct mode registers the canonical Claude file tools natively. A
+    // Code Mode preserves canonical Claude file tools. A
     // configure hook cannot move an agent out of the runtime workspace.
-    let direct = Nanocodex::builder()
+    let configured = Nanocodex::builder()
         .openai(CodexHarness::new(openai).configure(|builder| {
             Ok(builder.workspace(std::env::temp_dir().join("nanocode-elsewhere")))
         }))
         .claude(
             ClaudeHarness::new(claude.clone())
-                .code_mode(false)
                 .configure(|builder| Ok(builder.workspace("/nanocode-elsewhere"))),
         )
         .workspace(&workspace)
         .build()
         .unwrap();
-    let (codex_root, _events) = direct.spawn().build().await.unwrap();
+    let (codex_root, _events) = configured.spawn().build().await.unwrap();
     edits(&codex_root, &transcript, &workspace, "codex-configured.txt").await;
-    let (claude_root, _events) = direct
+    let (claude_root, _events) = configured
         .spawn()
         .harness(HarnessFamily::Claude)
         .build()
@@ -350,7 +360,7 @@ async fn journey() {
         &claude_root,
         &transcript,
         &workspace,
-        "claude-direct-root.txt",
+        "claude-configured-root.txt",
     )
     .await;
     let (native_child, _events) = claude_root.spawn().await.unwrap();
@@ -358,19 +368,18 @@ async fn journey() {
         &native_child,
         &transcript,
         &workspace,
-        "claude-direct-child.txt",
+        "claude-configured-child.txt",
     )
     .await;
-    direct.shutdown().await.unwrap();
+    configured.shutdown().await.unwrap();
     println!(
-        "DIRECT Claude root and native child called Read+Edit directly; a configure hook kept the runtime workspace"
+        "CODE_MODE Claude root and native child called Read+Edit through exec; a configure hook kept the runtime workspace"
     );
 
     // An explicit empty selection still replaces the default catalog.
     let empty = Nanocodex::builder()
         .claude(
             ClaudeHarness::new(claude.clone())
-                .code_mode(false)
                 .tools(Tools::builder().without_defaults().build().unwrap()),
         )
         .workspace(&workspace)
@@ -385,7 +394,7 @@ async fn journey() {
         .await
         .unwrap();
     let request = requests(&transcript, "messages", "untouched.txt").remove(0);
-    assert!(tool_names(&request["tools"]).is_empty(), "{request}");
+    assert_eq!(tool_names(&request["tools"]), ["exec", "wait"], "{request}");
     empty.shutdown().await.unwrap();
     println!("EXPLICIT_EMPTY an empty Claude selection declares no file tools");
 

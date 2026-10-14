@@ -194,18 +194,11 @@ test("Nanocodex.create configures backends once and owns independent roots", { t
     assert.deepEqual(childEffects.map((effect) => effect.harness), ["claude", "codex"], "children execute their own family's tools");
     assert.ok(trace.filter((row) => row.family === "codex").every((row) => row.auth === "chatgpt-subscription"), "the Claude root's Codex child uses the ChatGPT subscription");
 
-    // codeMode: false exposes each backend's host tools directly, without exec/wait.
-    const direct = await Nanocodex.create({ backends: { codex: { ...backends.codex, codeMode: false }, claude: { ...backends.claude, codeMode: false } } });
-    runtimes.push(direct);
-    observations.direct = {};
-    for (const harness of ["codex", "claude"]) {
-      const agent = await direct.spawn({ harness });
-      const before = trace.length;
-      assert.match(await prompt(agent, "plain direct " + harness), /^DONE /);
-      observations.direct[harness] = trace[before].tools;
-      assert.ok(trace[before].tools.includes("proof") && !trace[before].tools.includes("exec"), harness + " direct mode exposes host tools natively");
+    for (const family of ["codex", "claude"]) {
+      await rejects("direct tools cannot be enabled for " + family,
+        () => Nanocodex.create({ backends: { [family]: { ...backends[family], codeMode: false } } }),
+        /unsupported.*codeMode/);
     }
-    await direct.shutdown();
 
     // Checkpoint resume with the runtime's current credentials.
     for (const [agent, family] of [[claudeRoot, "claude"], [codexRoot, "codex"]]) {

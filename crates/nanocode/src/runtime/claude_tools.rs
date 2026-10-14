@@ -7,22 +7,19 @@ use crate::claude::{
     ClaudeToolInvocation, ClaudeToolReply, ClaudeTools, ToolDefinition, ToolResultContent,
 };
 use nanocode_code_mode::{
-    ToolContext, ToolDefinition as RuntimeDefinition, ToolInput, Tools,
+    ToolContext, ToolDefinition as RuntimeDefinition, Tools,
     contract::{ToolOutputBody, ToolOutputContent},
     runtime::ToolRuntime,
 };
-use nanocode_runtime::{AgentHandle, NanocodexError, Result};
+use nanocode_runtime::{AgentHandle, Result};
 use serde_json::{Value, json};
 
 /// Builds this agent's Claude catalog from its materialized tools.
 ///
 /// Code Mode exposes `exec` (JavaScript in `code`) and `wait` over the
-/// same Code Mode runtime Codex uses. Direct mode exposes every function tool
-/// with its own schema and every freeform tool as a function taking its raw
-/// text in `input`; hosted provider tools without a local handler are absent.
+/// same Code Mode runtime Codex uses.
 pub(super) fn install(
     tools: &Tools,
-    code_mode: bool,
     workspace: PathBuf,
     handle: &AgentHandle,
 ) -> Result<ClaudeTools> {
@@ -43,7 +40,7 @@ pub(super) fn install(
         let (name, description, input_schema, call) = match definition {
             RuntimeDefinition::Custom {
                 name, description, ..
-            } if code_mode && &*name == "exec" => (
+            } if &*name == "exec" => (
                 name,
                 format!(
                     "{description}\n\nPass the complete JavaScript source as the `code` string."
@@ -61,62 +58,11 @@ pub(super) fn install(
                 description,
                 parameters,
                 ..
-            } if code_mode && &*name == "wait" => (
+            } if &*name == "wait" => (
                 name,
                 description.into(),
                 parameters.as_value().clone(),
                 Call::Wait,
-            ),
-            _ if code_mode => continue,
-            RuntimeDefinition::Function { name, .. } | RuntimeDefinition::Custom { name, .. }
-                if matches!(&*name, "exec" | "wait") =>
-            {
-                continue;
-            }
-            RuntimeDefinition::Function {
-                name,
-                description,
-                parameters,
-                strict,
-                defer_loading,
-                asynchronous,
-                ..
-            } => {
-                direct_supported(&name, defer_loading, asynchronous)?;
-                let call = if strict {
-                    Call::StrictFunction
-                } else {
-                    Call::Function
-                };
-                (
-                    name,
-                    description.into(),
-                    parameters.as_value().clone(),
-                    call,
-                )
-            }
-            RuntimeDefinition::Custom {
-                name,
-                description,
-                defer_loading,
-                asynchronous,
-                format,
-            } => (
-                {
-                    direct_supported(&name, defer_loading, asynchronous)?;
-                    name
-                },
-                format!(
-                    "{description}\n\nPass the tool's complete raw text as the `input` string. Input format: {}",
-                    serde_json::to_string(&format).unwrap_or_default()
-                ),
-                json!({
-                    "type": "object",
-                    "properties": {"input": {"type": "string"}},
-                    "required": ["input"],
-                    "additionalProperties": false,
-                }),
-                Call::Freeform,
             ),
             _ => continue,
         };
@@ -125,14 +71,13 @@ pub(super) fn install(
             name: tool_name.clone(),
             description,
             input_schema,
-            strict: matches!(call, Call::StrictFunction).then_some(true),
+            strict: None,
             defer_loading: false,
         };
         let runtime = Arc::clone(&runtime);
         native = native.tool_with_context(definition, move |input, invocation| {
             let runtime = Arc::clone(&runtime);
-            let name = tool_name.clone();
-            async move { call.run(&runtime, &name, input, &invocation).await }
+            async move { call.run(&runtime, input, &invocation).await }
         });
     }
     Ok(native)
@@ -142,9 +87,6 @@ pub(super) fn install(
 enum Call {
     Exec,
     Wait,
-    Function,
-    StrictFunction,
-    Freeform,
 }
 
 /// Stops shell sessions and cells when the agent's tool catalog is dropped.
@@ -159,21 +101,10 @@ impl Drop for RuntimeGuard {
     }
 }
 
-/// Claude declares direct client tools eagerly and waits for each result.
-fn direct_supported(name: &str, defer_loading: Option<bool>, asynchronous: bool) -> Result<()> {
-    if defer_loading == Some(true) || asynchronous {
-        return Err(NanocodexError::InvalidRequest(format!(
-            "`{name}` is deferred or asynchronous, which Claude direct tools do not support; use Code Mode"
-        )));
-    }
-    Ok(())
-}
-
 impl Call {
     async fn run(
         self,
         runtime: &ToolRuntime,
-        name: &str,
         input: Value,
         invocation: &ClaudeToolInvocation,
     ) -> std::result::Result<ClaudeToolReply, String> {
@@ -205,39 +136,6 @@ impl Call {
                     .await
                     .map_err(|error| error.to_string())?;
                 Ok(reply(execution.output, execution.success, None, None))
-            }
-            Self::Function | Self::StrictFunction | Self::Freeform => {
-                let input = match self {
-                    Self::Freeform => ToolInput::Freeform(
-                        input
-                            .get("input")
-                            .and_then(Value::as_str)
-                            .ok_or("this tool requires an `input` string")?
-                            .to_owned(),
-                    ),
-                    _ => ToolInput::Function(
-                        serde_json::value::to_raw_value(&input)
-                            .map_err(|error| error.to_string())?,
-                    ),
-                };
-                let output = runtime
-                    .execute_tool(name, input, context)
-                    .await
-                    .map_err(|error| error.to_string())?
-                    .into_wire()
-                    .map_err(|error| error.to_string())?;
-                let decode = |value: Option<Box<serde_json::value::RawValue>>| {
-                    value
-                        .map(|value| serde_json::from_str(value.get()))
-                        .transpose()
-                        .map_err(|error| error.to_string())
-                };
-                Ok(reply(
-                    output.output,
-                    output.success,
-                    decode(output.metadata)?,
-                    decode(output.structured_result)?,
-                ))
             }
         }
     }
