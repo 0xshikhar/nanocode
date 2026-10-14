@@ -10,15 +10,19 @@ pub struct EventMapper {
     reasoning: HashMap<u64, usize>,
     tools: HashMap<String, usize>,
     usage: Usage,
+    last: Usage,
+    session: Usage,
+    turn_start: usize,
     reported: bool,
 }
 
 #[derive(Clone, Copy, Default)]
-struct Usage {
-    input: u64,
-    cached: u64,
-    output: u64,
-    tool_calls: u64,
+pub struct Usage {
+    pub input: u64,
+    pub cached: u64,
+    pub output: u64,
+    pub tool_calls: u64,
+    pub turns: u64,
 }
 
 fn completion_agent(text: &str) -> Option<&str> {
@@ -49,6 +53,22 @@ impl EventMapper {
 
     pub const fn reported(&self) -> bool {
         self.reported
+    }
+
+    pub const fn session_usage(&self) -> Usage {
+        self.session
+    }
+
+    pub const fn last_usage(&self) -> Usage {
+        self.last
+    }
+
+    pub const fn turn_start(&self) -> usize {
+        self.turn_start
+    }
+
+    pub const fn mark_turn_start(&mut self, index: usize) {
+        self.turn_start = index;
     }
 
     pub fn apply(&mut self, transcript: &mut Transcript, event: &AgentEvent) -> Mapped {
@@ -89,6 +109,7 @@ impl EventMapper {
                 self.reset();
                 self.usage = Usage::default();
                 self.reported = false;
+                self.turn_start = transcript.len();
             }
             AgentEventKind::ModelCallCompleted => {
                 let usage = &payload["usage"];
@@ -150,11 +171,7 @@ impl EventMapper {
                     .as_str()
                     .unwrap_or("run error")
                     .to_owned();
-                let repeated = matches!(
-                    transcript.last(),
-                    Some((_, CellKind::Notice(NoticeLevel::Error, last))) if *last == message
-                );
-                if !repeated {
+                if !transcript.has_notice_since(self.turn_start, NoticeLevel::Error, &message) {
                     transcript.push(CellKind::Notice(NoticeLevel::Error, message));
                 }
             }
@@ -201,6 +218,12 @@ impl EventMapper {
                 };
                 transcript.finish_running_tools(tool_status);
                 transcript.push(CellKind::Summary(summary(&payload, status, self.usage)));
+                self.last = self.usage;
+                self.session.input += self.usage.input;
+                self.session.cached += self.usage.cached;
+                self.session.output += self.usage.output;
+                self.session.tool_calls += self.usage.tool_calls;
+                self.session.turns += 1;
                 self.reported = true;
                 self.reset();
             }
@@ -366,6 +389,17 @@ fn collect_text(value: &Value, texts: &mut Vec<String>) {
         Value::Object(map) => {
             if let Some(Value::String(text)) = map.get("text") {
                 texts.push(text.clone());
+            } else if map
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| kind.contains("image"))
+            {
+                let source = ["path", "image_url", "file_id"]
+                    .into_iter()
+                    .find_map(|key| map.get(key).and_then(Value::as_str))
+                    .unwrap_or("attached");
+                let name = source.rsplit('/').next().unwrap_or(source);
+                texts.push(format!("[image: {name}]"));
             } else {
                 map.values().for_each(|item| collect_text(item, texts));
             }

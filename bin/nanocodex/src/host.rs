@@ -6,7 +6,7 @@ use std::{
 
 use nanocode::{
     Claude, ClaudeHarness, ClaudeModel, Codex, CodexHarness, Model, ModelSelection, Nanocodex,
-    OpenAi, ReasoningMode, ServiceTier, Thinking, Tools,
+    OpenAi, ServiceTier, Thinking, Tools,
     agent::{Agent, AgentEvents},
     claude::ClaudeClient,
     durability::SessionStore,
@@ -37,24 +37,15 @@ pub struct HostConfig {
 pub struct Host {
     pub config: HostConfig,
     pub runtime: Nanocodex,
-    pub pro: bool,
 }
 
 impl Host {
-    pub fn build(
-        config: HostConfig,
-        model: &ModelSelection,
-        thinking: Thinking,
-        pro: bool,
-    ) -> Result<Self> {
+    pub fn build(config: HostConfig, model: &ModelSelection, thinking: Thinking) -> Result<Self> {
         let mut codex = CodexHarness::new(OpenAi::default());
         let mut claude = ClaudeHarness::new(ClaudeClient::default());
         if let Some(remote) = &config.remote {
             codex = codex.tools(remote.tools.clone());
             claude = claude.tools(remote.tools.clone());
-        }
-        if pro {
-            codex = codex.configure(|builder| Ok(builder.reasoning_mode(ReasoningMode::Pro)));
         }
         let mut builder = Nanocodex::builder()
             .openai(codex)
@@ -83,7 +74,6 @@ impl Host {
         Ok(Self {
             config,
             runtime: builder?,
-            pro,
         })
     }
 

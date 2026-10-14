@@ -3,6 +3,7 @@ mod app;
 mod cli;
 mod commands;
 mod events;
+mod extras;
 mod history;
 mod host;
 mod models;
@@ -114,11 +115,6 @@ async fn prepare(args: &SessionArgs, notify: &mut dyn FnMut(&str)) -> Result<Pre
     model
         .capabilities(nanocode::ModelTransport::Native)
         .check_service_tier(tier)?;
-    if args.pro {
-        model
-            .capabilities(nanocode::ModelTransport::Native)
-            .check_reasoning_mode(nanocode::ReasoningMode::Pro)?;
-    }
     let store = if args.ephemeral {
         None
     } else {
@@ -131,7 +127,7 @@ async fn prepare(args: &SessionArgs, notify: &mut dyn FnMut(&str)) -> Result<Pre
         subagents: !args.no_subagents,
         remote,
     };
-    let host = Host::build(config, &model, thinking, args.pro)?;
+    let host = Host::build(config, &model, thinking)?;
     Ok(Prepared {
         host,
         model,
@@ -208,6 +204,7 @@ async fn interactive(args: SessionArgs) -> Result<()> {
             prompt: args.prompt,
             remote_label,
             history_path: Some(prepared.home.join("history.jsonl")),
+            home: prepared.home.clone(),
         },
         terminal,
     )

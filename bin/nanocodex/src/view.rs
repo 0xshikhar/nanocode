@@ -16,7 +16,7 @@ use crate::app::{App, Overlay, TurnState};
 
 pub const STATUS_VISIBLE: Duration = Duration::from_secs(4);
 
-pub const BINDINGS: [Binding; 23] = [
+pub const BINDINGS: [Binding; 26] = [
     Binding {
         keys: "enter",
         action: "send · queue while a turn runs",
@@ -42,6 +42,18 @@ pub const BINDINGS: [Binding; 23] = [
         action: "undo the latest queued or steer message",
     },
     Binding {
+        keys: "@path",
+        action: "fuzzy file finder (tab/enter inserts)",
+    },
+    Binding {
+        keys: "!command",
+        action: "run a shell command locally",
+    },
+    Binding {
+        keys: "ctrl+v",
+        action: "attach an image from the clipboard",
+    },
+    Binding {
         keys: "up / down",
         action: "prompt history",
     },
@@ -63,7 +75,7 @@ pub const BINDINGS: [Binding; 23] = [
     },
     Binding {
         keys: "ctrl+s",
-        action: "thinking level",
+        action: "thinking dial",
     },
     Binding {
         keys: "ctrl+o",
@@ -102,8 +114,8 @@ pub const BINDINGS: [Binding; 23] = [
         action: "switch sessions",
     },
     Binding {
-        keys: "/mouse",
-        action: "toggle mouse capture (native selection)",
+        keys: "/theme /copy /context /skills",
+        action: "theme, copy reply, usage, skills",
     },
     Binding {
         keys: "F1 · /help",
@@ -122,7 +134,25 @@ pub fn draw(app: &mut App, frame: &mut Frame<'_>) {
         .height(width.saturating_sub(2))
         .clamp(1, (area.height / 3).max(1))
         + 2;
-    let queue_lines = app.queue.lines(width, &theme);
+    let mut queue_lines = app.queue.lines(width, &theme);
+    if !app.attachments.is_empty() {
+        let names = app
+            .attachments
+            .iter()
+            .map(|path| {
+                path.file_name().map_or_else(
+                    || path.display().to_string(),
+                    |name| name.to_string_lossy().into_owned(),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        queue_lines.push(Line::from(vec![
+            Span::styled("⎘ attached: ", Style::default().fg(theme.accent())),
+            Span::styled(names, Style::default().fg(theme.text())),
+            Span::styled("  · /detach removes", Style::default().fg(theme.muted())),
+        ]));
+    }
     let tree_lines = if app.show_tree && !app.tree.is_empty() {
         app.tree.lines(&theme, spinner, None)
     } else {
@@ -180,14 +210,49 @@ pub fn draw(app: &mut App, frame: &mut Frame<'_>) {
         .render(inner, buffer, &theme, app.overlay.is_none());
     footer(app).render(footer_area, buffer);
     command_popup(app, composer_area, transcript_area, frame);
+    finder_popup(app, composer_area, transcript_area, frame);
     if let Some(cursor) = cursor {
         frame.set_cursor_position(cursor);
     }
     match &mut app.overlay {
         Some(Overlay::Picker(_, picker)) => picker.render(area, frame.buffer_mut(), &theme),
         Some(Overlay::Help) => keybindings::render(&BINDINGS, area, frame.buffer_mut(), &theme),
+        Some(Overlay::Dial { dial, .. }) => dial.render(area, frame.buffer_mut(), &theme),
         None => {}
     }
+}
+
+pub const FINDER_ROWS: usize = 8;
+
+fn finder_popup(app: &App, composer_area: Rect, transcript_area: Rect, frame: &mut Frame<'_>) {
+    let Some(finder) = &app.finder else {
+        return;
+    };
+    if app.overlay.is_some() {
+        return;
+    }
+    let rows = FINDER_ROWS.min(usize::from(transcript_area.height.saturating_sub(1)));
+    let lines = finder.finder.lines(rows, &app.theme);
+    let height = u16::try_from(lines.len()).unwrap_or(u16::MAX);
+    let popup = Rect {
+        x: composer_area.x,
+        y: composer_area.y.saturating_sub(height + 1),
+        width: composer_area.width,
+        height: height + 1,
+    };
+    let buffer = frame.buffer_mut();
+    Clear.render(popup, buffer);
+    let mut all = vec![Line::styled(
+        format!(
+            "  files matching @{} · {} of {} · tab/enter insert · esc close",
+            finder.finder.query(),
+            finder.finder.matches(),
+            finder.finder.len()
+        ),
+        Style::default().fg(app.theme.muted()),
+    )];
+    all.extend(lines);
+    Paragraph::new(all).render(popup, buffer);
 }
 
 fn command_popup(app: &App, composer_area: Rect, transcript_area: Rect, frame: &mut Frame<'_>) {
@@ -247,6 +312,15 @@ fn status_line(app: &App, spinner: &str, now: Instant) -> Line<'static> {
             Style::default().fg(theme.thinking_high()),
         );
     }
+    if app.interrupting && !matches!(app.turn, TurnState::Idle) {
+        return Line::from(vec![
+            Span::styled(
+                format!(" {spinner} "),
+                Style::default().fg(theme.thinking_max()),
+            ),
+            Span::styled("interrupting…", Style::default().fg(theme.text())),
+        ]);
+    }
     match &app.turn {
         TurnState::Running { since, .. }
         | TurnState::Starting(since)
@@ -263,7 +337,7 @@ fn status_line(app: &App, spinner: &str, now: Instant) -> Line<'static> {
                     " ({} · {} · enter queues · enter on empty steers)",
                     elapsed_label(now.duration_since(*since)),
                     if matches!(app.turn, TurnState::External(_)) {
-                        "woken by a finished subagent"
+                        "woken by a finished subagent · esc esc to interrupt"
                     } else {
                         "esc esc to interrupt"
                     }
@@ -306,12 +380,6 @@ fn footer(app: &App) -> Line<'static> {
     if app.tier != nanocode::ServiceTier::Standard {
         spans.push(Span::styled(
             format!(" · {}", app.tier.as_str()),
-            Style::default().fg(theme.thinking_high()),
-        ));
-    }
-    if app.host.pro && app.model.as_codex().is_some() {
-        spans.push(Span::styled(
-            " · pro",
             Style::default().fg(theme.thinking_high()),
         ));
     }

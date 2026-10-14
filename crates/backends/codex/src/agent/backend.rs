@@ -64,7 +64,7 @@ const CODEX_CAPABILITIES: Capabilities = {
     capabilities.compaction = true;
     capabilities.developer_messages = true;
     capabilities.context = true;
-    capabilities.model = crate::session::Mutability::BeforeFirstPrompt;
+    capabilities.model = crate::session::Mutability::BetweenTurns;
     capabilities.thinking = crate::session::Mutability::Anytime;
     capabilities.service_tier = crate::session::Mutability::Anytime;
     capabilities.ultrafast_service_tier = true;
@@ -251,6 +251,15 @@ impl LifecycleBackend for LocalLifecycle {
                 result,
             })
             .await
+        })
+    }
+
+    fn cancel_active(&self) -> BackendFuture<Result<()>> {
+        let commands = self.commands.clone();
+        let shutdown = self.shutdown.clone();
+        Box::pin(async move {
+            request_command(&commands, &shutdown, |result| Command::CancelActive { result })
+                .await
         })
     }
 

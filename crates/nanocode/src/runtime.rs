@@ -866,6 +866,26 @@ impl Nanocodex {
             .capabilities(ModelTransport::Native)
             .check_thinking(thinking)?;
         self.inner.recipe(model.family())?;
+        if model.family() == agent.harness_family() {
+            match agent.fork(crate::ForkRequest::latest()).await {
+                Ok((switched, events)) => {
+                    let configured = async {
+                        switched.set_harness_model(model).await?;
+                        switched.set_thinking(thinking).await
+                    }
+                    .await;
+                    return match configured {
+                        Ok(()) => Ok((switched, events)),
+                        Err(error) => {
+                            let _ = switched.shutdown().await;
+                            Err(error)
+                        }
+                    };
+                }
+                Err(NanocodexError::ForkBeforeCompletedTurn) => {}
+                Err(error) => return Err(error),
+            }
+        }
         let transcript = agent.transcript().await?;
         let durable_state = match &self.inner.durability {
             Some(store) => {

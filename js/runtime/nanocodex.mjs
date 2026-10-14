@@ -6,9 +6,9 @@ import {
   createSessionId,
   observeAgentRelease,
   retainAgentForOwner,
-  seedTranscript,
+  inheritance as agentInheritance,
+  sessionInfo as agentSessionInfo,
   shutdownOwnedAgent,
-  transcript as agentTranscript,
 } from "../internal.mjs";
 import { createMemoryDurabilityStore } from "./durability-store.mjs";
 import { claudeTransportOptions, isClaudeTransport } from "./claude-transport.mjs";
@@ -422,6 +422,7 @@ async function agentOptions(config, catalog, defaults, family, settings, created
     if (typeof settings.resume.session_id === "string") shared.sessionId = settings.resume.session_id;
   }
   if (settings.sessionId !== undefined) shared.sessionId = settings.sessionId;
+  if (settings.inherit !== undefined) shared.inherit = settings.inherit;
   if (config.durability !== undefined) {
 
 
@@ -564,15 +565,29 @@ function createRuntime(config, catalog, defaults, platform) {
   }
 
   async function switchAgent(agent, options) {
-    const messages = await agentTranscript(agent);
-    const next = await spawn(options);
-    try {
-      seedTranscript(next, messages);
-    } catch (error) {
-      await shutdownOwnedAgent(next).catch(() => {});
-      throw error;
+    const settings = checkKeys(options, SPAWN_KEYS, "nano.switch");
+    const selection = select(config, catalog, defaults, settings);
+    if (selection.harness === agentSessionInfo(agent).harness) {
+      let next;
+      try {
+        next = await agent.session.fork();
+      } catch (error) {
+        if (!/completed turn/i.test(error?.message ?? "")) throw error;
+      }
+      if (next !== undefined) {
+        own(next);
+        try {
+          await next.session.setModel(selection.model);
+          if (selection.thinking !== undefined) await next.session.setThinking(selection.thinking);
+        } catch (error) {
+          await shutdownOwnedAgent(next).catch(() => {});
+          throw error;
+        }
+        return next;
+      }
     }
-    return next;
+    const inherit = await agentInheritance(agent);
+    return construct(selection.harness, { ...selection, instructions: settings.instructions, sessionId: settings.sessionId, inherit });
   }
 
   function shutdown() {

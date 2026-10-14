@@ -135,6 +135,8 @@ pub(super) struct ClaudeConfig {
     #[serde(default)]
     subagent_routing: bool,
     codex_harness: Option<Value>,
+    #[serde(default)]
+    inherit: Option<super::WasmInherit>,
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -503,14 +505,23 @@ pub(super) async fn build_claude(
     lineage: Option<nanocode::Lineage>,
 ) -> Result<(RustNanocodex, AgentEvents), JsValue> {
     config.validate().map_err(js_error)?;
+    let inherit = config.inherit.clone();
     let record = super::durability_record(
         config.durability_id.as_deref(),
         config.session_id.as_deref(),
         nanocode::ModelSelection::new(nanocode::HarnessFamily::Claude, config.model.clone()),
         config.workspace.as_deref(),
         checkpoint.as_ref().or(config.resume.as_ref()),
-        lineage,
-    );
+        lineage.or_else(|| inherit.as_ref().map(super::WasmInherit::lineage)),
+    )
+    .map(|record| match &inherit {
+        Some(inherit) => inherit.record(record),
+        None => record,
+    });
+    let mut seed = inherit
+        .as_ref()
+        .map(super::WasmInherit::transcript)
+        .unwrap_or_default();
     let direct = config.is_direct();
     let endpoint = config.endpoint.unwrap_or_else(|| {
         if config.subscription_compatibility {
@@ -638,7 +649,8 @@ pub(super) async fn build_claude(
             builder = builder.resume(checkpoint).map_err(js_agent_error)?;
         }
         if let Some(record) = record {
-            durable.describe(record).await.map_err(js_error)?;
+            let described = durable.describe(record).await.map_err(js_error)?;
+            seed = super::inherited_seed(&durable, described).await?;
         }
         builder = builder.durability(durable).await.map_err(js_error)?;
     }
@@ -689,5 +701,6 @@ pub(super) async fn build_claude(
     if let Some(checkpoint) = checkpoint {
         builder = builder.resume(checkpoint).map_err(js_agent_error)?;
     }
-    builder.build().map_err(js_error)
+    let (agent, events) = builder.build().map_err(js_error)?;
+    Ok((agent.with_transcript(seed).map_err(js_agent_error)?, events))
 }

@@ -363,6 +363,10 @@ export async function transcript(agent) {
   return JSON.parse(await agentState(agent).raw.transcript());
 }
 
+export async function inheritance(agent) {
+  return JSON.parse(await agentState(agent).raw.inheritance());
+}
+
 export function seedTranscript(agent, messages) {
   return agentState(agent).raw.seedTranscript(JSON.stringify(messages));
 }
@@ -486,6 +490,7 @@ export function toWasmConfig(options = {}) {
     );
   }
   copy(config, "resume", options.resume);
+  copy(config, "inherit", options.inherit);
   copy(config, "durability_id", options.durabilityId);
   copy(config, "durability_host_id", options.durabilityHostId);
   copy(config, "terminal_receipt_retention", options.terminalReceiptRetention);

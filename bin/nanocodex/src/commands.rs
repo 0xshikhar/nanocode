@@ -1,6 +1,7 @@
-pub const COMMANDS: [(&str, &str); 16] = [
+pub const COMMANDS: [(&str, &str); 21] = [
     ("/model", "switch harness, model, thinking and speed"),
-    ("/thinking", "change the thinking level"),
+    ("/thinking", "open the thinking dial"),
+    ("/effort", "open the thinking dial"),
     (
         "/fast",
         "cycle the service tier (standard, fast, ultrafast)",
@@ -10,13 +11,17 @@ pub const COMMANDS: [(&str, &str); 16] = [
     ("/new", "start a new session"),
     ("/agents", "toggle the subagent tree"),
     ("/compact", "compact the conversation context"),
+    ("/context", "token usage for the last turn and the session"),
+    ("/copy", "copy the last reply to the clipboard"),
+    ("/theme", "choose the auto, dark or light theme"),
+    ("/skills", "insert a skill from this workspace"),
+    ("/image", "attach an image from the clipboard"),
+    ("/detach", "remove pending image attachments"),
     ("/session", "show session, model and tool details"),
     ("/expand", "expand or collapse tools and reasoning"),
-    ("/effort", "change the thinking level"),
     ("/mouse", "toggle mouse capture for native text selection"),
     ("/help", "show key bindings"),
     ("/clear", "start a new session"),
-    ("/status", "show session, model and tool details"),
     ("/quit", "exit nanocodex"),
 ];
 

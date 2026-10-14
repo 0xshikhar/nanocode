@@ -116,6 +116,13 @@ impl TerminalSession {
         Ok(())
     }
 
+    pub fn copy(&mut self, text: &str) -> io::Result<()> {
+        execute!(
+            self.terminal.backend_mut(),
+            crossterm::clipboard::CopyToClipboard::to_clipboard_from(text)
+        )
+    }
+
     #[must_use]
     pub const fn mouse_capture(&self) -> bool {
         self.options.mouse_capture

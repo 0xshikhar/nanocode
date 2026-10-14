@@ -1472,6 +1472,54 @@ struct WasmConfig {
     subagent_routing: bool,
     #[serde(default)]
     claude_harness: Option<serde_json::Value>,
+    #[serde(default)]
+    inherit: Option<WasmInherit>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WasmInherit {
+    lineage: Lineage,
+    transcript: Vec<nanocode::PromptMessage>,
+}
+
+impl WasmInherit {
+    pub(crate) fn lineage(&self) -> Lineage {
+        self.lineage.clone()
+    }
+
+    pub(crate) fn record(
+        &self,
+        record: nanocode::durability::SessionRecord,
+    ) -> nanocode::durability::SessionRecord {
+        record.with_inherited_transcript(self.transcript.clone())
+    }
+
+    pub(crate) fn transcript(&self) -> Vec<nanocode::PromptMessage> {
+        self.transcript.clone()
+    }
+}
+
+pub(crate) async fn inherited_seed(
+    durable: &nanocode::agent::durability::DurableSession,
+    described: nanocode::durability::SessionRecord,
+) -> Result<Vec<nanocode::PromptMessage>, JsValue> {
+    if described.inherited_transcript.is_empty()
+        || durable
+            .latest_checkpoint()
+            .await
+            .map_err(js_error)?
+            .is_some()
+        || !durable
+            .state()
+            .await
+            .map_err(js_error)?
+            .pending_operations()
+            .is_empty()
+    {
+        return Ok(Vec::new());
+    }
+    Ok(described.inherited_transcript)
 }
 
 #[derive(Deserialize, Serialize)]
@@ -2236,6 +2284,12 @@ impl WasmNanocodex {
             .filter_map(std::rc::Weak::upgrade)
             .filter(|state| state.borrow().completed.is_none())
             .collect();
+        if pending.is_empty() {
+            return match self.inner.cancel_active_turn().await {
+                Ok(()) | Err(NanocodexError::TurnNotCancellable) => Ok(()),
+                Err(error) => Err(js_agent_error(error)),
+            };
+        }
         for state in pending {
             let turn = WasmTurn { state };
             match turn.control().await {
@@ -2362,6 +2416,15 @@ impl WasmNanocodex {
     pub async fn transcript(&self) -> Result<String, JsValue> {
         serde_json::to_string(&self.inner.transcript().await.map_err(js_agent_error)?)
             .map_err(js_error)
+    }
+
+    pub async fn inheritance(&self) -> Result<String, JsValue> {
+        let session = self.inner.session();
+        serde_json::to_string(&serde_json::json!({
+            "lineage": Lineage::child_of(&session.lineage, session.session_id.as_str(), Origin::Fork),
+            "transcript": self.inner.transcript().await.map_err(js_agent_error)?,
+        }))
+        .map_err(js_error)
     }
 
     #[wasm_bindgen(js_name = seedTranscript)]
@@ -4245,14 +4308,23 @@ async fn build_codex(
     validate(&config)?;
 
     let model = config.model.parse::<Model>().map_err(js_error)?;
+    let inherit = config.inherit.clone();
     let record = durability_record(
         config.durability_id.as_deref(),
         config.session_id.as_deref(),
         ModelSelection::Codex(model),
         config.workspace.as_deref(),
         checkpoint.as_ref().or(config.resume.as_ref()),
-        lineage,
-    );
+        lineage.or_else(|| inherit.as_ref().map(WasmInherit::lineage)),
+    )
+    .map(|record| match &inherit {
+        Some(inherit) => inherit.record(record),
+        None => record,
+    });
+    let mut seed = inherit
+        .as_ref()
+        .map(WasmInherit::transcript)
+        .unwrap_or_default();
 
     ModelSelection::Codex(model)
         .capabilities(nanocode::ModelTransport::Native)
@@ -4372,7 +4444,8 @@ async fn build_codex(
             builder = builder.resume(checkpoint).map_err(js_agent_error)?;
         }
         if let Some(record) = record {
-            durable_state.describe(record).await.map_err(js_error)?;
+            let described = durable_state.describe(record).await.map_err(js_error)?;
+            seed = inherited_seed(&durable_state, described).await?;
         }
         builder = builder.durability(durable_state).await.map_err(js_error)?;
     }
@@ -4386,5 +4459,5 @@ async fn build_codex(
         builder = builder.prompt_cache_key(key);
     }
     let (inner, events) = builder.build().map_err(js_error)?;
-    Ok((inner, events))
+    Ok((inner.with_transcript(seed).map_err(js_agent_error)?, events))
 }

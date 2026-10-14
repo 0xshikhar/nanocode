@@ -54,6 +54,7 @@ export async function create(options = {}) {
     sessionId,
     workspace,
     resume,
+    inherit,
     durability,
     durabilityId,
     terminalReceiptRetention,
@@ -268,6 +269,7 @@ export async function create(options = {}) {
       workspace: workspace ?? filesystem?.root,
       executionEnvironment,
       resume,
+      inherit,
       durabilityId,
       terminalReceiptRetention,
     }, cloudflareReservation);

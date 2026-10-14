@@ -44,6 +44,9 @@ pub(super) enum Command {
         key: TurnKey,
         result: oneshot::Sender<Result<()>>,
     },
+    CancelActive {
+        result: oneshot::Sender<Result<()>>,
+    },
     Fork {
         origin: crate::Origin,
         point: ForkFrom,

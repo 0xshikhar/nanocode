@@ -101,6 +101,9 @@ impl LifecycleBackend for Owned {
     fn cancel(&self, key: BackendTurnKey) -> BackendFuture<Result<()>> {
         self.inner.cancel(key)
     }
+    fn cancel_active(&self) -> BackendFuture<Result<()>> {
+        self.inner.cancel_active()
+    }
     fn set_harness_model(&self, model: crate::ModelSelection) -> BackendFuture<Result<()>> {
         self.inner.set_harness_model(model)
     }

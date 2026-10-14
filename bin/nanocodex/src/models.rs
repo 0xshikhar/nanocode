@@ -1,13 +1,9 @@
-use nanocode::{
-    HarnessFamily, ModelSelection, ModelTransport, ReasoningMode, ServiceTier, Thinking,
+use nanocode::{HarnessFamily, ModelSelection, ModelTransport, ServiceTier, Thinking};
+use nanocode_tui::{
+    effort::{EffortDial, Level},
+    picker::{ItemKind, Picker, PickerItem},
+    theme::Theme,
 };
-use nanocode_tui::picker::{ItemKind, Picker, PickerItem};
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TierOption {
-    Tier(ServiceTier),
-    Pro,
-}
 
 pub fn catalog() -> Vec<(HarnessFamily, Vec<ModelSelection>)> {
     HarnessFamily::builtin()
@@ -35,9 +31,6 @@ pub fn features(model: &ModelSelection) -> String {
         .filter(|tier| *tier != ServiceTier::Standard)
     {
         features.push(tier.as_str());
-    }
-    if capabilities.supports_reasoning_mode(ReasoningMode::Pro) {
-        features.push("pro");
     }
     features.join(" · ")
 }
@@ -96,38 +89,66 @@ pub fn thinking_at(model: &ModelSelection, picker: &Picker, index: usize) -> Opt
         .find(|thinking| thinking.as_str() == label)
 }
 
-pub fn tier_options(model: &ModelSelection) -> Vec<TierOption> {
-    let capabilities = model.capabilities(ModelTransport::Native);
-    let mut options = capabilities
+pub fn tier_options(model: &ModelSelection) -> Vec<ServiceTier> {
+    model
+        .capabilities(ModelTransport::Native)
         .service_tiers()
-        .map(TierOption::Tier)
-        .collect::<Vec<_>>();
-    if capabilities.supports_reasoning_mode(ReasoningMode::Pro) {
-        options.push(TierOption::Pro);
-    }
-    options
+        .collect()
 }
 
-pub fn tier_picker(
-    model: &ModelSelection,
-    options: &[TierOption],
-    current: ServiceTier,
-    pro: bool,
-) -> Picker {
-    let items = options
+pub fn tier_picker(model: &ModelSelection, tiers: &[ServiceTier], current: ServiceTier) -> Picker {
+    let items = tiers
         .iter()
-        .map(|option| match option {
-            TierOption::Tier(tier) => PickerItem::choice(tier.as_str())
+        .map(|tier| {
+            PickerItem::choice(tier.as_str())
                 .detail(match tier {
                     ServiceTier::Standard => "default speed",
                     ServiceTier::Fast | ServiceTier::Priority => "priority processing",
                     ServiceTier::Ultrafast => "lowest latency",
                 })
-                .current(*tier == current && !pro),
-            TierOption::Pro => PickerItem::choice("pro")
-                .detail("pro reasoning mode (reopens the session)")
-                .current(pro),
+                .current(*tier == current)
         })
         .collect();
     Picker::new(format!("Speed · {model}"), items).footer("enter select · esc cancel")
+}
+
+pub const fn thinking_color(
+    thinking: Thinking,
+    theme: &Theme,
+) -> nanocode_tui::ratatui::style::Color {
+    match thinking {
+        Thinking::None => theme.muted(),
+        Thinking::Low => theme.thinking_low(),
+        Thinking::Medium => theme.thinking_medium(),
+        Thinking::High => theme.thinking_high(),
+        Thinking::Xhigh => theme.thinking_xhigh(),
+        Thinking::Max => theme.thinking_max(),
+    }
+}
+
+pub fn thinking_dial(
+    model: &ModelSelection,
+    current: Thinking,
+    theme: &Theme,
+) -> Option<(EffortDial, Vec<Thinking>)> {
+    let levels = model
+        .capabilities(ModelTransport::Native)
+        .thinking()
+        .collect::<Vec<_>>();
+    let selected = levels
+        .iter()
+        .position(|level| *level == current)
+        .unwrap_or(0);
+    let dial = EffortDial::new(
+        format!("Thinking · {}", model.display_name()),
+        levels
+            .iter()
+            .map(|level| Level {
+                label: level.as_str().to_owned(),
+                color: thinking_color(*level, theme),
+            })
+            .collect(),
+        selected,
+    )?;
+    Some((dial, levels))
 }

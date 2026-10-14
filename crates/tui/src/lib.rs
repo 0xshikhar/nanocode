@@ -1,5 +1,7 @@
 pub mod composer;
 pub mod diff;
+pub mod effort;
+pub mod file_finder;
 pub mod format;
 pub mod highlight;
 pub mod history;

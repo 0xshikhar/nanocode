@@ -45,6 +45,7 @@ export function create(options = {}) {
     sessionId,
     workspace,
     resume,
+    inherit,
     durability,
     durabilityId,
     transport,
@@ -179,6 +180,7 @@ export function create(options = {}) {
     sessionId: stableSessionId,
     workspace: workspace ?? filesystem?.root,
     resume,
+    inherit,
     durabilityId,
   }).catch(async (error) => {
     if (!creationStarted) await host.dispose();

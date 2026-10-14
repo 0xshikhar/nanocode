@@ -94,6 +94,24 @@ impl Composer {
         self.preferred_column = None;
     }
 
+    #[must_use]
+    pub fn mention(&self, sigil: char) -> Option<(usize, &str)> {
+        let before = &self.text[..self.cursor];
+        let start = before.rfind(char::is_whitespace).map_or(0, |index| {
+            index + before[index..].chars().next().map_or(1, char::len_utf8)
+        });
+        let token = &before[start..];
+        token.strip_prefix(sigil).map(|query| (start, query))
+    }
+
+    pub fn replace_before_cursor(&mut self, start: usize, replacement: &str) {
+        if start <= self.cursor && self.text.is_char_boundary(start) {
+            self.text.replace_range(start..self.cursor, replacement);
+            self.cursor = start + replacement.len();
+            self.preferred_column = None;
+        }
+    }
+
     pub fn paste(&mut self, text: &str) -> ComposerAction {
         self.insert_str(text);
         ComposerAction::Edited

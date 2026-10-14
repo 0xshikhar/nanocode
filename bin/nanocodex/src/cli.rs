@@ -6,7 +6,8 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 #[command(
     name = "nanocodex",
     version,
-    about = "Interactive coding agent for Codex and Claude"
+    about = "Interactive coding agent for Codex and Claude",
+    long_about = "Interactive coding agent for Codex and Claude. Run without a subcommand to open the terminal interface; 'nc' is an alias of 'nanocodex'."
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -18,63 +19,104 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    #[command(about = "Serve this machine's workspace tools to a remote nanocodex agent")]
     Runner(RunnerArgs),
+    #[command(about = "List saved sessions (current workspace unless --all)")]
     Sessions(SessionsArgs),
+    #[command(about = "Run one prompt without the terminal interface and print the final reply")]
     Exec(SessionArgs),
+    #[command(about = "List models per harness with thinking levels and speed tiers")]
     Models,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum HarnessArg {
+    #[value(help = "OpenAI Codex models (ChatGPT login)")]
     Codex,
+    #[value(help = "Anthropic Claude models (Claude Code login)")]
     Claude,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 pub enum RunnerModeArg {
     #[default]
+    #[value(help = "Keep local tools; the runner's workspace is reachable under /<runner-name>")]
     Alongside,
+    #[value(help = "Run every tool on the runner instead of this machine")]
     Replace,
 }
 
 #[derive(Clone, Debug, Args)]
 pub struct SessionArgs {
+    #[arg(help = "Prompt to send as soon as the session is ready")]
     pub prompt: Option<String>,
 
-    #[arg(short, long, env = "NANOCODEX_MODEL")]
+    #[arg(
+        short,
+        long,
+        env = "NANOCODEX_MODEL",
+        help = "Model id or alias (see 'nanocodex models'); defaults to gpt-6.1-sol at xhigh thinking on the fast tier"
+    )]
     pub model: Option<String>,
 
-    #[arg(long, value_enum)]
+    #[arg(long, value_enum, help = "Harness to use when --model is not given")]
     pub harness: Option<HarnessArg>,
 
-    #[arg(short, long)]
+    #[arg(
+        short,
+        long,
+        help = "Thinking level supported by the model (none, low, medium, high, xhigh, max)"
+    )]
     pub thinking: Option<String>,
 
-    #[arg(long, value_parser = ["standard", "fast", "ultrafast"])]
+    #[arg(
+        long,
+        value_parser = ["standard", "fast", "ultrafast"],
+        help = "Service tier; only tiers the model supports are accepted"
+    )]
     pub tier: Option<String>,
 
-    #[arg(long)]
-    pub pro: bool,
-
-    #[arg(short = 'C', long = "cd")]
+    #[arg(
+        short = 'C',
+        long = "cd",
+        help = "Workspace directory (defaults to the current directory)"
+    )]
     pub workspace: Option<PathBuf>,
 
-    #[arg(short, long, num_args = 0..=1, default_missing_value = "")]
+    #[arg(
+        short,
+        long,
+        num_args = 0..=1,
+        default_missing_value = "",
+        value_name = "SESSION_ID",
+        help = "Resume a saved session; without an id, pick one interactively"
+    )]
     pub resume: Option<String>,
 
-    #[arg(short = 'c', long = "continue")]
+    #[arg(
+        short = 'c',
+        long = "continue",
+        help = "Resume the most recent session in this workspace"
+    )]
     pub continue_last: bool,
 
-    #[arg(long)]
+    #[arg(long, help = "Keep the session in memory only; nothing is saved")]
     pub ephemeral: bool,
 
-    #[arg(long, env = "NANOCODEX_HOME")]
+    #[arg(
+        long,
+        env = "NANOCODEX_HOME",
+        help = "Directory for saved sessions, history and pasted images (defaults to $CODEX_HOME/nanocode)"
+    )]
     pub home: Option<PathBuf>,
 
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Leave mouse capture off so the terminal keeps native text selection"
+    )]
     pub no_mouse: bool,
 
-    #[arg(long)]
+    #[arg(long, help = "Disable subagent tools")]
     pub no_subagents: bool,
 
     #[command(flatten)]
@@ -83,25 +125,56 @@ pub struct SessionArgs {
 
 #[derive(Clone, Debug, Default, Args)]
 pub struct RemoteArgs {
-    #[arg(long, value_name = "WS_URL", conflicts_with = "runner_host")]
+    #[arg(
+        long,
+        value_name = "WS_URL",
+        conflicts_with = "runner_host",
+        help = "Connect to a runner started with 'nanocodex runner --listen'"
+    )]
     pub runner_connect: Option<String>,
 
-    #[arg(long, value_name = "ADDR")]
+    #[arg(
+        long,
+        value_name = "ADDR",
+        help = "Listen for a runner started with 'nanocodex runner --connect'"
+    )]
     pub runner_host: Option<SocketAddr>,
 
-    #[arg(long, env = "NANOCODEX_RUNNER_TOKEN", hide_env_values = true)]
+    #[arg(
+        long,
+        env = "NANOCODEX_RUNNER_TOKEN",
+        hide_env_values = true,
+        help = "Shared secret authenticating the runner connection"
+    )]
     pub runner_token: Option<String>,
 
-    #[arg(long, default_value = "runner")]
+    #[arg(
+        long,
+        default_value = "runner",
+        help = "Runner name; also the mount point /<name> in alongside mode"
+    )]
     pub runner_name: String,
 
-    #[arg(long, value_name = "PATH")]
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "The runner's workspace path (defaults to this workspace)"
+    )]
     pub runner_workspace: Option<PathBuf>,
 
-    #[arg(long, value_enum, default_value_t)]
+    #[arg(
+        long,
+        value_enum,
+        default_value_t,
+        help = "Use the runner alongside local tools or instead of them"
+    )]
     pub runner_mode: RunnerModeArg,
 
-    #[arg(long, value_name = "MS")]
+    #[arg(
+        long,
+        value_name = "MS",
+        help = "Hard deadline for each remote tool call, in milliseconds"
+    )]
     pub runner_call_timeout_ms: Option<u64>,
 }
 
@@ -111,31 +184,53 @@ pub struct RunnerArgs {
         long,
         value_name = "ADDR",
         conflicts_with = "connect",
-        required_unless_present = "connect"
+        required_unless_present = "connect",
+        help = "Accept an agent connection on this address (agent uses --runner-connect)"
     )]
     pub listen: Option<SocketAddr>,
 
-    #[arg(long, value_name = "WS_URL")]
+    #[arg(
+        long,
+        value_name = "WS_URL",
+        help = "Connect out to an agent listening with --runner-host"
+    )]
     pub connect: Option<String>,
 
-    #[arg(long, env = "NANOCODEX_RUNNER_TOKEN", hide_env_values = true)]
+    #[arg(
+        long,
+        env = "NANOCODEX_RUNNER_TOKEN",
+        hide_env_values = true,
+        help = "Shared secret the agent must present"
+    )]
     pub token: String,
 
-    #[arg(short = 'C', long = "cd")]
+    #[arg(
+        short = 'C',
+        long = "cd",
+        help = "Workspace to serve (defaults to the current directory)"
+    )]
     pub workspace: Option<PathBuf>,
 
-    #[arg(long, default_value = "runner")]
+    #[arg(
+        long,
+        default_value = "runner",
+        help = "Runner name advertised to the agent"
+    )]
     pub name: String,
 
-    #[arg(long)]
+    #[arg(long, help = "Also serve computer use from the installed provider")]
     pub cua: bool,
 }
 
 #[derive(Clone, Debug, Args)]
 pub struct SessionsArgs {
-    #[arg(long, env = "NANOCODEX_HOME")]
+    #[arg(
+        long,
+        env = "NANOCODEX_HOME",
+        help = "Session store directory (defaults to $CODEX_HOME/nanocode)"
+    )]
     pub home: Option<PathBuf>,
 
-    #[arg(long)]
+    #[arg(long, help = "Include sessions from every workspace")]
     pub all: bool,
 }

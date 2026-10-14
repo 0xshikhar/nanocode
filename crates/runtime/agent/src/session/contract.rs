@@ -406,6 +406,8 @@ pub enum Mutability {
 
     BeforeFirstPrompt,
 
+    BetweenTurns,
+
     Anytime,
 }
 

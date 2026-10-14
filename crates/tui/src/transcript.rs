@@ -182,6 +182,17 @@ impl Transcript {
             .map(|cell| (self.cells.len() - 1, &cell.kind))
     }
 
+    pub fn invalidate(&mut self) {
+        self.cache.iter_mut().for_each(|entry| *entry = None);
+    }
+
+    #[must_use]
+    pub fn has_notice_since(&self, index: usize, level: NoticeLevel, text: &str) -> bool {
+        self.cells.iter().skip(index).any(|cell| {
+            matches!(&cell.kind, CellKind::Notice(existing, message) if *existing == level && message == text)
+        })
+    }
+
     #[must_use]
     pub fn find_tool(&self, call_id: &str) -> Option<usize> {
         self.cells

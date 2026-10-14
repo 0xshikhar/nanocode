@@ -8,12 +8,9 @@ use nanocode_tui::{
     tree::{NodeStatus, TreeNode},
 };
 
-use crate::{
-    app::{
-        App, AppEvent, BtwUpdate, Ready, TurnState, apply_tier, family_label, open_session,
-        subagent_status,
-    },
-    host::Host,
+use crate::app::{
+    App, AppEvent, BtwUpdate, Ready, TurnState, apply_tier, family_label, open_session,
+    subagent_status,
 };
 
 const BTW_PREAMBLE: &str = "Side question from the user, asked while you keep working on the main task. Answer it briefly from the conversation context. Do not call tools, do not modify files, and do not continue the main task in this reply.";
@@ -34,7 +31,6 @@ impl App {
     }
 
     pub(crate) fn switch(&mut self, model: ModelSelection, thinking: Thinking, tier: ServiceTier) {
-        let pro = self.pending_pro.take().unwrap_or(self.host.pro);
         let capabilities = model.capabilities(nanocode::ModelTransport::Native);
         if let Err(error) = capabilities
             .check_thinking(thinking)
@@ -50,17 +46,16 @@ impl App {
             return;
         };
         let tx = self.tx.clone();
-        let rebuild = model.as_codex().is_some() && pro != self.host.pro;
         let mutability = agent.capabilities();
         let started = self.session_started;
         let mutable = |setting: Mutability| {
-            setting == Mutability::Anytime || setting == Mutability::BeforeFirstPrompt && !started
+            matches!(setting, Mutability::Anytime | Mutability::BetweenTurns)
+                || setting == Mutability::BeforeFirstPrompt && !started
         };
         let model_changed = model != self.model;
         let thinking_changed = thinking != self.thinking;
         let tier_changed = tier != self.tier;
-        let in_place = !rebuild
-            && model.family() == self.model.family()
+        let in_place = model.family() == self.model.family()
             && (!model_changed || mutable(mutability.model))
             && (!thinking_changed || mutable(mutability.thinking))
             && (!tier_changed || mutable(mutability.service_tier));
@@ -91,38 +86,13 @@ impl App {
             });
             return;
         }
-        let reopen = rebuild && !model_changed && self.host.config.store.is_some() && started;
-        let carry = !reopen && started;
-        let config = self.host.config.clone();
-        let old_host = self.host.clone();
+        let host = self.host.clone();
         let previous_model = self.model.clone();
         self.starting = true;
         tokio::spawn(async move {
             let ready = async {
-                let host = if rebuild {
-                    Host::build(config, &model, thinking, pro)?
-                } else {
-                    old_host.clone()
-                };
                 let session_id = agent.session_id().to_owned();
-                if reopen {
-                    agent.flush().await?;
-                    agent.shutdown().await?;
-                    let mut ready = open_session(&host, &session_id, tier).await?;
-                    if ready.thinking != thinking {
-                        ready.agent.set_thinking(thinking).await?;
-                        ready.thinking = thinking;
-                    }
-                    ready.history = None;
-                    ready.reset_transcript = false;
-                    ready.host = Some(host);
-                    ready.notice = format!(
-                        "reopened session {session_id} with {model}{}",
-                        if pro { " · pro reasoning" } else { "" }
-                    );
-                    return Ok::<_, crate::host::Error>(ready);
-                }
-                let (next, events) = if carry {
+                let (next, events) = if started {
                     host.runtime
                         .switch(&agent, model.clone(), Some(thinking))
                         .await?
@@ -135,12 +105,12 @@ impl App {
                 }
                 drop(agent.flush().await);
                 drop(agent.shutdown().await);
-                let carried = if !carry {
-                    String::new()
-                } else {
+                let carried = if started {
                     format!("; conversation carried over, previous session {session_id} kept")
+                } else {
+                    String::new()
                 };
-                Ok(Ready {
+                Ok::<_, crate::host::Error>(Ready {
                     notice: format!(
                         "switched {} {previous_model} → {} {model} · thinking {thinking} · {} · new session {}{carried}",
                         family_label(&previous_model.family()),
@@ -153,18 +123,12 @@ impl App {
                     model,
                     thinking,
                     tier,
-                    host: rebuild.then_some(host),
                     history: None,
                     reset_transcript: false,
                 })
             };
             let event = match ready.await {
-                Ok(ready) => {
-                    if ready.host.is_some() {
-                        drop(old_host.runtime.shutdown().await);
-                    }
-                    AppEvent::AgentReady(Box::new(ready))
-                }
+                Ok(ready) => AppEvent::AgentReady(Box::new(ready)),
                 Err(error) => AppEvent::AgentFailed(format!("switch failed: {error}")),
             };
             drop(tx.send(event));
@@ -413,7 +377,6 @@ impl App {
                     model,
                     thinking,
                     tier,
-                    host: None,
                     history: None,
                     reset_transcript: true,
                 })

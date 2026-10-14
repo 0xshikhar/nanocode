@@ -316,6 +316,7 @@ pub(super) async fn begin_shutdown(
             Command::SteerWithId { result, .. }
             | Command::Steer { result, .. }
             | Command::Cancel { result, .. }
+            | Command::CancelActive { result }
             | Command::SetModel { result, .. }
             | Command::SetThinking { result, .. }
             | Command::SetServiceTier { result, .. }
@@ -515,7 +516,7 @@ pub(super) fn handle_idle_command<S>(
             drop(route_result.send(Err(NanocodexError::AgentStopped)));
             drop(turn_result);
         }
-        Command::Cancel { result, .. } => {
+        Command::Cancel { result, .. } | Command::CancelActive { result } => {
             drop(result.send(Err(NanocodexError::TurnNotCancellable)));
         }
         Command::SetThinking { result, .. } | Command::SetServiceTier { result, .. } => {
@@ -543,7 +544,5 @@ pub(super) fn handle_idle_command<S>(
 }
 
 pub(super) fn model_change_locked() -> NanocodexError {
-    NanocodexError::InvalidRequest(
-        "the model can only be changed before the first turn is accepted".to_owned(),
-    )
+    NanocodexError::InvalidRequest("the model can only be changed between turns".to_owned())
 }

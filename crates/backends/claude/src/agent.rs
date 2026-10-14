@@ -3126,7 +3126,7 @@ const CLAUDE_CAPABILITIES: Capabilities = {
     capabilities.steering = true;
     capabilities.identified_steering = true;
     capabilities.compaction = true;
-    capabilities.model = Mutability::BeforeFirstPrompt;
+    capabilities.model = Mutability::BetweenTurns;
     capabilities.thinking = Mutability::Anytime;
     capabilities.service_tier = Mutability::Anytime;
     capabilities
@@ -5734,11 +5734,9 @@ impl LifecycleBackend for Driver {
                 return Err(unsupported("model belongs to another harness family"));
             }
 
-            if state.accepted_turns.load(Ordering::SeqCst) != 0 {
-                return Err(unsupported(
-                    "the model can only be changed before the first turn is accepted",
-                ));
-            }
+            let Ok(conversation) = state.conversation.try_lock() else {
+                return Err(unsupported("the model can only be changed between turns"));
+            };
             *state
                 .model
                 .write()
@@ -5753,6 +5751,15 @@ impl LifecycleBackend for Driver {
                 state
                     .adaptive_thinking
                     .store(thinking != Thinking::None, Ordering::SeqCst);
+            }
+            if let Some(policy) = state.policy.clone()
+                && (!conversation.messages.is_empty() || !conversation.summary.is_empty())
+            {
+                let snapshot = state.snapshot(&conversation).await?;
+                policy
+                    .checkpoint(serde_json::to_value(&snapshot).map_err(provider_error)?)
+                    .await?;
+                state.publish_boundary(snapshot);
             }
             Ok(())
         })
@@ -5983,6 +5990,21 @@ impl LifecycleBackend for Driver {
                 }
             }
             Ok(())
+        })
+    }
+    fn cancel_active(&self) -> BackendFuture<Result<()>> {
+        let driver = self.clone();
+        Box::pin(async move {
+            let key = driver
+                .state
+                .cancellations
+                .lock()
+                .await
+                .keys()
+                .min_by_key(|key| key.0)
+                .copied()
+                .ok_or(NanocodexError::TurnNotCancellable)?;
+            driver.cancel(key).await
         })
     }
     fn set_thinking(&self, thinking: Thinking) -> BackendFuture<Result<()>> {

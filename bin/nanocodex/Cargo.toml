@@ -38,7 +38,7 @@ nanocode-home = { path = "../../crates/core/home", version = "0.6.7" }
 nanocode-store-jsonl = { path = "../../crates/integrations/store-jsonl", version = "0.6.7" }
 nanocode-tui = { path = "../../crates/tui", version = "0.6.7" }
 serde_json.workspace = true
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { workspace = true, features = ["macros", "process", "rt-multi-thread", "signal", "sync", "time"] }
 uuid.workspace = true
 
 [lints]

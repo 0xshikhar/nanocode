@@ -310,6 +310,10 @@ pub trait LifecycleBackend: Send + Sync + 'static {
 
     fn cancel(&self, key: BackendTurnKey) -> BackendFuture<Result<()>>;
 
+    fn cancel_active(&self) -> BackendFuture<Result<()>> {
+        unsupported("cancel_active_turn")
+    }
+
     fn set_harness_model(&self, model: crate::ModelSelection) -> BackendFuture<Result<()>>;
 
     fn set_thinking(&self, thinking: Thinking) -> BackendFuture<Result<()>>;

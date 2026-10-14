@@ -483,6 +483,10 @@ impl Nanocodex {
         }
     }
 
+    pub async fn cancel_active_turn(&self) -> Result<()> {
+        self.backend.cancel_active().await
+    }
+
     pub async fn set_thinking(&self, thinking: Thinking) -> Result<()> {
         self.backend.set_thinking(thinking).await
     }

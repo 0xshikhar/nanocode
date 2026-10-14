@@ -12,7 +12,7 @@ const OPTION_KEYS = new Set([
   'harness', 'harnesses', 'subagents', 'serverTools', 'durability', 'durabilityId', 'module', 'maxTokens', 'workspace',
   'cache', 'adaptiveThinking', 'keepThinking', 'fastMode', 'thinking', 'parallelTools', 'clientToolSearch',
   'contextWindowTokens', 'autoCompactWindowTokens', 'autoCompact', 'systemBlocks', 'terminalReceiptRetention',
-  'resume',
+  'resume', 'inherit',
 ]);
 
 export function toClaudeConfig(options = {}) {

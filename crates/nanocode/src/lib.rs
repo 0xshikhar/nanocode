@@ -1,6 +1,7 @@
 #![deny(rustdoc::broken_intra_doc_links)]
 
 pub use nanocode_agent::Nanocodex as Agent;
+pub use nanocode_agent::input::PromptMessage;
 pub use nanocode_agent::{
     AgentEvents, AgentSessionContext, Capabilities, ClaudeModel, CostStatus, EstimatedUsdCost,
     ExecutionPolicyDisposition, ForkPoint, ForkRequest, HarnessFamily, Lineage, ModelCapabilities,

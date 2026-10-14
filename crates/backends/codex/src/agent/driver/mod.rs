@@ -429,28 +429,44 @@ where
                     result,
                 } = command
                 {
-                    let outcome = if latest_fork_checkpoint.is_some()
-                        || !pending_developer_messages.is_empty()
-                    {
-                        Err(model_change_locked())
-                    } else {
+                    let mut outcome = if pending_developer_messages.is_empty() {
                         validate_model_thinking(requested_model, default_thinking).and_then(|()| {
                             validate_model_reasoning_mode(
                                 requested_model,
                                 self.spawner.config.reasoning_mode,
                             )
                         })
+                    } else {
+                        Err(model_change_locked())
                     };
+                    let relabeled = latest_fork_checkpoint.as_ref().map(|latest| {
+                        Arc::new(CommittedSession::new(
+                            Arc::clone(&self.spawner.lineage_id),
+                            requested_model,
+                            default_thinking,
+                            default_service_tier,
+                            latest.model().clone(),
+                        ))
+                    });
+                    if outcome.is_ok()
+                        && requested_model != thread_model
+                        && let Some(relabeled) = &relabeled
+                    {
+                        outcome = self.execution.commit_checkpoint(relabeled).await;
+                    }
                     if outcome.is_ok() && requested_model != thread_model {
                         model.shutdown().await;
                         Arc::make_mut(&mut self.spawner.config).model = requested_model;
+                        if relabeled.is_some() {
+                            latest_fork_checkpoint = relabeled;
+                        }
                         model = model_from_checkpoint(
                             &self.events,
                             &self.transport_stats,
                             &self.tools,
                             &self.spawner,
                             &prompt_cache,
-                            None,
+                            latest_fork_checkpoint.as_deref(),
                         );
                         thread_model = requested_model;
                     }
@@ -798,6 +814,9 @@ where
                                             let _ = cancel.send(());
                                         }
                                         break execution.as_mut().await;
+                                    }
+                                    Some(Command::CancelActive { result }) => {
+                                        drop(result.send(Err(NanocodexError::TurnNotCancellable)));
                                     }
                                     Some(Command::Cancel { key, result }) => {
                                         let outcome = match queued_execution_operation(
@@ -1584,6 +1603,17 @@ where
                                     }
                                     continue;
                                 }
+                                let Some(cancel) = cancel.take() else {
+                                    drop(cancellation.send(Err(
+                                        NanocodexError::TurnNotCancellable,
+                                    )));
+                                    continue;
+                                };
+                                let _ = cancel.send(());
+                                cancel_result = Some(cancellation);
+                                break execution.as_mut().await;
+                            }
+                            Some(Command::CancelActive { result: cancellation }) => {
                                 let Some(cancel) = cancel.take() else {
                                     drop(cancellation.send(Err(
                                         NanocodexError::TurnNotCancellable,

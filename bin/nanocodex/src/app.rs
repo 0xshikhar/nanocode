@@ -19,6 +19,7 @@ use nanocode_tui::{
     crossterm::event::{
         Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind,
     },
+    effort::{DialAction, EffortDial},
     history::History,
     picker::{Picker, PickerAction, PickerItem},
     queue::{Queue, QueueKind, QueueState, QueuedPrompt},
@@ -57,6 +58,13 @@ pub enum AppEvent {
         id: String,
         control: TurnControl,
     },
+    Files(std::result::Result<Vec<String>, String>),
+    ShellDone {
+        index: usize,
+        result: std::result::Result<(Option<i32>, String), String>,
+        duration: Duration,
+    },
+    ImagePasted(std::result::Result<PathBuf, String>),
     TurnFinished {
         generation: u64,
         result: std::result::Result<TurnResult, String>,
@@ -95,7 +103,6 @@ pub struct Ready {
     pub model: ModelSelection,
     pub thinking: Thinking,
     pub tier: ServiceTier,
-    pub host: Option<Host>,
     pub history: Option<Vec<TranscriptItem>>,
     pub notice: String,
     pub reset_transcript: bool,
@@ -117,10 +124,18 @@ pub enum PickerPurpose {
     Tier(ModelSelection, Thinking),
     Session(Vec<SessionSummary>),
     Recent(Vec<String>),
+    Theme,
+    Skill(Vec<String>),
 }
 
 pub enum Overlay {
     Picker(PickerPurpose, Picker),
+    Dial {
+        model: ModelSelection,
+        levels: Vec<Thinking>,
+        then_tier: bool,
+        dial: EffortDial,
+    },
     Help,
 }
 
@@ -134,6 +149,7 @@ pub struct Launch {
     pub prompt: Option<String>,
     pub remote_label: Option<String>,
     pub history_path: Option<PathBuf>,
+    pub home: PathBuf,
 }
 
 pub struct App {
@@ -157,8 +173,17 @@ pub struct App {
     pub remote_label: Option<String>,
     pub pending_switch: Option<(ModelSelection, Thinking, ServiceTier)>,
     pub spinner: Spinner,
-    pub(crate) pending_pro: Option<bool>,
     toggle_mouse: bool,
+    pub(crate) home: PathBuf,
+    pub(crate) finder: Option<crate::extras::Finder>,
+    pub(crate) finder_dismissed: Option<usize>,
+    pub(crate) workspace_files: Option<Vec<String>>,
+    pub(crate) files_loading: bool,
+    pub(crate) attachments: Vec<PathBuf>,
+    attachments_by_id: HashMap<String, Vec<PathBuf>>,
+    next_attachments: Vec<PathBuf>,
+    pub(crate) pending_copy: Option<String>,
+    pub(crate) interrupting: bool,
     awaiting_terminal: bool,
     pub(crate) session_started: bool,
     pub(crate) tx: UnboundedSender<AppEvent>,
@@ -203,8 +228,17 @@ pub async fn run(launch: Launch, mut terminal: TerminalSession) -> Result<()> {
         remote_label: launch.remote_label.clone(),
         pending_switch: None,
         spinner: Spinner::new(Instant::now(), SPINNER_FRAME),
-        pending_pro: None,
         toggle_mouse: false,
+        home: launch.home.clone(),
+        finder: None,
+        finder_dismissed: None,
+        workspace_files: None,
+        files_loading: false,
+        attachments: Vec::new(),
+        attachments_by_id: HashMap::new(),
+        next_attachments: Vec::new(),
+        pending_copy: None,
+        interrupting: false,
         awaiting_terminal: false,
         session_started: false,
         tx,
@@ -337,6 +371,10 @@ impl App {
         self.status = Some((text.into(), Instant::now()));
     }
 
+    pub(crate) fn local_id_pub(&mut self, prefix: &str) -> String {
+        self.local_id(prefix)
+    }
+
     fn local_id(&mut self, prefix: &str) -> String {
         self.next_local += 1;
         format!("{prefix}-{}-{}", std::process::id(), self.next_local)
@@ -363,7 +401,6 @@ impl App {
                             model,
                             thinking,
                             tier,
-                            host: None,
                             history: None,
                             reset_transcript: false,
                         })
@@ -401,6 +438,25 @@ impl App {
                 self.flush_pending_steers();
                 true
             }
+            AppEvent::Files(files) => {
+                self.files_loaded(files);
+                true
+            }
+            AppEvent::ShellDone {
+                index,
+                result,
+                duration,
+            } => {
+                self.shell_done(index, result, duration);
+                true
+            }
+            AppEvent::ImagePasted(result) => {
+                match result {
+                    Ok(path) => self.attach(path),
+                    Err(error) => self.flash(format!("image paste failed: {error}")),
+                }
+                true
+            }
             AppEvent::RoutedTurn {
                 generation,
                 id,
@@ -427,7 +483,13 @@ impl App {
                 match result {
                     Err(error) if !self.mapper.reported() => {
                         self.transcript.finish_running_tools(ToolStatus::Failed);
-                        self.notice(NoticeLevel::Error, error);
+                        if !self.transcript.has_notice_since(
+                            self.mapper.turn_start(),
+                            NoticeLevel::Error,
+                            &error,
+                        ) {
+                            self.notice(NoticeLevel::Error, error);
+                        }
                         self.settle_turn();
                     }
                     _ if self.mapper.reported() => self.settle_turn(),
@@ -552,12 +614,6 @@ impl App {
     fn ready(&mut self, ready: Ready) {
         self.starting = false;
         self.generation += 1;
-        if let Some(host) = ready.host {
-            self.host = host;
-            if let Some(updates) = self.host.runtime.take_subagent_updates() {
-                forward_subagents(updates, self.tx.clone());
-            }
-        }
         if ready.reset_transcript {
             self.transcript.clear();
             self.mapper.reset();
@@ -665,6 +721,11 @@ impl App {
         if !matches!(self.turn, TurnState::Idle) || self.agent.is_none() {
             return;
         }
+        if self.interrupting || self.esc_armed.is_some() {
+            self.status = None;
+            self.esc_armed = None;
+        }
+        self.interrupting = false;
         if let Some((model, thinking, tier)) = self.pending_switch.take() {
             self.switch(model, thinking, tier);
             return;
@@ -688,17 +749,22 @@ impl App {
             return;
         };
         let mut text = item.text;
+        let mut attachments = self.attachments_by_id.remove(&id).unwrap_or_default();
         let extra = self.queue.drain_kind(QueueKind::Steer);
         for steer in extra {
             text.push_str("\n\n");
             text.push_str(&steer.text);
+            attachments.extend(self.attachments_by_id.remove(&steer.id).unwrap_or_default());
         }
+        self.next_attachments = attachments;
         self.start_turn(text);
     }
 
     pub(crate) fn start_turn(&mut self, text: String) {
+        let attachments = std::mem::take(&mut self.next_attachments);
         let Some(agent) = self.agent.clone() else {
-            self.enqueue_follow_up(text);
+            let id = self.enqueue_follow_up(text);
+            self.attachments_by_id.insert(id, attachments);
             return;
         };
         let id = uuid::Uuid::now_v7().to_string();
@@ -710,15 +776,13 @@ impl App {
         });
         self.turn = TurnState::Starting(Instant::now());
         self.mapper.begin_turn();
+        self.mapper.mark_turn_start(self.transcript.len());
         self.transcript.scroll_to_bottom();
         let generation = self.generation;
         let tx = self.tx.clone();
-        let sent = text.clone();
+        let sent = crate::extras::prompt_for(&text, &attachments);
         tokio::spawn(async move {
-            match agent
-                .prompt(PromptRequest::new(sent.as_str()).request_id(id))
-                .await
-            {
+            match agent.prompt(PromptRequest::new(sent).request_id(id)).await {
                 Ok(turn) => {
                     drop(tx.send(AppEvent::TurnStarted {
                         generation,
@@ -738,14 +802,15 @@ impl App {
         });
     }
 
-    fn enqueue_follow_up(&mut self, text: String) {
+    fn enqueue_follow_up(&mut self, text: String) -> String {
         let id = self.local_id("follow");
         self.queue.push(QueuedPrompt {
-            id,
+            id: id.clone(),
             kind: QueueKind::FollowUp,
             state: QueueState::Pending,
             text,
         });
+        id
     }
 
     fn flush_pending_steers(&mut self) {
@@ -763,13 +828,18 @@ impl App {
             .filter(|item| item.kind == QueueKind::Steer && item.state == QueueState::Pending)
             .map(|item| (item.id.clone(), item.text.clone()))
             .collect::<Vec<_>>();
+        let control = control.clone();
         for (id, text) in pending {
             self.queue.set_state(&id, QueueState::Sent);
+            let prompt = crate::extras::prompt_for(
+                &text,
+                &self.attachments_by_id.remove(&id).unwrap_or_default(),
+            );
             let control = control.clone();
             let tx = self.tx.clone();
             tokio::spawn(async move {
                 let result = control
-                    .steer_with_id(id.clone(), text.as_str())
+                    .steer_with_id(id.clone(), prompt)
                     .await
                     .map_err(|error| error.to_string());
                 drop(tx.send(AppEvent::SteerSent { id, result }));
@@ -791,10 +861,14 @@ impl App {
         let generation = self.generation;
         for (id, text) in pending {
             self.queue.set_state(&id, QueueState::Sent);
+            let prompt = crate::extras::prompt_for(
+                &text,
+                &self.attachments_by_id.remove(&id).unwrap_or_default(),
+            );
             let agent = agent.clone();
             let tx = self.tx.clone();
             tokio::spawn(async move {
-                match agent.route_prompt(text.as_str()).await {
+                match agent.route_prompt(prompt).await {
                     Ok(PromptRoute::Steered) => {
                         drop(tx.send(AppEvent::SteerSent { id, result: Ok(()) }))
                     }
@@ -817,13 +891,26 @@ impl App {
     }
 
     fn interrupt(&mut self) {
+        if matches!(self.turn, TurnState::External(_)) {
+            let Some(agent) = self.agent.clone() else {
+                return;
+            };
+            self.interrupting = true;
+            let tx = self.tx.clone();
+            tokio::spawn(async move {
+                match agent.cancel_active_turn().await {
+                    Ok(()) | Err(nanocode::NanocodexError::TurnNotCancellable) => {}
+                    Err(error) => drop(tx.send(AppEvent::Notice(
+                        NoticeLevel::Error,
+                        format!("interrupt failed: {error}"),
+                    ))),
+                }
+            });
+            return;
+        }
         let TurnState::Running { control, .. } = &self.turn else {
-            match self.turn {
-                TurnState::Starting(_) => self.flash("turn is starting; press esc again once it runs"),
-                TurnState::External(_) => self.flash(
-                    "this turn was started by the SDK after a subagent finished; it can't be interrupted from here",
-                ),
-                _ => {}
+            if matches!(self.turn, TurnState::Starting(_)) {
+                self.flash("turn is starting; press esc again once it runs");
             }
             return;
         };
@@ -870,13 +957,19 @@ impl App {
             }
             self.composer.set_text(text);
         }
-        self.flash("interrupting…");
+        self.interrupting = true;
     }
 
     fn handle_terminal(&mut self, event: Event, terminal: &mut TerminalSession) -> bool {
         match event {
             Event::Key(key) if key.kind != KeyEventKind::Release => {
                 self.handle_key(key, terminal);
+                if let Some(text) = self.pending_copy.take() {
+                    match terminal.copy(&text) {
+                        Ok(()) => self.flash("copied the last reply to the clipboard"),
+                        Err(error) => self.flash(format!("copy failed: {error}")),
+                    }
+                }
                 if std::mem::take(&mut self.toggle_mouse) {
                     let enabled = !terminal.mouse_capture();
                     drop(terminal.set_mouse_capture(enabled));
@@ -896,8 +989,13 @@ impl App {
                             KeyModifiers::NONE,
                         ));
                     }
+                } else if let Some(path) =
+                    crate::extras::image_path(&text, &self.host.config.workspace)
+                {
+                    self.attach(path);
                 } else {
                     self.composer.paste(&text);
+                    self.update_finder();
                 }
                 true
             }
@@ -927,6 +1025,32 @@ impl App {
         let busy = !matches!(self.turn, TurnState::Idle);
         if key.code != KeyCode::Esc {
             self.esc_armed = None;
+        }
+        if self.finder.is_some() {
+            match key.code {
+                KeyCode::Up => {
+                    if let Some(finder) = &mut self.finder {
+                        finder.finder.select_previous();
+                    }
+                    return;
+                }
+                KeyCode::Down => {
+                    if let Some(finder) = &mut self.finder {
+                        finder.finder.select_next();
+                    }
+                    return;
+                }
+                KeyCode::Tab | KeyCode::Enter if key.modifiers.is_empty() => {
+                    if self.accept_finder() || key.code == KeyCode::Tab {
+                        return;
+                    }
+                }
+                KeyCode::Esc => {
+                    self.dismiss_finder();
+                    return;
+                }
+                _ => {}
+            }
         }
         match key.code {
             KeyCode::Char('c') if control => {
@@ -981,6 +1105,7 @@ impl App {
             KeyCode::Char('r') if control => self.open_recent_prompts(),
             KeyCode::Char('g') if control => self.edit_externally(terminal),
             KeyCode::Char('l') if control => drop(terminal.clear()),
+            KeyCode::Char('v') if control => self.paste_image(),
             KeyCode::F(1) => self.overlay = Some(Overlay::Help),
             KeyCode::PageUp => self.transcript.scroll_up(self.transcript.page()),
             KeyCode::PageDown => self.transcript.scroll_down(self.transcript.page()),
@@ -1004,12 +1129,15 @@ impl App {
             KeyCode::Enter if busy && self.composer.is_empty() && key.modifiers.is_empty() => {
                 self.promote_follow_up();
             }
-            _ => {
-                if let ComposerAction::Submit(text) = self.composer.handle_key(key) {
+            _ => match self.composer.handle_key(key) {
+                ComposerAction::Submit(text) => {
                     self.quit_armed = None;
+                    self.finder = None;
                     self.submit(text);
                 }
-            }
+                ComposerAction::Edited | ComposerAction::Moved => self.update_finder(),
+                ComposerAction::Ignored => {}
+            },
         }
     }
 
@@ -1155,17 +1283,29 @@ impl App {
             self.command(command.trim());
             return;
         }
+        if let Some(command) = text.strip_prefix('!')
+            && !command.trim().is_empty()
+        {
+            self.run_shell(command.trim().to_owned());
+            return;
+        }
+        let attachments = std::mem::take(&mut self.attachments);
         match self.turn {
             TurnState::Running { .. } | TurnState::Starting(_) | TurnState::External(_) => {
-                self.enqueue_follow_up(text);
+                let id = self.enqueue_follow_up(text);
+                self.attachments_by_id.insert(id, attachments);
                 self.flash("queued · enter on an empty prompt steers it into the running turn");
             }
             TurnState::Idle
                 if self.agent.is_none() || self.pending_switch.is_some() || self.starting =>
             {
-                self.enqueue_follow_up(text);
+                let id = self.enqueue_follow_up(text);
+                self.attachments_by_id.insert(id, attachments);
             }
-            TurnState::Idle => self.start_turn(text),
+            TurnState::Idle => {
+                self.next_attachments = attachments;
+                self.start_turn(text);
+            }
         }
     }
 
@@ -1195,8 +1335,7 @@ impl App {
             },
             "thinking" | "effort" | "reasoning" if argument.is_empty() => {
                 let model = self.model.clone();
-                let picker = models::thinking_picker(&model, self.thinking);
-                self.overlay = Some(Overlay::Picker(PickerPurpose::Thinking(model), picker));
+                self.open_dial(model, self.thinking, false);
             }
             "thinking" | "effort" | "reasoning" => match crate::host::parse_thinking(argument) {
                 Ok(thinking) => self.request_switch(self.model.clone(), thinking, self.tier),
@@ -1251,6 +1390,17 @@ impl App {
                 );
             }
             "expand" | "collapse" => self.transcript.toggle_expanded(),
+            "theme" if argument.is_empty() => self.open_theme_picker(),
+            "theme" => self.set_theme(argument),
+            "copy" => self.copy_last_reply(),
+            "context" => self.context_report(),
+            "skills" | "skill" => self.open_skills(),
+            "image" | "paste" => self.paste_image(),
+            "detach" => {
+                let count = self.attachments.len();
+                self.attachments.clear();
+                self.flash(format!("removed {count} attachment(s)"));
+            }
             "mouse" => self.toggle_mouse = true,
             "help" | "keys" | "?" => self.overlay = Some(Overlay::Help),
             "quit" | "exit" | "q" => self.quit = true,
@@ -1272,6 +1422,32 @@ impl App {
                     KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::F(1)
                 ) {
                     self.overlay = None;
+                }
+                return;
+            }
+            Overlay::Dial { dial, .. } => {
+                match dial.handle_key(key) {
+                    DialAction::Cancelled => self.overlay = None,
+                    DialAction::Selected(index) => {
+                        let Some(Overlay::Dial {
+                            model,
+                            levels,
+                            then_tier,
+                            ..
+                        }) = self.overlay.take()
+                        else {
+                            return;
+                        };
+                        let Some(thinking) = levels.get(index).copied() else {
+                            return;
+                        };
+                        if then_tier {
+                            self.after_thinking(model, thinking);
+                        } else {
+                            self.request_switch(model, thinking, self.tier);
+                        }
+                    }
+                    DialAction::Changed | DialAction::Ignored => {}
                 }
                 return;
             }
@@ -1299,6 +1475,36 @@ impl App {
         }
     }
 
+    pub(crate) fn open_dial(&mut self, model: ModelSelection, thinking: Thinking, then_tier: bool) {
+        match models::thinking_dial(&model, thinking, &self.theme) {
+            Some((dial, levels)) => {
+                self.overlay = Some(Overlay::Dial {
+                    model,
+                    levels,
+                    then_tier,
+                    dial,
+                });
+            }
+            None => self.notice(
+                NoticeLevel::Error,
+                format!("{model} reports no thinking levels"),
+            ),
+        }
+    }
+
+    fn after_thinking(&mut self, model: ModelSelection, thinking: Thinking) {
+        let tiers = models::tier_options(&model);
+        if tiers.len() > 1 {
+            let picker = models::tier_picker(&model, &tiers, self.tier);
+            self.overlay = Some(Overlay::Picker(
+                PickerPurpose::Tier(model, thinking),
+                picker,
+            ));
+        } else {
+            self.request_switch(model, thinking, ServiceTier::Standard);
+        }
+    }
+
     fn picked(&mut self, purpose: PickerPurpose, picker: &Picker, index: usize) {
         match purpose {
             PickerPurpose::Model => {
@@ -1310,40 +1516,30 @@ impl App {
                 } else {
                     model.default_thinking()
                 };
-                let picker = models::thinking_picker(&model, thinking);
-                self.overlay = Some(Overlay::Picker(PickerPurpose::Thinking(model), picker));
+                self.open_dial(model, thinking, true);
             }
             PickerPurpose::Thinking(model) => {
                 let Some(thinking) = models::thinking_at(&model, picker, index) else {
                     return;
                 };
-                let tiers = models::tier_options(&model);
-                if tiers.len() > 1 {
-                    let picker = models::tier_picker(&model, &tiers, self.tier, self.host.pro);
-                    self.overlay = Some(Overlay::Picker(
-                        PickerPurpose::Tier(model, thinking),
-                        picker,
-                    ));
-                } else {
-                    self.request_switch(model, thinking, ServiceTier::Standard);
-                }
+                self.after_thinking(model, thinking);
             }
             PickerPurpose::Tier(model, thinking) => {
                 let tiers = models::tier_options(&model);
-                let Some(option) = tiers.get(index).copied() else {
+                let Some(tier) = tiers.get(index).copied() else {
                     return;
                 };
-                match option {
-                    models::TierOption::Tier(tier) => {
-                        if self.host.pro && model.as_codex().is_some() {
-                            self.pending_pro = Some(false);
-                        }
-                        self.request_switch(model, thinking, tier);
-                    }
-                    models::TierOption::Pro => {
-                        self.pending_pro = Some(true);
-                        self.request_switch(model, thinking, ServiceTier::Standard);
-                    }
+                self.request_switch(model, thinking, tier);
+            }
+            PickerPurpose::Theme => {
+                if let Some(item) = picker.items().get(index) {
+                    let name = item.label.clone();
+                    self.set_theme(&name);
+                }
+            }
+            PickerPurpose::Skill(names) => {
+                if let Some(name) = names.get(index) {
+                    self.composer.insert_str(&format!("Use the {name} skill: "));
                 }
             }
             PickerPurpose::Recent(entries) => {
@@ -1399,7 +1595,6 @@ pub async fn open_session(host: &Host, session_id: &str, tier: ServiceTier) -> R
         model,
         thinking,
         tier,
-        host: None,
         history: Some(stored.transcript),
         reset_transcript: true,
     })

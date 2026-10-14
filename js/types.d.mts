@@ -71,7 +71,7 @@ export type ModelCapabilityEntry = Readonly<{
 }>;
 
 
-export type Mutability = "fixed" | "before_first_prompt" | "anytime";
+export type Mutability = "fixed" | "before_first_prompt" | "between_turns" | "anytime";
 
 
 
