@@ -67,7 +67,14 @@ impl DurableAgentExt for ClaudeBuilder {
             Some(value) => Some(value.decode::<Value>().map_err(agent_error)?),
             None => {
                 let imported = builder.configured_checkpoint()?;
-                if let Some(checkpoint) = &imported {
+                if let Some(checkpoint) = &imported
+                    && state
+                        .state()
+                        .await
+                        .map_err(agent_error)?
+                        .pending_operations()
+                        .is_empty()
+                {
                     owner
                         .commit_checkpoint(EncodedPayload::encode(checkpoint).map_err(agent_error)?)
                         .await
@@ -133,8 +140,16 @@ impl LazyClaudeExecution {
                 }
                 let record = state.describe(record).await.map_err(agent_error)?;
                 let (owner, checkpoint) = state.acquire_agent().await.map_err(agent_error)?;
-                self.reopened
-                    .store(checkpoint.is_some(), std::sync::atomic::Ordering::SeqCst);
+                self.reopened.store(
+                    checkpoint.is_some()
+                        || !state
+                            .state()
+                            .await
+                            .map_err(agent_error)?
+                            .pending_operations()
+                            .is_empty(),
+                    std::sync::atomic::Ordering::SeqCst,
+                );
                 Ok(ClaudeExecution {
                     state_id: record.session_id.clone(),
                     owner,

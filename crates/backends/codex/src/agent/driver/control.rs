@@ -307,6 +307,9 @@ pub(super) async fn begin_shutdown(
             Command::Context { result } => {
                 drop(result.send(Err(NanocodexError::AgentStopped)));
             }
+            Command::SideQuestion { result, .. } => {
+                drop(result.send(Err(NanocodexError::AgentStopped)));
+            }
             Command::WithdrawSteer { result, .. } => {
                 drop(result.send(Err(NanocodexError::AgentStopped)));
             }
@@ -323,6 +326,47 @@ pub(super) async fn begin_shutdown(
         }
     }
     mark_all_queued_turns_cancelled(queued_turns);
+}
+
+fn spawn_side_question<S>(
+    latest: Option<&Arc<CommittedSession>>,
+    spawner: &BranchSpawner<S>,
+    defaults: TurnDefaults,
+    session_id: &str,
+    question: String,
+    result: oneshot::Sender<Result<nanocode_agent::SideAnswer>>,
+) where
+    S: Service<ResponsesAttempt, Response = ResponsesServiceResponse> + AgentSend + 'static,
+    S::Error: Into<ResponseError> + AgentSend + 'static,
+    S::Future: AgentSend,
+{
+    let Some(latest) = latest.map(Arc::clone) else {
+        drop(result.send(Err(NanocodexError::InvalidRequest(
+            "a side question requires a completed turn".to_owned(),
+        ))));
+        return;
+    };
+    let config = Arc::clone(&spawner.config);
+    let service = (spawner.service_factory)(Arc::clone(&config));
+    let thread_id = session_id.to_owned();
+    let task = async move {
+        let outcome = latest
+            .model()
+            .side_question(
+                &config,
+                service,
+                defaults.model,
+                defaults.thinking,
+                defaults.service_tier,
+                &thread_id,
+                &question,
+            )
+            .await;
+        drop(result.send(outcome));
+    };
+    if let Err(error) = crate::agent::executor::spawn_driver(task) {
+        tracing::warn!(target: "nanocode", %error, "side question could not start");
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -453,6 +497,9 @@ pub(super) fn handle_idle_command<S>(
                 execution,
             );
             drop(result.send(outcome));
+        }
+        Command::SideQuestion { question, result } => {
+            spawn_side_question(latest, spawner, defaults, session_id, question, result);
         }
         Command::WithdrawSteer { result, .. } => {
             drop(result.send(Ok(false)));

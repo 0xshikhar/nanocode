@@ -537,8 +537,13 @@ impl Harness {
             .agent
             .as_ref()
             .ok_or_else(|| std::io::Error::other(format!("agent {} is closed", self.id)))?;
+        let pending = registry
+            .pending_turn(&self.root_session_id, agent.session_id())
+            .await?;
+        let recovering = pending.is_some();
+        let recovery_request_id = pending.as_ref().map(|(id, _)| id.clone());
         let Some(instruction_revision) = registry
-            .harness_turn_started(&self.root_session_id, self.id)
+            .harness_turn_started(&self.root_session_id, self.id, recovering)
             .await
         else {
             return Err(std::io::Error::other(format!(
@@ -555,10 +560,18 @@ impl Harness {
             "{prompt}\n\n{}",
             completion_instructions(&self.output_schema)
         );
-        let turn = match agent
-            .prompt(Prompt::new(prompt).with_instruction_revision(instruction_revision))
-            .await
-        {
+        let request = match pending {
+            Some((id, input)) => {
+                let recovered = agent
+                    .decode_durable_prompt(input)
+                    .map_err(std::io::Error::other)?;
+                nanocode_agent::PromptRequest::new(recovered).request_id(id)
+            }
+            None => nanocode_agent::PromptRequest::new(
+                Prompt::new(prompt.clone()).with_instruction_revision(instruction_revision),
+            ),
+        };
+        let turn = match agent.prompt(request).await {
             Ok(turn) => turn,
             Err(error) => {
                 let error = format!("could not start agent {}: {error}", self.id);
@@ -572,10 +585,22 @@ impl Harness {
         let control = turn.control();
         let result = platform::spawn(turn);
         self.active = Some(ActiveTurn {
-            control,
+            control: control.clone(),
             result,
             _capacity: capacity,
         });
+        if let Some(request_id) = recovery_request_id {
+            let prompt = Prompt::new(prompt).with_instruction_revision(instruction_revision);
+            let encoded = serde_json::to_string(&prompt).map_err(std::io::Error::other)?;
+            let message_id = format!(
+                "subagent-recovery:{request_id}:{}",
+                super::durable::checkpoint_key(&encoded)
+            );
+            control
+                .steer_with_id(message_id, prompt)
+                .await
+                .map_err(std::io::Error::other)?;
+        }
         Ok(())
     }
 

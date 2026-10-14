@@ -1,6 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use crate::client::{Model, responses::RequestProfile};
+use crate::model::run::ModelCheckpoint;
 use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, OnceCell};
 
@@ -14,6 +15,7 @@ type WarmupEntries = HashMap<PrefixFingerprint, WarmupEntry>;
 pub(crate) struct ModelPromptCache {
     key: Arc<str>,
     shared: Option<SharedPromptCache>,
+    live: Arc<std::sync::Mutex<Option<ModelCheckpoint>>>,
 }
 
 #[derive(Clone, Default)]
@@ -22,8 +24,23 @@ pub(crate) struct SharedPromptCache {
 }
 
 impl ModelPromptCache {
-    pub(crate) const fn new(key: Arc<str>, shared: Option<SharedPromptCache>) -> Self {
-        Self { key, shared }
+    pub(crate) fn new(key: Arc<str>, shared: Option<SharedPromptCache>) -> Self {
+        Self {
+            key,
+            shared,
+            live: Arc::default(),
+        }
+    }
+
+    pub(crate) fn publish_live(&self, checkpoint: Option<ModelCheckpoint>) {
+        *self.live.lock().expect("live checkpoint lock poisoned") = checkpoint;
+    }
+
+    pub(crate) fn live(&self) -> Option<ModelCheckpoint> {
+        self.live
+            .lock()
+            .expect("live checkpoint lock poisoned")
+            .clone()
     }
 
     pub(crate) fn key(&self) -> &str {

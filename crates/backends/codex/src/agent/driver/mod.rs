@@ -534,6 +534,39 @@ where
                     )));
                     continue;
                 }
+                if let Command::SideQuestion { question, result } = command {
+                    let checkpoint = match latest_fork_checkpoint.clone() {
+                        Some(checkpoint) => Ok(checkpoint),
+                        None => model
+                            .side_checkpoint(self.workspace.as_deref())
+                            .map(|snapshot| {
+                                Arc::new(CommittedSession::new(
+                                    Arc::clone(&self.spawner.lineage_id),
+                                    thread_model,
+                                    default_thinking,
+                                    default_service_tier,
+                                    snapshot,
+                                ))
+                            }),
+                    };
+                    match checkpoint {
+                        Ok(checkpoint) => handle_idle_command(
+                            Command::SideQuestion { question, result },
+                            Some(&checkpoint),
+                            &self.spawner,
+                            TurnDefaults {
+                                model: thread_model,
+                                thinking: default_thinking,
+                                service_tier: default_service_tier,
+                            },
+                            session_id.as_str(),
+                            self.workspace.clone(),
+                            &self.execution,
+                        ),
+                        Err(error) => drop(result.send(Err(error))),
+                    }
+                    continue;
+                }
                 if let Command::Compact { parent, result } = command {
                     logical_turn_index = logical_turn_index.saturating_add(1);
                     let span = agent_compact_span(
@@ -833,7 +866,7 @@ where
                                     Some(Command::SteerWithId { result, .. } | Command::Steer { result, .. }) => {
                                         drop(result.send(Err(NanocodexError::TurnNotSteerable)));
                                     }
-                                    Some(command @ (Command::ChildSnapshot { .. } | Command::Fork { .. } | Command::Spawn { .. } | Command::SpawnBatch { .. })) => {
+                                    Some(command @ (Command::ChildSnapshot { .. } | Command::Fork { .. } | Command::Spawn { .. } | Command::SpawnBatch { .. } | Command::SideQuestion { .. })) => {
                                         handle_idle_command(
                                             command,
                                             latest_fork_checkpoint.as_ref(),
@@ -1210,7 +1243,7 @@ where
                     )
                 })
                 .collect();
-            let mut steer_ids = std::collections::HashSet::new();
+            let mut steer_ids = std::collections::HashMap::<String, (String, bool)>::new();
             let model_call_index = Arc::new(tokio::sync::Mutex::new(1_u32));
             let (cancel, cancel_rx) = oneshot::channel();
             let (fork_snapshots, mut fork_snapshot_rx) = watch::channel(None);
@@ -1357,11 +1390,27 @@ where
                                     drop(result.send(Err(NanocodexError::TurnNotSteerable)));
                                     continue;
                                 }
-                                if !execution_turn.supports_steer_receipts() && !steer_ids.insert(id.clone()) {
-                                    drop(result.send(Err(NanocodexError::InvalidRequest("steer identity was already used in this turn".into()))));
+                                let receipt = match (!execution_turn.supports_steer_receipts()).then(|| serde_json::to_string(&prompt)).transpose() {
+                                    Ok(receipt) => receipt,
+                                    Err(error) => {
+                                        drop(result.send(Err(NanocodexError::InvalidRequest(error.to_string()))));
+                                        continue;
+                                    }
+                                };
+                                if let Some(input) = &receipt && let Some((known, withdrawn)) = steer_ids.get(&id) {
+                                    drop(result.send(if known != input {
+                                        Err(NanocodexError::InvalidRequest(format!("steering message `{id}` already has different input")))
+                                    } else if *withdrawn {
+                                        Err(NanocodexError::InvalidRequest(format!("steering message `{id}` was withdrawn")))
+                                    } else {
+                                        Ok(())
+                                    }));
                                     continue;
                                 }
-                                let outcome = accept_turn_steer(&self.execution, &input_events, &steers, &steer_preempt, &mut accepted_steers, Some(id), &execution_turn, &model_call_index, prompt).await;
+                                let outcome = accept_turn_steer(&self.execution, &input_events, &steers, &steer_preempt, &mut accepted_steers, Some(id.clone()), &execution_turn, &model_call_index, prompt).await;
+                                if let Some(input) = receipt && outcome.is_ok() {
+                                    steer_ids.insert(id, (input, false));
+                                }
                                 let reopen = outcome_requires_reopen(&outcome);
                                 drop(result.send(outcome));
                                 if reopen {
@@ -1378,11 +1427,15 @@ where
                                         _ => Ok(false),
                                     }
                                 } else { Ok(false) };
-                                if matches!(outcome, Ok(true))
-                                    && let Some((_, receipt)) = accepted_steers.pop()
-                                    && let Some(queue) = steers.upgrade()
-                                {
-                                    queue.lock().await.retain(|steer| !Arc::ptr_eq(&steer.delivery, &receipt.delivery));
+                                if matches!(outcome, Ok(true)) {
+                                    if let Some((_, withdrawn)) = steer_ids.get_mut(&id) {
+                                        *withdrawn = true;
+                                    }
+                                    if let Some((_, receipt)) = accepted_steers.pop()
+                                        && let Some(queue) = steers.upgrade()
+                                    {
+                                        queue.lock().await.retain(|steer| !Arc::ptr_eq(&steer.delivery, &receipt.delivery));
+                                    }
                                 }
                                 let reopen = outcome_requires_reopen(&outcome);
                                 drop(result.send(outcome));
@@ -1394,9 +1447,12 @@ where
                                 }
                             }
                             Some(Command::RoutePrompt {
+                                key: route_key,
                                 prompt,
+                                parent,
+                                events,
+                                turn_result,
                                 route_result,
-                                ..
                             }) => {
                                 let outcome = accept_turn_steer(
                                     &self.execution,
@@ -1407,10 +1463,50 @@ where
                                     None,
                                     &execution_turn,
                                     &model_call_index,
-                                    prompt,
+                                    prompt.clone(),
                                 )
                                 .await
                                 .map(|()| PromptRouteKind::Steered);
+                                if matches!(outcome, Err(NanocodexError::TurnNotSteerable)) {
+                                    let mut reopen = false;
+                                    let routed = accept_idle_route(
+                                        &self.execution,
+                                        &self.checkpoints,
+                                        &self.spawner.config,
+                                        default_thinking,
+                                        Command::RoutePrompt { key: route_key, prompt, parent, events, turn_result, route_result },
+                                        &mut reopen,
+                                    )
+                                    .await;
+                                    if let Some(Command::Prompt { key, prompt, execution_operation, cancel_on_admission, parent, events, result, .. }) = routed {
+                                        queued_turns.push_back(queued_prompt(
+                                            key,
+                                            prompt,
+                                            execution_operation,
+                                            cancel_on_admission,
+                                            default_thinking,
+                                            default_service_tier,
+                                            parent,
+                                            events,
+                                            result,
+                                        ));
+                                    }
+                                    if reopen {
+                                        if let Some(cancel) = cancel.take() {
+                                            let _ = cancel.send(());
+                                        }
+                                        begin_shutdown(
+                                            &mut self.commands,
+                                            &mut queued_turns,
+                                            default_thinking,
+                                            default_service_tier,
+                                        )
+                                        .await;
+                                        commands_open = false;
+                                        break execution.as_mut().await;
+                                    }
+                                    continue;
+                                }
                                 let reopen = outcome_requires_reopen(&outcome);
                                 drop(route_result.send(outcome));
                                 if reopen {
@@ -1497,6 +1593,34 @@ where
                                 let _ = cancel.send(());
                                 cancel_result = Some(cancellation);
                                 break execution.as_mut().await;
+                            }
+                            Some(Command::SideQuestion { question, result }) => {
+                                let side_checkpoint = prompt_cache
+                                    .live()
+                                    .or_else(|| fork_snapshot_rx.borrow().clone())
+                                    .map(|snapshot| {
+                                        Arc::new(CommittedSession::new(
+                                            Arc::clone(&self.spawner.lineage_id),
+                                            thread_model,
+                                            default_thinking,
+                                            default_service_tier,
+                                            snapshot,
+                                        ))
+                                    })
+                                    .or_else(|| latest_fork_checkpoint.clone());
+                                handle_idle_command(
+                                    Command::SideQuestion { question, result },
+                                    side_checkpoint.as_ref(),
+                                    &self.spawner,
+                                    TurnDefaults {
+                                        model: thread_model,
+                                        thinking: default_thinking,
+                                        service_tier: default_service_tier,
+                                    },
+                                    session_id.as_str(),
+                                    self.workspace.clone(),
+                                    &self.execution,
+                                );
                             }
                             Some(command @ (Command::ChildSnapshot { .. } | Command::Fork { .. } | Command::Spawn { .. } | Command::SpawnBatch { .. })) => {
                                 if let Some(snapshot) =
@@ -1898,14 +2022,10 @@ async fn accept_turn_steer(
         }
     }
     *accepted = pending;
-    let capacity_available = accepted.len() < STEER_CAPACITY;
-    if !capacity_available && (id.is_none() || !execution_turn.supports_steer_receipts()) {
-        return Err(NanocodexError::SteerQueueFull);
-    }
 
     let call_index = model_call_index.lock().await;
     let Some(steer) = execution_turn
-        .accept_steer(prompt.clone(), id.clone(), *call_index, capacity_available)
+        .accept_steer(prompt.clone(), id.clone(), *call_index, true)
         .await?
     else {
         return Ok(());

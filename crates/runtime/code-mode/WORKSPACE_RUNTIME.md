@@ -56,6 +56,8 @@ composing Code Mode directly. The native SDK supplies an adapter using its
 configured durable store. Reopening a durable session can poll its original
 remote handles while that runner remains alive. A restarted runner or a local
 process from a previous SDK runtime is fenced explicitly.
+`Tools::with_default_process_route_store` fills an unset store while preserving
+an explicit caller store; SDK default adapter installation uses this hook.
 
 Reconnections recover existing calls from the same executor runtime's journal.
 If the executor restarts, sent calls return an unknown-outcome error instead of

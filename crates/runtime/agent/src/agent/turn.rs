@@ -207,6 +207,35 @@ impl TurnResult {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct SideAnswer {
+    text: String,
+    usage: Option<TurnUsage>,
+}
+
+impl SideAnswer {
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn new(text: String, usage: Option<TurnUsage>) -> Self {
+        Self { text, usage }
+    }
+
+    #[must_use]
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    #[must_use]
+    pub fn into_text(self) -> String {
+        self.text
+    }
+
+    #[must_use]
+    pub const fn usage(&self) -> Option<&TurnUsage> {
+        self.usage.as_ref()
+    }
+}
+
 impl fmt::Debug for TurnResult {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter

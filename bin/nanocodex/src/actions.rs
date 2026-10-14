@@ -1,0 +1,485 @@
+use futures_util::StreamExt;
+use nanocode::{
+    AgentUpdate, ForkRequest, ModelSelection, Mutability, Origin, ScopedAgentUpdate, ServiceTier,
+    Thinking, agent::events::AgentEventKind,
+};
+use nanocode_tui::{
+    transcript::{CellKind, NoticeLevel},
+    tree::{NodeStatus, TreeNode},
+};
+
+use crate::{
+    app::{
+        App, AppEvent, BtwUpdate, Ready, TurnState, apply_tier, family_label, open_session,
+        subagent_status,
+    },
+    host::Host,
+};
+
+const BTW_PREAMBLE: &str = "Side question from the user, asked while you keep working on the main task. Answer it briefly from the conversation context. Do not call tools, do not modify files, and do not continue the main task in this reply.";
+
+impl App {
+    pub(crate) fn request_switch(
+        &mut self,
+        model: ModelSelection,
+        thinking: Thinking,
+        tier: ServiceTier,
+    ) {
+        if !matches!(self.turn, TurnState::Idle) || self.starting {
+            self.pending_switch = Some((model, thinking, tier));
+            self.flash("settings will apply when the current turn finishes");
+            return;
+        }
+        self.switch(model, thinking, tier);
+    }
+
+    pub(crate) fn switch(&mut self, model: ModelSelection, thinking: Thinking, tier: ServiceTier) {
+        let pro = self.pending_pro.take().unwrap_or(self.host.pro);
+        let capabilities = model.capabilities(nanocode::ModelTransport::Native);
+        if let Err(error) = capabilities
+            .check_thinking(thinking)
+            .and_then(|()| capabilities.check_service_tier(tier))
+        {
+            self.notice(NoticeLevel::Error, error.to_string());
+            return;
+        }
+        let Some(agent) = self.agent.clone() else {
+            self.model = model;
+            self.thinking = thinking;
+            self.tier = tier;
+            return;
+        };
+        let tx = self.tx.clone();
+        let rebuild = model.as_codex().is_some() && pro != self.host.pro;
+        let mutability = agent.capabilities();
+        let started = self.session_started;
+        let mutable = |setting: Mutability| {
+            setting == Mutability::Anytime || setting == Mutability::BeforeFirstPrompt && !started
+        };
+        let model_changed = model != self.model;
+        let thinking_changed = thinking != self.thinking;
+        let tier_changed = tier != self.tier;
+        let in_place = !rebuild
+            && model.family() == self.model.family()
+            && (!model_changed || mutable(mutability.model))
+            && (!thinking_changed || mutable(mutability.thinking))
+            && (!tier_changed || mutable(mutability.service_tier));
+        if in_place {
+            self.starting = true;
+            tokio::spawn(async move {
+                let applied = async {
+                    if model_changed {
+                        agent.set_harness_model(model.clone()).await?;
+                    }
+                    if thinking_changed || model_changed {
+                        agent.set_thinking(thinking).await?;
+                    }
+                    if tier_changed || model_changed {
+                        apply_tier(&agent, &model, tier).await?;
+                    }
+                    Ok::<_, crate::host::Error>(())
+                };
+                let result = match applied.await {
+                    Ok(()) => {
+                        let notice =
+                            format!("using {model} · thinking {thinking} · {}", tier.as_str());
+                        Ok((model, thinking, tier, notice))
+                    }
+                    Err(error) => Err(error.to_string()),
+                };
+                drop(tx.send(AppEvent::Applied(result)));
+            });
+            return;
+        }
+        let reopen = rebuild && !model_changed && self.host.config.store.is_some() && started;
+        let handoff = if reopen || !started {
+            String::new()
+        } else {
+            self.handoff()
+        };
+        let config = self.host.config.clone();
+        let old_host = self.host.clone();
+        let previous_model = self.model.clone();
+        self.starting = true;
+        tokio::spawn(async move {
+            let ready = async {
+                let host = if rebuild {
+                    Host::build(config, &model, thinking, pro)?
+                } else {
+                    old_host.clone()
+                };
+                let session_id = agent.session_id().to_owned();
+                if reopen {
+                    agent.flush().await?;
+                    agent.shutdown().await?;
+                    let mut ready = open_session(&host, &session_id, tier).await?;
+                    if ready.thinking != thinking {
+                        ready.agent.set_thinking(thinking).await?;
+                        ready.thinking = thinking;
+                    }
+                    ready.history = None;
+                    ready.reset_transcript = false;
+                    ready.host = Some(host);
+                    ready.notice = format!(
+                        "reopened session {session_id} with {model}{}",
+                        if pro { " · pro reasoning" } else { "" }
+                    );
+                    return Ok::<_, crate::host::Error>(ready);
+                }
+                let (next, events) = host.start(&model, thinking).await?;
+                if let Err(error) = apply_tier(&next, &model, tier).await {
+                    drop(next.shutdown().await);
+                    return Err(error);
+                }
+                drop(agent.flush().await);
+                drop(agent.shutdown().await);
+                let carried = if handoff.is_empty() {
+                    String::new()
+                } else {
+                    format!("; conversation carried over, previous session {session_id} kept")
+                };
+                Ok(Ready {
+                    notice: format!(
+                        "switched {} {previous_model} → {} {model} · thinking {thinking} · {} · new session {}{carried}",
+                        family_label(&previous_model.family()),
+                        family_label(&model.family()),
+                        tier.as_str(),
+                        next.session_id()
+                    ),
+                    agent: next,
+                    events,
+                    model,
+                    thinking,
+                    tier,
+                    host: rebuild.then_some(host),
+                    history: None,
+                    reset_transcript: false,
+                    handoff: (!handoff.is_empty()).then_some(handoff),
+                })
+            };
+            let event = match ready.await {
+                Ok(ready) => {
+                    if ready.host.is_some() {
+                        drop(old_host.runtime.shutdown().await);
+                    }
+                    AppEvent::AgentReady(Box::new(ready))
+                }
+                Err(error) => AppEvent::AgentFailed(format!("switch failed: {error}")),
+            };
+            drop(tx.send(event));
+        });
+    }
+
+    fn handoff(&self) -> String {
+        let mut conversation = String::new();
+        for index in 0..self.transcript.len() {
+            match self.transcript.get(index) {
+                Some(CellKind::User(text)) => {
+                    conversation.push_str("\n\n[user]\n");
+                    conversation.push_str(text);
+                }
+                Some(CellKind::Assistant(text)) => {
+                    conversation.push_str("\n\n[assistant]\n");
+                    conversation.push_str(text);
+                }
+                _ => {}
+            }
+        }
+        if conversation.is_empty() {
+            return conversation;
+        }
+        format!(
+            "[context] The user switched models mid-conversation. This is the conversation so far with the previous model (tool calls omitted); continue from it.{conversation}"
+        )
+    }
+
+    pub(crate) fn btw(&mut self, question: String) {
+        let Some(agent) = self.agent.clone() else {
+            self.flash("the agent is still starting");
+            return;
+        };
+        self.next_btw += 1;
+        let id = self.next_btw;
+        let cell = self.transcript.push(CellKind::Btw {
+            question: question.clone(),
+            answer: String::new(),
+            done: false,
+        });
+        self.btw.insert(id, cell);
+        self.transcript.scroll_to_bottom();
+        let tx = self.tx.clone();
+        let native = agent.capabilities().side_question;
+        tokio::spawn(async move {
+            let send = |update| drop(tx.send(AppEvent::Btw { id, update }));
+            if native {
+                match agent.side_question(question).await {
+                    Ok(answer) => {
+                        send(BtwUpdate::Message(answer.into_text()));
+                        send(BtwUpdate::Done);
+                    }
+                    Err(error) => send(BtwUpdate::Failed(error.to_string())),
+                }
+                return;
+            }
+            let asked = async {
+                let (side, mut events) = agent
+                    .fork(ForkRequest::latest().side_conversation())
+                    .await?;
+                tokio::spawn(async move { while events.recv().await.is_some() {} });
+                let mut turn = side
+                    .prompt(format!("{BTW_PREAMBLE}\n\n{question}").as_str())
+                    .await?;
+                while let Some(event) = turn.next().await {
+                    let text = || {
+                        serde_json::from_str::<serde_json::Value>(event.payload.get())
+                            .ok()
+                            .and_then(|payload| payload["text"].as_str().map(str::to_owned))
+                            .unwrap_or_default()
+                    };
+                    match event.kind {
+                        AgentEventKind::AssistantDelta => send(BtwUpdate::Delta(text())),
+                        AgentEventKind::AssistantMessage => send(BtwUpdate::Message(text())),
+                        _ => {}
+                    }
+                }
+                let result = turn.await;
+                drop(side.shutdown().await);
+                result?;
+                Ok::<_, crate::host::Error>(())
+            };
+            match asked.await {
+                Ok(()) => send(BtwUpdate::Done),
+                Err(error) => send(BtwUpdate::Failed(error.to_string())),
+            }
+        });
+    }
+
+    pub(crate) fn btw_update(&mut self, id: u64, update: BtwUpdate) {
+        let Some(&cell) = self.btw.get(&id) else {
+            return;
+        };
+        let finished = matches!(update, BtwUpdate::Done | BtwUpdate::Failed(_));
+        self.transcript.update(cell, |kind| {
+            if let CellKind::Btw { answer, done, .. } = kind {
+                match update {
+                    BtwUpdate::Delta(text) => answer.push_str(&text),
+                    BtwUpdate::Message(text) => *answer = text,
+                    BtwUpdate::Done => *done = true,
+                    BtwUpdate::Failed(error) => {
+                        *done = true;
+                        answer.push_str(&format!("\n\n*side question failed: {error}*"));
+                    }
+                }
+            }
+        });
+        if finished {
+            self.btw.remove(&id);
+        }
+    }
+
+    pub(crate) fn subagent(&mut self, scoped: ScopedAgentUpdate) {
+        let current = self.session_id();
+        match scoped.update {
+            AgentUpdate::Added(descriptor) => {
+                self.tree.upsert(TreeNode {
+                    id: descriptor.id.to_string(),
+                    parent: descriptor.parent.map(|parent| parent.to_string()),
+                    label: format!("#{} {}", descriptor.id, descriptor.role),
+                    detail: descriptor
+                        .task
+                        .lines()
+                        .next()
+                        .unwrap_or_default()
+                        .to_owned(),
+                    status: NodeStatus::Pending,
+                });
+            }
+            AgentUpdate::Status { id, status } => {
+                let (status, detail) = subagent_status(&status);
+                self.tree.update(&id.to_string(), |node| {
+                    node.status = status;
+                    if !detail.is_empty() {
+                        node.detail = detail;
+                    }
+                });
+            }
+            AgentUpdate::Completion { id, status, .. } => {
+                let (node_status, detail) = subagent_status(&status);
+                let key = id.to_string();
+                let mut direct = false;
+                self.tree.update(&key, |node| {
+                    node.status = node_status;
+                    direct = node.parent.is_none();
+                    if !detail.is_empty() {
+                        node.detail = detail;
+                    }
+                });
+                let owned = current.as_deref() == Some(scoped.root_session_id.as_str());
+                if direct
+                    && owned
+                    && !scoped.detach
+                    && matches!(self.turn, TurnState::Idle)
+                    && !self.starting
+                    && self.queue.is_empty()
+                {
+                    self.start_turn(crate::events::completion_prompt(&key));
+                }
+            }
+            AgentUpdate::Event { id, event } => {
+                let payload = serde_json::from_str::<serde_json::Value>(event.payload.get()).ok();
+                let key = id.to_string();
+                if event.kind == AgentEventKind::RunStarted
+                    && let Some(model) = payload
+                        .as_ref()
+                        .and_then(|payload| payload["model"].as_str())
+                {
+                    let model = model.to_owned();
+                    self.tree.update(&key, |node| {
+                        let role = node
+                            .label
+                            .split(" · ")
+                            .next()
+                            .unwrap_or_default()
+                            .to_owned();
+                        node.label = format!("{role} · {model}");
+                    });
+                }
+                let detail = payload.and_then(|payload| match event.kind {
+                    AgentEventKind::ToolCall => {
+                        payload["tool"].as_str().map(|tool| format!("▸ {tool}"))
+                    }
+                    AgentEventKind::AssistantMessage => payload["text"]
+                        .as_str()
+                        .and_then(|text| text.lines().find(|line| !line.trim().is_empty()))
+                        .map(str::to_owned),
+                    _ => None,
+                });
+                if let Some(detail) = detail {
+                    self.tree.update(&key, |node| {
+                        node.detail = detail;
+                        if !node.status.is_active() {
+                            node.status = NodeStatus::Running;
+                        }
+                    });
+                }
+            }
+            AgentUpdate::Message(_) => {}
+        }
+    }
+
+    pub(crate) fn open_session_picker(&mut self) {
+        let Some(store) = self.host.config.store.clone() else {
+            self.flash("sessions are not saved with --ephemeral");
+            return;
+        };
+        let workspace = self.host.config.workspace.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let sessions = store
+                .list()
+                .await
+                .map_err(|error| error.to_string())
+                .map(|sessions| {
+                    sessions
+                        .into_iter()
+                        .filter(|session| {
+                            session.record.lineage.origin == Origin::Root
+                                && session.record.workspace.as_deref() == Some(workspace.as_path())
+                        })
+                        .collect()
+                });
+            drop(tx.send(AppEvent::Sessions(sessions)));
+        });
+    }
+
+    pub(crate) fn resume(&mut self, session_id: String) {
+        if !matches!(self.turn, TurnState::Idle) {
+            self.flash("interrupt the running turn (esc) before resuming another session");
+            return;
+        }
+        if self.session_id().as_deref() == Some(session_id.as_str()) {
+            self.flash("already in this session");
+            return;
+        }
+        let previous = self.agent.take();
+        let host = self.host.clone();
+        let tier = self.tier;
+        let tx = self.tx.clone();
+        self.starting = true;
+        self.generation += 1;
+        tokio::spawn(async move {
+            if let Some(previous) = previous {
+                drop(previous.flush().await);
+                drop(previous.shutdown().await);
+            }
+            let event = match open_session(&host, &session_id, tier).await {
+                Ok(ready) => AppEvent::AgentReady(Box::new(ready)),
+                Err(error) => AppEvent::AgentFailed(format!("resume failed: {error}")),
+            };
+            drop(tx.send(event));
+        });
+    }
+
+    pub(crate) fn new_session(&mut self) {
+        if !matches!(self.turn, TurnState::Idle) {
+            self.flash("interrupt the running turn (esc) before starting a new session");
+            return;
+        }
+        let previous = self.agent.take();
+        let host = self.host.clone();
+        let model = self.model.clone();
+        let thinking = self.thinking;
+        let tier = self.tier;
+        let tx = self.tx.clone();
+        self.starting = true;
+        self.generation += 1;
+        tokio::spawn(async move {
+            if let Some(previous) = previous {
+                drop(previous.flush().await);
+                drop(previous.shutdown().await);
+            }
+            let ready = async {
+                let (agent, events) = host.start(&model, thinking).await?;
+                apply_tier(&agent, &model, tier).await?;
+                Ok::<_, crate::host::Error>(Ready {
+                    notice: format!("new session {}", agent.session_id()),
+                    agent,
+                    events,
+                    model,
+                    thinking,
+                    tier,
+                    host: None,
+                    history: None,
+                    reset_transcript: true,
+                    handoff: None,
+                })
+            };
+            let event = match ready.await {
+                Ok(ready) => AppEvent::AgentReady(Box::new(ready)),
+                Err(error) => AppEvent::AgentFailed(error.to_string()),
+            };
+            drop(tx.send(event));
+        });
+    }
+
+    pub(crate) fn compact(&mut self) {
+        let Some(agent) = self.agent.clone() else {
+            return;
+        };
+        if !matches!(self.turn, TurnState::Idle) {
+            self.flash("wait for the turn to finish before compacting");
+            return;
+        }
+        let tx = self.tx.clone();
+        self.flash("compacting…");
+        tokio::spawn(async move {
+            let event = match agent.compact().await {
+                Ok(()) => AppEvent::Notice(NoticeLevel::Info, "context compacted".into()),
+                Err(error) => {
+                    AppEvent::Notice(NoticeLevel::Error, format!("compaction failed: {error}"))
+                }
+            };
+            drop(tx.send(event));
+        });
+    }
+}

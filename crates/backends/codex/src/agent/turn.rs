@@ -90,6 +90,10 @@ pub(super) enum Command {
     Context {
         result: oneshot::Sender<Result<AgentSessionContext>>,
     },
+    SideQuestion {
+        question: String,
+        result: oneshot::Sender<Result<nanocode_agent::SideAnswer>>,
+    },
     Shutdown,
 }
 

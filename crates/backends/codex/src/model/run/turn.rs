@@ -784,7 +784,14 @@ where
         global_instructions: Option<&Arc<str>>,
     ) {
         session.conversation.commit_tail();
-        snapshots.send_replace(Some(ModelCheckpoint {
+        snapshots.send_replace(Some(Self::live_checkpoint(session, global_instructions)));
+    }
+
+    fn live_checkpoint(
+        session: &ModelSessionState,
+        global_instructions: Option<&Arc<str>>,
+    ) -> ModelCheckpoint {
+        ModelCheckpoint {
             workspace: session.workspace.clone(),
             provider_session_id: Arc::from(session.factory.profile().session_id()),
             conversation: session.conversation.clone(),
@@ -793,7 +800,7 @@ where
             preserve_inherited_delta: true,
             global_instructions: global_instructions.cloned(),
             context_baseline: session.context.baseline(),
-        }));
+        }
     }
 
     pub(super) async fn drive_session(
@@ -823,6 +830,7 @@ where
             })
             .collect::<VecDeque<_>>();
         *model_call_index.lock().await = next_call;
+        self.prompt_cache.publish_live(None);
         let mut first_batch = true;
         loop {
             let call_index = self.stats.model_calls + 1;
@@ -898,31 +906,34 @@ where
             if code_calls.is_empty() {
                 if end_turn == Some(false) {
                     session.conversation.clear_delta();
-                    let compacted = self
-                        .maybe_compact(
-                            call_index,
-                            &mut session.conversation,
-                            &session.factory,
-                            CompactionContext {
-                                snapshot: session.context.snapshot(),
-                                phase: CompactionPhase::MidTurn,
-                            },
-                        )
-                        .await?;
-
-                    can_drain_steers = !compacted;
+                    self.maybe_compact(
+                        call_index,
+                        &mut session.conversation,
+                        &session.factory,
+                        CompactionContext {
+                            snapshot: session.context.snapshot(),
+                            phase: CompactionPhase::MidTurn,
+                        },
+                    )
+                    .await?;
                     continue;
                 }
-                pending_steers.extend(steers.lock().await.drain(..));
-                let mut live_steers = VecDeque::new();
-                while let Some(steer) = pending_steers.pop_front() {
-                    if *steer.delivery.lock().await
-                        != crate::agent::execution::SteerDelivery::Withdrawn
-                    {
-                        live_steers.push_back(steer);
+                loop {
+                    let mut live_steers = VecDeque::new();
+                    while let Some(steer) = pending_steers.pop_front() {
+                        if *steer.delivery.lock().await
+                            != crate::agent::execution::SteerDelivery::Withdrawn
+                        {
+                            live_steers.push_back(steer);
+                        }
                     }
+                    pending_steers = live_steers;
+                    let mut queued = steers.lock().await;
+                    if queued.is_empty() {
+                        break;
+                    }
+                    pending_steers.extend(queued.drain(..));
                 }
-                pending_steers = live_steers;
                 if !pending_steers.is_empty() {
                     session.conversation.clear_delta();
                     self.maybe_compact(
@@ -950,6 +961,10 @@ where
             }
 
             session.conversation.clear_delta();
+            self.prompt_cache.publish_live(Some(Self::live_checkpoint(
+                session,
+                self.global_instructions.as_ref(),
+            )));
             let history = code_calls
                 .iter()
                 .any(|call| call.name == "exec")
@@ -985,19 +1000,17 @@ where
                     }
                 }
             }
-            let compacted = self
-                .maybe_compact(
-                    call_index,
-                    &mut session.conversation,
-                    &session.factory,
-                    CompactionContext {
-                        snapshot: session.context.snapshot(),
-                        phase: CompactionPhase::MidTurn,
-                    },
-                )
-                .await?;
-
-            can_drain_steers = !compacted;
+            self.prompt_cache.publish_live(None);
+            self.maybe_compact(
+                call_index,
+                &mut session.conversation,
+                &session.factory,
+                CompactionContext {
+                    snapshot: session.context.snapshot(),
+                    phase: CompactionPhase::MidTurn,
+                },
+            )
+            .await?;
         }
     }
 

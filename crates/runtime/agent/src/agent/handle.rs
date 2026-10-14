@@ -11,6 +11,8 @@ pub struct Nanocodex {
     pub(super) session: Arc<SessionInfo>,
 
     pub(super) driver_turn_ids: bool,
+
+    pub(super) seed: Arc<std::sync::Mutex<Option<Vec<nanocode_types::PromptMessage>>>>,
 }
 
 impl Clone for Nanocodex {
@@ -22,6 +24,7 @@ impl Clone for Nanocodex {
             agent_id: Arc::clone(&self.agent_id),
             session: Arc::clone(&self.session),
             driver_turn_ids: self.driver_turn_ids,
+            seed: Arc::clone(&self.seed),
         }
     }
 }
@@ -367,6 +370,10 @@ impl Nanocodex {
         self.backend.shutdown().await
     }
 
+    pub fn decode_durable_prompt(&self, input: serde_json::Value) -> Result<Prompt> {
+        self.backend.decode_durable_prompt(input)
+    }
+
     pub async fn prompt(&self, request: impl Into<PromptRequest>) -> Result<Turn> {
         let PromptRequest {
             prompt,
@@ -388,7 +395,8 @@ impl Nanocodex {
         let (events, event_stream) = self.events.mirrored_channel();
         let turn_id = uuid::Uuid::now_v7().to_string();
         let events = events.with_turn_id(turn_id.clone());
-        let BackendTurn { request_id, result } = self
+        let (prompt, seed) = self.take_seed(prompt);
+        let submitted = self
             .backend
             .submit(BackendPrompt {
                 key,
@@ -397,7 +405,14 @@ impl Nanocodex {
                 cancel_on_admission,
                 events,
             })
-            .await?;
+            .await;
+        let BackendTurn { request_id, result } = match submitted {
+            Ok(turn) => turn,
+            Err(error) => {
+                self.restore_seed(seed);
+                return Err(error);
+            }
+        };
         let turn_id = self.canonical_turn_id(turn_id, request_id.as_deref());
         Ok(Turn {
             result: Self::turn_result(&turn_id, result),
@@ -496,6 +511,60 @@ impl Nanocodex {
 
     pub async fn context(&self) -> Result<AgentSessionContext> {
         self.backend.context().await
+    }
+
+    pub async fn transcript(&self) -> Result<Vec<nanocode_types::PromptMessage>> {
+        let seed = self.pending_seed();
+        let mut transcript = self.backend.transcript().await?;
+        if let Some(mut seed) = seed {
+            seed.append(&mut transcript);
+            transcript = seed;
+        }
+        Ok(transcript)
+    }
+
+    pub fn with_transcript(
+        self,
+        transcript: Vec<nanocode_types::PromptMessage>,
+    ) -> Result<Self> {
+        Prompt::new("transcript")
+            .with_transcript(transcript.clone())
+            .validate()
+            .map_err(|error| NanocodexError::InvalidRequest(error.to_string()))?;
+        *self.seed.lock().expect("transcript seed lock poisoned") =
+            (!transcript.is_empty()).then_some(transcript);
+        Ok(self)
+    }
+
+    fn pending_seed(&self) -> Option<Vec<nanocode_types::PromptMessage>> {
+        self.seed
+            .lock()
+            .expect("transcript seed lock poisoned")
+            .clone()
+    }
+
+    fn take_seed(&self, prompt: Prompt) -> (Prompt, Option<Vec<nanocode_types::PromptMessage>>) {
+        let Some(seed) = self.seed.lock().expect("transcript seed lock poisoned").take() else {
+            return (prompt, None);
+        };
+        let transcript = seed.iter().cloned().chain(prompt.transcript().iter().cloned()).collect::<Vec<_>>();
+        (prompt.with_transcript(transcript), Some(seed))
+    }
+
+    fn restore_seed(&self, seed: Option<Vec<nanocode_types::PromptMessage>>) {
+        if let Some(seed) = seed {
+            *self.seed.lock().expect("transcript seed lock poisoned") = Some(seed);
+        }
+    }
+
+    pub async fn side_question(&self, question: impl Into<String>) -> Result<SideAnswer> {
+        let question = question.into();
+        if question.trim().is_empty() {
+            return Err(NanocodexError::InvalidRequest(
+                "side question must not be empty".to_owned(),
+            ));
+        }
+        self.backend.side_question(question).await
     }
 
     pub async fn checkpoint(&self) -> Result<SessionCheckpoint> {

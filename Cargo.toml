@@ -18,7 +18,10 @@ members = [
     "crates/integrations/observability",
     "crates/integrations/store-postgres",
     "crates/integrations/store-sqlite",
+    "crates/integrations/store-jsonl",
     "crates/integrations/voice-protocol",
+    "crates/tui",
+    "bin/nanocodex",
     "js",
 ]
 default-members = ["crates/nanocode"]
@@ -45,6 +48,7 @@ nanocode-types = { version = "0.6.7", path = "crates/core/types" }
 nanocode-cua = { version = "0.6.7", path = "crates/integrations/cua" }
 nanocode-decisions = { version = "0.6.7", path = "crates/integrations/decisions" }
 nanocode-tools = { version = "0.6.7", path = "crates/core/tools" }
+nanocode-store-jsonl = { version = "0.6.7", path = "crates/integrations/store-jsonl" }
 nanocode-store-sqlite = { version = "0.6.7", path = "crates/integrations/store-sqlite" }
 nanocode-store-postgres = { version = "0.6.7", path = "crates/integrations/store-postgres" }
 libc = "0.2"

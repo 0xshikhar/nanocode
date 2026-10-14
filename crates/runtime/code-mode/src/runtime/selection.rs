@@ -300,6 +300,15 @@ impl Tools {
         self.into_builder().process_route_store(store).tools
     }
 
+    #[cfg(not(target_family = "wasm"))]
+    pub fn with_default_process_route_store(
+        mut self,
+        store: Arc<dyn crate::attachment::ProcessRouteStore>,
+    ) -> Self {
+        self.process_route_store.get_or_insert(store);
+        self
+    }
+
     #[must_use]
     pub const fn into_builder(self) -> ToolsBuilder {
         ToolsBuilder {

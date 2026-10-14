@@ -199,6 +199,7 @@ pub struct NanocodexBuilder<B = Unselected> {
     cua_disabled: bool,
     max_subagents: Option<usize>,
     subagents_disabled: bool,
+    subagent_continuation_disabled: bool,
 }
 
 impl<B> NanocodexBuilder<B> {
@@ -224,6 +225,12 @@ impl<B> NanocodexBuilder<B> {
     #[must_use]
     pub const fn without_subagents(mut self) -> Self {
         self.subagents_disabled = true;
+        self
+    }
+
+    #[must_use]
+    pub const fn without_subagent_continuation(mut self) -> Self {
+        self.subagent_continuation_disabled = true;
         self
     }
 
@@ -401,6 +408,7 @@ impl<B> NanocodexBuilder<B> {
             .collect();
         let durability = self
             .durability
+            .or_else(|| Some(default_durability()))
             .transpose()
             .map_err(|error| NanocodexError::Backend {
                 backend: "durability",
@@ -423,6 +431,12 @@ impl<B> NanocodexBuilder<B> {
                 self.max_subagents
                     .unwrap_or(nanocode_subagents::DEFAULT_MAX_SUBAGENTS),
             );
+            if !self.subagent_continuation_disabled {
+                let owners = Arc::downgrade(&ownership);
+                registry.set_parent_resolver(Arc::new(move |session_id: &str| {
+                    owners.upgrade()?.agent(session_id)
+                }));
+            }
             (Some(registry), Some(control), Some(updates))
         };
         let subagent_updates: UpdateSlot = Arc::new(Mutex::new(subagent_updates));
@@ -533,6 +547,7 @@ impl NanocodexBuilder<Unselected> {
             cua_disabled: self.cua_disabled,
             max_subagents: self.max_subagents,
             subagents_disabled: self.subagents_disabled,
+            subagent_continuation_disabled: self.subagent_continuation_disabled,
         }
     }
 }
@@ -1003,8 +1018,16 @@ fn codex_recipe(
                 let tools = settings
                     .tools
                     .unwrap_or_else(|| AgentTools::Shared(crate::Tools::default()));
+                #[cfg(not(target_family = "wasm"))]
+                let process_routes = spec.durable_state.as_ref().map(|state| {
+                    crate::process_routes::DurableProcessRoutes::new(state.shared_store())
+                });
                 builder = builder.tools_factory(move |handle| {
                     let mut selected = tools.materialize(handle.clone())?;
+                    #[cfg(not(target_family = "wasm"))]
+                    if let Some(store) = &process_routes {
+                        selected = selected.with_default_process_route_store(store.clone());
+                    }
                     if let Some(registry) = &subagents {
                         selected = nanocode_subagents::install_tools(
                             selected,
@@ -1076,6 +1099,10 @@ fn claude_recipe(
             }
             let tools = settings.tools;
             let root = workspace.to_path_buf();
+            #[cfg(not(target_family = "wasm"))]
+            let process_routes = spec.durable_state.as_ref().map(|state| {
+                crate::process_routes::DurableProcessRoutes::new(state.shared_store())
+            });
             builder = builder.tools_factory(move |handle| {
                 let selected = tools
                     .as_ref()
@@ -1091,7 +1118,22 @@ fn claude_recipe(
                     );
                     additive.extend(tools);
                 }
-                claude_tools(root.clone(), &handle, selected, additive)
+                #[cfg(not(target_family = "wasm"))]
+                {
+                    nanocode_backend_claude::install_default_tools_with_process_routes(
+                        root.clone(),
+                        &handle,
+                        selected,
+                        additive,
+                        process_routes.clone().map(|store| {
+                            store as Arc<dyn nanocode_code_mode::attachment::ProcessRouteStore>
+                        }),
+                    )
+                }
+                #[cfg(target_family = "wasm")]
+                {
+                    claude_tools(root.clone(), &handle, selected, additive)
+                }
             });
             #[cfg(not(target_family = "wasm"))]
             {
@@ -1108,16 +1150,6 @@ fn claude_recipe(
             builder.build()
         })
     })
-}
-
-#[cfg(not(target_family = "wasm"))]
-fn claude_tools(
-    workspace: PathBuf,
-    handle: &AgentHandle,
-    selected: Option<crate::Tools>,
-    additive: Vec<Arc<dyn nanocode_tools::Tool>>,
-) -> Result<nanocode_backend_claude::ClaudeTools> {
-    nanocode_backend_claude::install_default_tools(workspace, handle, selected, additive)
 }
 
 #[cfg(target_family = "wasm")]
@@ -1225,6 +1257,14 @@ impl Drop for Admission<'_> {
 impl Ownership {
     fn lock(&self) -> MutexGuard<'_, OwnershipState> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn agent(&self, session_id: &str) -> Option<Agent> {
+        self.lock()
+            .owned
+            .iter()
+            .find(|(_, agent)| agent.session_id() == session_id)
+            .map(|(_, agent)| agent.clone())
     }
 
     fn admission(&self) -> Result<Admission<'_>> {
@@ -1357,3 +1397,18 @@ impl std::fmt::Display for ShutdownError {
 }
 
 impl std::error::Error for ShutdownError {}
+
+fn default_durability()
+-> std::result::Result<crate::durability::SessionStore, Arc<crate::durability::Error>> {
+    #[cfg(not(target_family = "wasm"))]
+    let store = nanocode_home::AgentHome::from_env()
+        .map_err(|error| crate::durability::StoreError::Backend(error.to_string()))
+        .and_then(|home| {
+            nanocode_store_jsonl::JsonlStore::open_home(&home.codex_home().join("nanocode"))
+        })
+        .map_err(crate::durability::Error::from)
+        .and_then(crate::session_store);
+    #[cfg(target_family = "wasm")]
+    let store = crate::durability::MemoryStore::new().and_then(crate::session_store);
+    store.map_err(Arc::new)
+}

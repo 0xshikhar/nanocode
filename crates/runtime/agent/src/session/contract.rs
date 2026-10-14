@@ -423,6 +423,8 @@ pub struct Capabilities {
 
     pub side_conversation: bool,
 
+    pub side_question: bool,
+
     pub spawn: bool,
 
     pub steering: bool,
@@ -451,6 +453,7 @@ impl Capabilities {
         fork: false,
         fork_at: false,
         side_conversation: false,
+        side_question: false,
         spawn: false,
         steering: false,
         identified_steering: false,

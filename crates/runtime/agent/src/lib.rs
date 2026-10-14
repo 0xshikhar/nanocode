@@ -6,7 +6,7 @@ pub mod session;
 pub mod usage;
 pub use agent::{
     AgentHandle, AgentSessionContext, BuilderBackend, Nanocodex, PromptRequest, PromptRoute,
-    SpawnOptions, Turn, TurnControl, TurnResult, WeakAgent,
+    SideAnswer, SpawnOptions, Turn, TurnControl, TurnResult, WeakAgent,
 };
 pub use error::{
     BackendError, BackendFailure, CompactionRecovery, ExecutionPolicyDisposition, NanocodexError,

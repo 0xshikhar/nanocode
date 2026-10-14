@@ -18,6 +18,7 @@ export function agentActions() {
       appendDeveloperMessage: (text) => session.appendDeveloperMessage(agent, text),
       compact: () => session.compact(agent),
       context: () => session.context(agent),
+      sideQuestion: (question) => session.sideQuestion(agent, question),
       fork: (options) => session.fork(agent, options),
       setModel: (model) => session.setModel(agent, model),
       setFastMode: (enabled) => session.setFastMode(agent, enabled),

@@ -349,10 +349,12 @@ export function createMemoryDurabilityStore(stateId, initial) {
       }
       const payload = requirePayload(request?.payload);
       const revision = durabilityRevision(BigInt(expectedRevision) + 1n);
-      for (const record of request.records) {
+      const staged = new Map();
+      for (const record of checkedRecords(request.records)) {
         const address = JSON.stringify([selected, record.key]);
-        const previous = records.get(address);
+        const previous = staged.get(address) ?? records.get(address);
         if (previous !== undefined && previous !== record.value) throw new Error("immutable record conflict");
+        staged.set(address, record.value);
       }
       for (const record of request.records) records.set(JSON.stringify([selected, record.key]), record.value);
       entry.state = Object.freeze({ revision, payload });

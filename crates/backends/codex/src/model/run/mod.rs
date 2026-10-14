@@ -1,6 +1,7 @@
 mod continuation;
 mod lifecycle;
 mod responses;
+mod side;
 mod state;
 mod tool_calls;
 mod turn;
@@ -455,6 +456,33 @@ impl<S> ModelRun<S> {
     }
 
     fn empty_session(&mut self, requested_workspace: Option<&str>) -> Result<ModelSessionState> {
+        let session = self.fresh_session(requested_workspace)?;
+        self.active_tools = Some(session.tools.control());
+        Ok(session)
+    }
+
+    pub(crate) fn side_checkpoint(&self, requested_workspace: Option<&str>) -> Result<ModelCheckpoint> {
+        let fresh;
+        let session = match &self.session {
+            Some(session) => session,
+            None => {
+                fresh = self.fresh_session(requested_workspace)?;
+                &fresh
+            }
+        };
+        Ok(ModelCheckpoint {
+            workspace: session.workspace.clone(),
+            provider_session_id: Arc::from(session.factory.profile().session_id()),
+            conversation: session.conversation.clone(),
+            request_prefix: session.factory.profile().shared_prefix(),
+            prompt_cache_key: Arc::from(session.factory.profile().prompt_cache_key()),
+            preserve_inherited_delta: true,
+            global_instructions: self.global_instructions.clone(),
+            context_baseline: session.context.baseline(),
+        })
+    }
+
+    fn fresh_session(&self, requested_workspace: Option<&str>) -> Result<ModelSessionState> {
         let workspace = requested_workspace.map_or_else(
             || self.context_source.resolve_workspace(None),
             |workspace| Ok(workspace.to_owned()),
@@ -464,8 +492,6 @@ impl<S> ModelRun<S> {
             .project_instructions(&workspace)
             .map(Arc::<str>::from);
         let tools = tool_runtime(&workspace, &self.config, &self.tools);
-        let tool_control = tools.control();
-        self.active_tools = Some(tool_control);
         let factory = self.attempt_factory(&tools)?;
         let context = ContextState::new(selected_agents_md, ContextBaseline::Missing);
         let canonical_context = context

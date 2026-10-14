@@ -23,6 +23,14 @@ impl HarnessFamily {
         self.0.as_str()
     }
 
+    pub const fn builtin() -> [Self; 2] {
+        [Self::Codex, Self::Claude]
+    }
+
+    pub fn models(&self) -> impl Iterator<Item = ModelSelection> + use<> {
+        ModelSelection::for_family(self.clone())
+    }
+
     pub fn default_model(&self) -> ModelSelection {
         if *self == Self::Codex {
             ModelSelection::Codex(Model::Sol)
@@ -240,8 +248,9 @@ impl ModelSelection {
                 (_, Some(model), ModelTransport::Native) => (
                     match model {
                         ClaudeModel::Opus46 | ClaudeModel::Sonnet46 => {
-                            set(&[Low, Medium, High, Max])
+                            set(&[None, Low, Medium, High, Max])
                         }
+                        ClaudeModel::Haiku55 => set(&[None, Low, Medium, High, Xhigh, Max]),
                         _ => set(&[Low, Medium, High, Xhigh, Max]),
                     },
                     match model {
@@ -267,6 +276,10 @@ impl ModelSelection {
             ultrafast,
             pro,
         }
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        display_name(self)
     }
 
     pub fn for_family(family: HarnessFamily) -> impl Iterator<Item = Self> {
@@ -314,6 +327,10 @@ pub struct ModelCapabilities {
 impl ModelCapabilities {
     pub fn model(&self) -> ModelSelection {
         self.model.clone()
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        display_name(&self.model)
     }
 
     pub const fn transport(&self) -> ModelTransport {

@@ -11,6 +11,7 @@ const layer = name => relative(root, packages.get(name).manifest_path).split("/"
 const forbidden = {
   "crates/core": ["crates/runtime", "crates/backends", "crates/integrations", "crates/nanocode"],
   "crates/runtime": ["crates/backends", "crates/integrations", "crates/nanocode"],
+  "crates/tui": ["crates/core", "crates/runtime", "crates/backends", "crates/integrations", "crates/nanocode"],
 };
 
 let checked = 0;
@@ -33,4 +34,4 @@ for (const name of packages.keys()) {
     }
   }
 }
-console.log(`Layering verified for ${checked} core and runtime crates.`);
+console.log(`Layering verified for ${checked} core, runtime and tui crates.`);

@@ -19,6 +19,13 @@ pub type SubagentStoreFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a
 pub type SubagentStoreFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
 pub trait SubagentStore: Send + Sync {
+    fn pending_turn<'a>(
+        &'a self,
+        _session_id: &'a str,
+    ) -> SubagentStoreFuture<'a, std::io::Result<Option<(String, Value)>>> {
+        Box::pin(async { Ok(None) })
+    }
+
     fn load<'a>(
         &'a self,
         root_session_id: &'a str,
@@ -311,27 +318,6 @@ pub(super) struct OmittedProgress {
     pub(super) nested: HashMap<String, u32>,
 }
 
-impl OmittedProgress {
-    pub(super) fn evicted(&mut self, call: &InFlightCall) {
-        if !call.live {
-            return;
-        }
-        if call.committable {
-            self.committable = self.committable.saturating_add(1);
-        } else if call.settled {
-            self.settled = self.settled.saturating_add(1);
-        } else if call.result_recorded
-            && let Some(parent) = &call.parent_call_id
-        {
-            let count = self.nested.entry(parent.clone()).or_default();
-            *count = count.saturating_add(1);
-        }
-    }
-}
-
-pub(super) const MAX_IN_FLIGHT_CALLS: usize = 8;
-const MAX_IN_FLIGHT_FIELD_BYTES: usize = 240;
-
 impl InFlightCall {
     pub(super) fn new(
         call_id: &str,
@@ -346,8 +332,8 @@ impl InFlightCall {
         };
         Self {
             call_id: call_id.to_owned(),
-            tool: bounded(tool),
-            arguments: bounded(&arguments),
+            tool: tool.to_owned(),
+            arguments,
             result_recorded: false,
             yielded: false,
             parent_call_id: parent_call_id.map(str::to_owned),
@@ -358,34 +344,9 @@ impl InFlightCall {
     }
 }
 
-pub(super) fn retain_call(calls: &mut Vec<InFlightCall>, call: InFlightCall) -> Vec<InFlightCall> {
+pub(super) fn retain_call(calls: &mut Vec<InFlightCall>, call: InFlightCall) {
     calls.retain(|existing| existing.call_id != call.call_id);
     calls.push(call);
-    let mut evicted = Vec::new();
-    while calls.len() > MAX_IN_FLIGHT_CALLS {
-        let index = calls
-            .iter()
-            .position(|existing| existing.settled || existing.committable)
-            .or_else(|| {
-                calls
-                    .iter()
-                    .position(|existing| existing.result_recorded && !existing.yielded)
-            })
-            .unwrap_or(0);
-        evicted.push(calls.remove(index));
-    }
-    evicted
-}
-
-fn bounded(text: &str) -> String {
-    if text.len() <= MAX_IN_FLIGHT_FIELD_BYTES {
-        return text.to_owned();
-    }
-    let mut end = MAX_IN_FLIGHT_FIELD_BYTES;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}…", &text[..end])
 }
 
 pub(super) fn in_flight_evidence(calls: &[InFlightCall], omitted: u32) -> Option<String> {
@@ -404,9 +365,7 @@ pub(super) fn in_flight_evidence(calls: &[InFlightCall], omitted: u32) -> Option
             };
             format!(
                 "- {} (call_id {}; {state}): {}",
-                call.tool,
-                bounded(&call.call_id),
-                call.arguments
+                call.tool, call.call_id, call.arguments
             )
         })
         .collect::<Vec<_>>();
@@ -578,6 +537,13 @@ impl PersistedNative {
 pub(super) struct JournalStore(pub(super) Arc<dyn nanocode_agent::backend::ChildJournalStore>);
 
 impl SubagentStore for JournalStore {
+    fn pending_turn<'a>(
+        &'a self,
+        session_id: &'a str,
+    ) -> SubagentStoreFuture<'a, std::io::Result<Option<(String, Value)>>> {
+        self.0.pending_turn(session_id.to_owned())
+    }
+
     fn load<'a>(
         &'a self,
         _root_session_id: &'a str,
@@ -747,8 +713,6 @@ pub(super) fn journaled_lineage(
     )
 }
 
-pub(super) const MAX_RESUME_ATTEMPTS: u32 = 3;
-
 const fn is_zero(value: &u32) -> bool {
     *value == 0
 }
@@ -773,21 +737,9 @@ pub(super) fn restored_session(
     let accepted = running.then_some(agent.accepted_output).flatten();
     let in_flight = running && accepted.is_none();
     let completed_by_acceptance = accepted.is_some();
-    let exhausted = in_flight && recoverable && agent.resume_attempts >= MAX_RESUME_ATTEMPTS;
     let evidence = in_flight_evidence(&agent.in_flight_calls, agent.in_flight_omitted);
     let status = if terminal {
         AgentStatus::Closed
-    } else if exhausted {
-        let mut error = format!(
-            "subagent recovery exhausted: the runtime restarted during each of the last \
-             {MAX_RESUME_ATTEMPTS} automatic resumes of this turn. Inspect child evidence \
-             before delegating a recovery; do not replay task side effects."
-        );
-        if let Some(evidence) = &evidence {
-            error.push_str("\n\n");
-            error.push_str(evidence);
-        }
-        AgentStatus::Failed { error }
     } else if in_flight && !recoverable {
         let mut error = "subagent could not be restored after a runtime restart: no portable \
                          checkpoint was available"
@@ -806,8 +758,15 @@ pub(super) fn restored_session(
     } else {
         agent.status
     };
-    let resume = in_flight && recoverable && !exhausted;
-    let resume_attempts = if resume { agent.resume_attempts + 1 } else { 0 };
+    let resume = in_flight && recoverable;
+    let resume_attempts = if resume {
+        agent
+            .resume_attempts
+            .checked_add(1)
+            .ok_or_else(|| std::io::Error::other("subagent recovery attempt counter overflow"))?
+    } else {
+        0
+    };
     let binding_task = agent.binding_task;
     let mut session = ChildSession::restored(
         agent.descriptor,
@@ -843,5 +802,5 @@ pub(super) fn restored_session(
         session.in_flight_calls = agent.in_flight_calls;
         session.in_flight_omitted = agent.in_flight_omitted;
     }
-    Ok((session, resume, (!recoverable && !terminal) || exhausted))
+    Ok((session, resume, !recoverable && !terminal))
 }

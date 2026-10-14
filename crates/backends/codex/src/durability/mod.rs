@@ -76,11 +76,19 @@ impl<F> DurableAgentExt for NanocodexBuilder<F> {
         } else if let Some(snapshot) = builder.resume_snapshot() {
             let prepared =
                 context::prepare_snapshot(snapshot.clone(), &known_records).map_err(agent_error)?;
-            owner
-                .commit_checkpoint(prepared.payload)
+            if state
+                .state()
                 .await
-                .map_err(agent_error)?;
-            known_records = prepared.keys;
+                .map_err(agent_error)?
+                .pending_operations()
+                .is_empty()
+            {
+                owner
+                    .commit_checkpoint(prepared.payload)
+                    .await
+                    .map_err(agent_error)?;
+                known_records = prepared.keys;
+            }
         } else {
             if let Some((model, initial)) = initial {
                 builder = builder.initial_settings(model, initial.thinking, initial.service_tier);
@@ -596,8 +604,16 @@ impl LazyExecution {
                 }
                 let record = state.describe(record).await.map_err(agent_error)?;
                 let (owner, checkpoint) = state.acquire_agent().await.map_err(agent_error)?;
-                self.reopened
-                    .store(checkpoint.is_some(), std::sync::atomic::Ordering::SeqCst);
+                self.reopened.store(
+                    checkpoint.is_some()
+                        || !state
+                            .state()
+                            .await
+                            .map_err(agent_error)?
+                            .pending_operations()
+                            .is_empty(),
+                    std::sync::atomic::Ordering::SeqCst,
+                );
                 Ok(DurableExecution::ready(
                     owner,
                     record.session_id.clone(),

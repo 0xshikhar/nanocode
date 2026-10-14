@@ -57,6 +57,7 @@ const CODEX_CAPABILITIES: Capabilities = {
     capabilities.fork = true;
     capabilities.fork_at = true;
     capabilities.side_conversation = true;
+    capabilities.side_question = true;
     capabilities.spawn = true;
     capabilities.steering = true;
     capabilities.identified_steering = true;
@@ -330,6 +331,18 @@ impl LifecycleBackend for LocalLifecycle {
         let shutdown = self.shutdown.clone();
         Box::pin(async move {
             request_command(&commands, &shutdown, |result| Command::Context { result }).await
+        })
+    }
+
+    fn side_question(&self, question: String) -> BackendFuture<Result<nanocode_agent::SideAnswer>> {
+        let commands = self.commands.clone();
+        let shutdown = self.shutdown.clone();
+        Box::pin(async move {
+            request_command(&commands, &shutdown, |result| Command::SideQuestion {
+                question,
+                result,
+            })
+            .await
         })
     }
 

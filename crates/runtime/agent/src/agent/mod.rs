@@ -31,4 +31,6 @@ pub use backend::BuilderBackend;
 pub use handle::{AgentHandle, Nanocodex, WeakAgent, created, created_batch};
 pub use owned::{AgentOwner, adopt};
 pub use session_context::AgentSessionContext;
-pub use turn::{PromptRequest, PromptRoute, SpawnOptions, Turn, TurnControl, TurnResult};
+pub use turn::{
+    PromptRequest, PromptRoute, SideAnswer, SpawnOptions, Turn, TurnControl, TurnResult,
+};

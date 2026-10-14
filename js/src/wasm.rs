@@ -98,6 +98,7 @@ pub fn model_capabilities() -> Result<JsValue, JsValue> {
                 let capabilities = model.capabilities(transport);
                 serde_json::json!({
                     "model": model.as_str(),
+                    "displayName": capabilities.display_name(),
                     "family": model.family().as_str(),
                     "familyDefault": model == model.family().default_model(),
                     "transport": transport.as_str(),
@@ -1883,6 +1884,7 @@ struct WasmSubagents {
     sessions: Rc<RefCell<HashMap<(String, SubagentId), String>>>,
     event_forwarders: Rc<Cell<usize>>,
     flush_updates: tokio::sync::mpsc::UnboundedSender<oneshot::Sender<()>>,
+    roots: Arc<Mutex<HashMap<String, RustNanocodex>>>,
 }
 
 struct WasmBatchParentCleanup {
@@ -1946,6 +1948,16 @@ impl WasmSubagents {
             Arc::clone(&hosts),
             flush_requests,
         );
+        let roots = Arc::new(Mutex::new(HashMap::<String, RustNanocodex>::new()));
+        let resolver_roots = Arc::downgrade(&roots);
+        registry.set_parent_resolver(Arc::new(move |session_id: &str| {
+            resolver_roots
+                .upgrade()?
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get(session_id)
+                .cloned()
+        }));
         Self {
             host_definition_id,
             hosts,
@@ -1955,6 +1967,7 @@ impl WasmSubagents {
             sessions,
             event_forwarders,
             flush_updates,
+            roots,
         }
     }
 
@@ -2340,6 +2353,20 @@ impl WasmNanocodex {
         serialize_session_context(self.inner.context().await.map_err(js_agent_error)?)
     }
 
+    #[wasm_bindgen(js_name = sideQuestion)]
+    pub async fn side_question(&self, question: &str) -> Result<String, JsValue> {
+        let answer = self
+            .inner
+            .side_question(question)
+            .await
+            .map_err(js_agent_error)?;
+        serde_json::to_string(&serde_json::json!({
+            "text": answer.text(),
+            "usage": answer.usage(),
+        }))
+        .map_err(js_error)
+    }
+
     #[wasm_bindgen(js_name = startRealtimeConversation)]
     pub async fn start_realtime_conversation(&self) -> Result<String, JsValue> {
         append_developer_context(&self.inner, REALTIME_START_INSTRUCTIONS).await
@@ -2396,6 +2423,13 @@ impl WasmNanocodex {
     ) -> Self {
         let event_forwarding = Rc::new(Cell::new(false));
         forward_events(events, Rc::clone(&event_forwarding));
+        if let Some(subagents) = &subagents {
+            subagents
+                .roots
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(inner.session_id().to_owned(), inner.clone());
+        }
         Self {
             inner,
             subagents,
@@ -2501,6 +2535,13 @@ fn encode_persistence(persistence: &Persistence) -> Result<String, JsValue> {
 
 impl Drop for WasmNanocodex {
     fn drop(&mut self) {
+        if let Some(subagents) = &self.subagents {
+            subagents
+                .roots
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(self.inner.session_id());
+        }
         if self.event_forwarding.replace(false)
             && let Some(subagents) = &self.subagents
         {

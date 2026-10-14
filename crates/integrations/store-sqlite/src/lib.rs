@@ -156,6 +156,19 @@ impl SqliteStore {
                 "INSERT INTO nanocodex_durable_records (state_id, key, value) VALUES (?1, ?2, ?3)
                  ON CONFLICT (state_id, key) DO NOTHING", params![state_id, record.key, record.value],
             ).map_err(backend)?;
+            let retained: String = transaction
+                .query_row(
+                    "SELECT value FROM nanocodex_durable_records WHERE state_id = ?1 AND key = ?2",
+                    params![state_id, record.key],
+                    |row| row.get(0),
+                )
+                .map_err(backend)?;
+            if retained != record.value {
+                return Err(StoreError::NotCommitted(format!(
+                    "durability record `{}` has conflicting content",
+                    record.key
+                )));
+            }
         }
         let sql_revision = sql_counter(revision, "SQLite durability revision overflow")?;
         transaction

@@ -97,7 +97,12 @@ export function createIndexedDbDurabilityStore(options = {}) {
         const payload = requirePayload(request?.payload);
         const revision = durabilityRevision(BigInt(expectedRevision) + 1n);
         for (const record of request.records) {
-          await requestResult(transaction.objectStore(RECORDS).put({ stateId, ...record }));
+          const records = transaction.objectStore(RECORDS);
+          const retained = await requestResult(records.get([stateId, record.key]));
+          if (retained !== undefined && retained.value !== record.value) {
+            throw new Error("immutable record conflict");
+          }
+          await requestResult(records.put({ stateId, ...record }));
         }
         await requestResult(states.put({ stateId, revision, payload }));
         await completed;

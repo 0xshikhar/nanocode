@@ -56,6 +56,7 @@ export type ModelTransport = "native" | "managed";
 
 export type ModelCapabilityEntry = Readonly<{
   model: string;
+  displayName: string;
   family: HarnessFamily;
   transport: ModelTransport;
 
@@ -85,6 +86,7 @@ export type SessionCapabilities = Readonly<{
 
   forkAt: boolean;
   sideConversation: boolean;
+  sideQuestion: boolean;
   spawn: boolean;
   steering: boolean;
   identifiedSteering: boolean;
@@ -452,6 +454,11 @@ export type TurnUsage = Readonly<{
   cost_status: CostStatus;
 }>;
 
+export type SideAnswer = Readonly<{
+  text: string;
+  usage: TurnUsage | null;
+}>;
+
 export type ForkOptions = Readonly<{
 
   at?: TurnResult | SessionCheckpoint | undefined;
@@ -495,6 +502,7 @@ export type AgentActions<B extends BackendName = never> = {
     cancel(): Promise<void>;
     compact(): Promise<void>;
     context(): Promise<AgentSessionContext>;
+    sideQuestion(question: string): Promise<SideAnswer>;
     fork(options?: ForkOptions): Promise<DefaultAgent<B>>;
 
     setModel(model: BackendModels[B]): Promise<void>;

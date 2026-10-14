@@ -145,6 +145,20 @@ pub struct Registry {
     status_queues: std::sync::Mutex<HashMap<(String, AgentId), mpsc::UnboundedSender<OrderedJob>>>,
 
     completion_retries: std::sync::Mutex<HashMap<(String, AgentId), (u32, bool)>>,
+
+    parent_resolver: std::sync::RwLock<Option<ParentResolver>>,
+}
+
+pub type ParentResolver = Arc<dyn Fn(&str) -> Option<Nanocodex> + Send + Sync>;
+
+pub fn completion_continuation_prompt(id: AgentId) -> String {
+    format!(
+        "Subagent {id} completed. Continue the current task by inspecting its structured result: \
+         call list_agents with include_completed=true, find agent {id}, and use only the result \
+         fields needed for the next step. Integrate or verify them as appropriate, perform any \
+         remaining work, and then respond to the user. Do not merely repeat the raw result.\n\n\
+         <subagent_completion agent_id=\"{id}\" />"
+    )
 }
 
 fn completion_retry_delay(attempt: u32) -> Duration {
@@ -1163,7 +1177,15 @@ impl Registry {
             this: std::sync::OnceLock::new(),
             status_queues: std::sync::Mutex::new(HashMap::new()),
             completion_retries: std::sync::Mutex::new(HashMap::new()),
+            parent_resolver: std::sync::RwLock::new(None),
         }
+    }
+
+    pub fn set_parent_resolver(&self, resolver: ParentResolver) {
+        *self
+            .parent_resolver
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(resolver);
     }
 
     fn store_for(&self, root_session_id: &str) -> Option<Arc<dyn SubagentStore>> {
@@ -1744,7 +1766,7 @@ impl Registry {
             };
             match kind {
                 AgentEventKind::ToolCall => {
-                    let evicted = durable::retain_call(
+                    durable::retain_call(
                         &mut session.in_flight_calls,
                         durable::InFlightCall::new(
                             &call.call_id,
@@ -1753,12 +1775,6 @@ impl Registry {
                             parent_call(&call.call_id, call.parent_call_id.as_deref()),
                         ),
                     );
-                    for call in &evicted {
-                        session.in_flight_progress.evicted(call);
-                    }
-                    session.in_flight_omitted = session
-                        .in_flight_omitted
-                        .saturating_add(u32::try_from(evicted.len()).unwrap_or(u32::MAX));
                 }
 
                 AgentEventKind::ToolResult => {
@@ -2409,6 +2425,7 @@ impl Registry {
         contract: OutputContract,
     ) -> std::io::Result<()> {
         let OutputContract { validator, schema } = contract;
+        let id = descriptor.id;
 
         let checkpoint = if self.store_for(&root_session_id).is_some() {
             match agent.checkpoint().await {
@@ -2437,7 +2454,7 @@ impl Registry {
             self.record_checkpoint(&root_session_id, descriptor.id, snapshot);
         }
         state.insert(
-            root_session_id,
+            root_session_id.clone(),
             descriptor.id,
             descriptor.session_id.clone(),
             ChildSession {
@@ -2471,6 +2488,27 @@ impl Registry {
         )?;
         drop(state);
         self.changed();
+        if let Some(store) = self.store_for(&root_session_id) {
+            if let Err(error) = self.save_scope(&root_session_id, store.as_ref()).await {
+                if let Some(session) = self
+                    .state
+                    .lock()
+                    .await
+                    .scopes
+                    .get_mut(&root_session_id)
+                    .and_then(|scope| scope.sessions.get_mut(&id))
+                    && let Some(events) = session.event_task.take()
+                {
+                    events.abort();
+                }
+                return match self.close_batch(&root_session_id, vec![id]).await {
+                    Ok(()) => Err(error),
+                    Err(cleanup) => Err(std::io::Error::other(format!(
+                        "{error}; subagent startup cleanup failed: {cleanup}"
+                    ))),
+                };
+            }
+        }
         Ok(())
     }
 
@@ -2489,10 +2527,22 @@ impl Registry {
         harness.start(prompt, capacity).await
     }
 
+    pub(super) async fn pending_turn(
+        &self,
+        root: &str,
+        session_id: &str,
+    ) -> std::io::Result<Option<(String, serde_json::Value)>> {
+        match self.store_for(root) {
+            Some(store) => store.pending_turn(session_id).await,
+            None => Ok(None),
+        }
+    }
+
     pub(super) async fn harness_turn_started(
         &self,
         root_session_id: &str,
         id: AgentId,
+        recovering: bool,
     ) -> Option<u64> {
         let revision = {
             let mut state = self.state.lock().await;
@@ -2504,7 +2554,11 @@ impl Registry {
             if !session.status.can_start_turn() || session.active {
                 None
             } else {
-                let revision = session.next_instruction_revision.checked_add(1)?;
+                let revision = if recovering {
+                    session.next_instruction_revision
+                } else {
+                    session.next_instruction_revision.checked_add(1)?
+                };
 
                 if !matches!(session.status, AgentStatus::Interrupted) {
                     session.in_flight_calls.clear();
@@ -2772,7 +2826,141 @@ impl Registry {
     }
 
     pub(super) fn send(&self, root_session_id: &str, update: AgentUpdate) {
+        if let AgentUpdate::Completion { id, revision, .. } = &update {
+            self.schedule_parent_continuation(root_session_id, *id, *revision);
+        }
         let _ = send_update(&self.updates, root_session_id, update, false);
+    }
+
+    fn schedule_parent_continuation(&self, root_session_id: &str, id: AgentId, revision: u64) {
+        let resolver = self
+            .parent_resolver
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let (Some(resolver), Some(registry)) = (resolver, self.this.get().and_then(Weak::upgrade))
+        else {
+            return;
+        };
+        let root_session_id = root_session_id.to_owned();
+        drop(platform::spawn(async move {
+            let Some(parent) = resolver(&root_session_id) else {
+                return;
+            };
+            if let Err(error) = registry
+                .continue_parent(&parent, &root_session_id, id, revision)
+                .await
+            {
+                tracing::warn!(%error, %id, revision, "subagent completion did not continue its parent");
+            }
+        }));
+    }
+
+    pub async fn continue_parent(
+        self: &Arc<Self>,
+        parent: &Nanocodex,
+        root_session_id: &str,
+        id: AgentId,
+        revision: u64,
+    ) -> std::io::Result<bool> {
+        if parent.session_id() != root_session_id {
+            return Err(std::io::Error::other(
+                "subagent completion parent is not the root session",
+            ));
+        }
+        if !self.take_completion(root_session_id, id, revision).await {
+            return Ok(false);
+        }
+        if self.store_for(root_session_id).is_some()
+            && let Err(error) = self.persist_durably(root_session_id).await
+        {
+            self.restore_completion(root_session_id, id, revision).await;
+            self.retry_completion(root_session_id, id, revision);
+            return Err(error);
+        }
+        match parent
+            .route_prompt(nanocode_agent::input::Prompt::new(
+                completion_continuation_prompt(id),
+            ))
+            .await
+        {
+            Ok(_) => Ok(true),
+            Err(error) => {
+                self.restore_completion(root_session_id, id, revision).await;
+                if !matches!(
+                    error,
+                    NanocodexError::AgentStopped | NanocodexError::TurnStopped
+                ) {
+                    self.retry_completion(root_session_id, id, revision);
+                }
+                Err(std::io::Error::other(error))
+            }
+        }
+    }
+
+    async fn take_completion(&self, root_session_id: &str, id: AgentId, revision: u64) -> bool {
+        let taken = {
+            let mut state = self.state.lock().await;
+            match state
+                .scopes
+                .get_mut(root_session_id)
+                .and_then(|scope| scope.sessions.get_mut(&id))
+            {
+                Some(session) if session.pending_completion == Some(revision) => {
+                    session.pending_completion = None;
+                    true
+                }
+                _ => false,
+            }
+        };
+        if taken {
+            lock_unpoisoned(&self.completion_retries).remove(&(root_session_id.to_owned(), id));
+            self.changed();
+        }
+        taken
+    }
+
+    async fn restore_completion(&self, root_session_id: &str, id: AgentId, revision: u64) {
+        let mut state = self.state.lock().await;
+        if let Some(session) = state
+            .scopes
+            .get_mut(root_session_id)
+            .and_then(|scope| scope.sessions.get_mut(&id))
+            && session.pending_completion.is_none()
+            && session.settled_revision == Some(revision)
+            && matches!(session.status, AgentStatus::Completed { .. })
+        {
+            session.pending_completion = Some(revision);
+        }
+        drop(state);
+        self.changed();
+    }
+
+    async fn observe_completions(&self, root_session_id: &str, ids: &[AgentId]) {
+        let observed = {
+            let mut state = self.state.lock().await;
+            let Some(scope) = state.scopes.get_mut(root_session_id) else {
+                return;
+            };
+            ids.iter()
+                .copied()
+                .filter(|id| {
+                    scope.sessions.get_mut(id).is_some_and(|session| {
+                        matches!(session.status, AgentStatus::Completed { .. })
+                            && session.pending_completion.take().is_some()
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        if observed.is_empty() {
+            return;
+        }
+        let mut retries = lock_unpoisoned(&self.completion_retries);
+        for id in observed {
+            retries.remove(&(root_session_id.to_owned(), id));
+        }
+        drop(retries);
+        self.changed();
     }
 
     pub async fn directory(
@@ -3143,6 +3331,10 @@ impl Registry {
             };
             if fresh {
                 lock_unpoisoned(&self.idle_waits).remove(session_id);
+                if root == session_id {
+                    let ids = terminal.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+                    self.observe_completions(&root, &ids).await;
+                }
                 return Ok((summaries, false));
             }
             if all_terminal {

@@ -359,6 +359,10 @@ export async function checkpoint(agent) {
   return freezeJson(JSON.parse(await agentState(agent).raw.checkpoint()));
 }
 
+export async function sideQuestion(agent, question) {
+  return JSON.parse(await agentState(agent).raw.sideQuestion(question));
+}
+
 export async function context(agent) {
   return parseSessionContext(await agentState(agent).raw.context());
 }

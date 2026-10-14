@@ -1,5 +1,99 @@
 use super::*;
 
+const SIDE_QUESTION_REMINDER: &str = "<system-reminder>This is a side question from the user. You must answer this question directly in a single response.
+IMPORTANT CONTEXT:
+- You are a separate, lightweight agent spawned to answer this one question
+- The main agent is NOT interrupted - it continues working independently in the background
+- You share the conversation context but are a completely separate instance
+- Do NOT reference being interrupted or what you were \"previously doing\" - that framing is incorrect
+CRITICAL CONSTRAINTS:
+- You have NO tools available - you cannot read files, run commands, search, or take any actions
+- Do NOT write tool calls or tool output as text (for example invoke or function_calls XML blocks) - nothing you write here is executed; if answering would need reading files, running commands, or searching, say that can't be checked from a side question and suggest asking in the main conversation
+- This is a one-off response - there will be no follow-up turns
+- You can ONLY provide information based on what you already know from the conversation context
+- NEVER say things like \"Let me try...\", \"I'll now...\", \"Let me check...\", or promise to take any action
+- If you don't know the answer, say so - do not offer to look it up or investigate
+Simply answer the question with the information you have.</system-reminder>";
+
+#[must_use]
+pub fn side_question_prompt(question: &str) -> String {
+    format!("{SIDE_QUESTION_REMINDER}\n\n{question}")
+}
+
+#[derive(Default)]
+pub struct TranscriptBuilder {
+    messages: Vec<(nanocode_types::PromptMessageRole, String)>,
+}
+
+impl TranscriptBuilder {
+    pub fn user(&mut self, text: &str) {
+        self.push(nanocode_types::PromptMessageRole::User, text);
+    }
+
+    pub fn assistant(&mut self, text: &str) {
+        self.push(nanocode_types::PromptMessageRole::Assistant, text);
+    }
+
+    pub fn tool_call(&mut self, name: &str, input: &str) {
+        self.assistant(&format!("[Tool call: {name}]\n{input}"));
+    }
+
+    pub fn tool_result(&mut self, name: &str, output: &str) {
+        self.user(&format!("[Tool result: {name}]\n{output}"));
+    }
+
+    fn push(&mut self, role: nanocode_types::PromptMessageRole, text: &str) {
+        if text.trim().is_empty() {
+            return;
+        }
+        match self.messages.last_mut() {
+            Some((last, content)) if *last == role => {
+                content.push_str("\n\n");
+                content.push_str(text);
+            }
+            _ => self.messages.push((role, text.to_owned())),
+        }
+    }
+
+    #[must_use]
+    pub fn finish(mut self) -> Vec<nanocode_types::PromptMessage> {
+        use nanocode_types::{PromptMessage, PromptMessageRole};
+        if self.messages.is_empty() {
+            return Vec::new();
+        }
+        if self
+            .messages
+            .first()
+            .is_some_and(|(role, _)| *role == PromptMessageRole::Assistant)
+        {
+            self.messages.insert(
+                0,
+                (
+                    PromptMessageRole::User,
+                    "[The earlier part of this conversation is not available.]".to_owned(),
+                ),
+            );
+        }
+        if self
+            .messages
+            .last()
+            .is_some_and(|(role, _)| *role == PromptMessageRole::User)
+        {
+            self.messages.push((
+                PromptMessageRole::Assistant,
+                "[No assistant reply was recorded after the message above.]".to_owned(),
+            ));
+        }
+        self.messages
+            .into_iter()
+            .map(|(role, content)| match role {
+                PromptMessageRole::User => PromptMessage::user(content),
+                PromptMessageRole::Assistant => PromptMessage::assistant(content),
+            })
+            .collect()
+    }
+}
+
 pub trait BuilderBackend {
     type Builder;
 
@@ -44,6 +138,13 @@ pub enum BackendPromptRoute {
 }
 
 pub trait ChildJournalStore: Send + Sync + 'static {
+    fn pending_turn(
+        &self,
+        _session_id: String,
+    ) -> BackendFuture<std::io::Result<Option<(String, serde_json::Value)>>> {
+        Box::pin(async { Ok(None) })
+    }
+
     fn load(&self) -> BackendFuture<std::io::Result<Option<String>>>;
 
     fn save(&self, payload: String, records: Vec<Arc<str>>) -> BackendFuture<std::io::Result<()>>;
@@ -175,6 +276,11 @@ fn unsupported<T: 'static>(capability: &'static str) -> BackendFuture<Result<T>>
 
 #[doc(hidden)]
 pub trait LifecycleBackend: Send + Sync + 'static {
+    fn decode_durable_prompt(&self, input: serde_json::Value) -> Result<Prompt> {
+        serde_json::from_value(input)
+            .map_err(|error| NanocodexError::InvalidCheckpoint(error.to_string()))
+    }
+
     fn harness_family(&self) -> crate::HarnessFamily;
 
     fn capabilities(&self) -> Capabilities;
@@ -219,6 +325,14 @@ pub trait LifecycleBackend: Send + Sync + 'static {
     }
 
     fn compact(&self) -> BackendFuture<Result<()>>;
+
+    fn side_question(&self, _question: String) -> BackendFuture<Result<SideAnswer>> {
+        unsupported("side_question")
+    }
+
+    fn transcript(&self) -> BackendFuture<Result<Vec<nanocode_types::PromptMessage>>> {
+        unsupported("transcript")
+    }
 
     fn append_developer_message(&self, text: String) -> BackendFuture<Result<AgentSessionContext>>;
 
@@ -318,6 +432,7 @@ impl BackendRuntime {
             agent_id: self.agent_id,
             session: Arc::new(session),
             driver_turn_ids: self.driver_turn_ids,
+            seed: Arc::default(),
         }
     }
 }

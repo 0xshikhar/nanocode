@@ -139,9 +139,9 @@ pub(super) struct ClaudeConfig {
 
 #[derive(Default, Deserialize, Serialize)]
 enum CachePolicy {
-    #[default]
     #[serde(rename = "off")]
     Off,
+    #[default]
     #[serde(rename = "5m")]
     FiveMinutes,
     #[serde(rename = "1h")]
@@ -574,7 +574,7 @@ pub(super) async fn build_claude(
         builder = builder.fast_mode(enabled);
     }
     builder = match config.cache {
-        CachePolicy::Off => builder,
+        CachePolicy::Off => builder.automatic_cache(false),
         CachePolicy::FiveMinutes => builder.automatic_cache(true),
         CachePolicy::OneHour => builder.cache_one_hour(),
     };

@@ -22,7 +22,8 @@ pub use model::{
     MessagePurpose, MessageSender, ScopedAgentUpdate, SubagentRuntimeId, ThreadId,
 };
 pub use runtime::{
-    AgentDirectoryEntry, AgentSummary, MessageReceipt, Registry, SubagentControl, channel,
+    AgentDirectoryEntry, AgentSummary, MessageReceipt, ParentResolver, Registry, SubagentControl,
+    channel, completion_continuation_prompt,
 };
 pub use tools::{
     AgentStartReport, AgentTask, AgentToolResult, install_tools, start_agent, start_agent_with,

@@ -104,6 +104,22 @@ impl MemoryStore {
                             } else {
                                 match state.revision.checked_add(1) {
                                     Some(revision) => {
+                                        let mut staged = HashMap::new();
+                                        let conflict = new_records.iter().find(|record| {
+                                            let retained = records
+                                                .get(&(state_id.clone(), record.key.clone()))
+                                                .or_else(|| staged.get(&record.key).copied());
+                                            let conflict = retained
+                                                .is_some_and(|value| value != &record.value);
+                                            staged.insert(record.key.clone(), &record.value);
+                                            conflict
+                                        });
+                                        if let Some(record) = conflict {
+                                            drop(result.send(Err(StoreError::NotCommitted(format!(
+                                                "durability record `{}` has conflicting content", record.key
+                                            )))));
+                                            continue;
+                                        }
                                         for record in new_records {
                                             records
                                                 .entry((state_id.clone(), record.key))

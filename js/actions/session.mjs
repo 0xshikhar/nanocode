@@ -7,6 +7,7 @@ import {
   sessionInfo,
   compact as compactAgent,
   context as agentContext,
+  sideQuestion as agentSideQuestion,
   fork as forkAgent,
   setFastMode as setAgentFastMode,
   setServiceTier as setAgentServiceTier,
@@ -49,6 +50,10 @@ export function appendDeveloperMessage(agent, text) {
 
 export function compact(agent) {
   return compactAgent(agent);
+}
+
+export function sideQuestion(agent, question) {
+  return agentSideQuestion(agent, question);
 }
 
 export function context(agent) {

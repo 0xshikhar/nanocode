@@ -31,6 +31,9 @@ tokio = { workspace = true, features = ["rt", "sync", "time"] }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 nanocode-cua.workspace = true
+async-trait.workspace = true
+nanocode-store-jsonl.workspace = true
+nanocode-home.workspace = true
 
 [lints]
 workspace = true

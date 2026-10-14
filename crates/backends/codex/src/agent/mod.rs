@@ -47,8 +47,6 @@ use crate::{
 
 const COMMAND_CAPACITY: usize = 8;
 
-const STEER_CAPACITY: usize = 8;
-
 type ToolsFactory =
     Arc<dyn Fn(AgentHandle) -> std::result::Result<Tools, ToolsBuildError> + Send + Sync>;
 

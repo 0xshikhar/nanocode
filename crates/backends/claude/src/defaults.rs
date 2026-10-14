@@ -9,6 +9,16 @@ pub fn install_default_tools(
     selected: Option<Tools>,
     additive: Vec<Arc<dyn Tool>>,
 ) -> Result<crate::ClaudeTools> {
+    install_default_tools_with_process_routes(workspace, handle, selected, additive, None)
+}
+
+pub fn install_default_tools_with_process_routes(
+    workspace: PathBuf,
+    handle: &AgentHandle,
+    selected: Option<Tools>,
+    additive: Vec<Arc<dyn Tool>>,
+    process_routes: Option<Arc<dyn nanocode_code_mode::attachment::ProcessRouteStore>>,
+) -> Result<crate::ClaudeTools> {
     let jobs = Arc::new(crate::claude_bash::Jobs::default());
     let selected = match selected {
         Some(tools) => tools,
@@ -27,6 +37,10 @@ pub fn install_default_tools(
             )
             .map_err(|error| NanocodexError::InvalidRequest(error.to_string()))?
         }
+    };
+    let selected = match process_routes {
+        Some(store) => selected.with_default_process_route_store(store),
+        None => selected,
     };
     let mut selected = selected
         .into_builder()

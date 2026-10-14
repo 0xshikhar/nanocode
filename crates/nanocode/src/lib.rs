@@ -5,8 +5,8 @@ pub use nanocode_agent::{
     AgentEvents, AgentSessionContext, Capabilities, ClaudeModel, CostStatus, EstimatedUsdCost,
     ExecutionPolicyDisposition, ForkPoint, ForkRequest, HarnessFamily, Lineage, ModelCapabilities,
     ModelTransport, Mutability, NanocodexError, Origin, Persistence, PromptRequest, PromptRoute,
-    ReportedTurnUsage, ServiceTier, SessionCheckpoint, SessionInfo, Turn, TurnControl, TurnResult,
-    TurnUsage, UsdAmount, WeakAgent,
+    ReportedTurnUsage, ServiceTier, SessionCheckpoint, SessionInfo, SideAnswer, Turn, TurnControl,
+    TurnResult, TurnUsage, UsdAmount, WeakAgent,
 };
 pub use nanocode_agent::{
     BackendId, BackendKind, BackendRegistration as Backend, BackendRequest, ModelSelection,
@@ -148,3 +148,9 @@ pub mod backend {
     pub use nanocode_durability::{CheckpointFormat, DurableBackendRegistration};
     pub use nanocode_tools::{Tool, ToolCollection, ToolContext, ToolInput};
 }
+
+#[cfg(not(target_family = "wasm"))]
+pub use nanocode_store_jsonl::JsonlStore;
+
+#[cfg(not(target_family = "wasm"))]
+mod process_routes;

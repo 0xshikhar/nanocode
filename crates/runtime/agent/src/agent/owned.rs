@@ -29,6 +29,7 @@ pub async fn adopt(agent: Nanocodex, owner: &Arc<dyn AgentOwner>) -> Result<Nano
         agent_id: Arc::clone(&agent.agent_id),
         session: Arc::clone(&agent.session),
         driver_turn_ids: agent.driver_turn_ids,
+        seed: Arc::clone(&agent.seed),
     };
     if owner.adopt(key, owned.clone()) {
         return Ok(owned);
@@ -123,6 +124,9 @@ impl LifecycleBackend for Owned {
     }
     fn context(&self) -> BackendFuture<Result<crate::AgentSessionContext>> {
         self.inner.context()
+    }
+    fn side_question(&self, question: String) -> BackendFuture<Result<crate::SideAnswer>> {
+        self.inner.side_question(question)
     }
     fn checkpoint(&self) -> BackendFuture<Result<SessionCheckpoint>> {
         self.inner.checkpoint()

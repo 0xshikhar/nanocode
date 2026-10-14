@@ -8,6 +8,7 @@ import {
   retainAgentForOwner,
   shutdownOwnedAgent,
 } from "../internal.mjs";
+import { createMemoryDurabilityStore } from "./durability-store.mjs";
 import { claudeTransportOptions, isClaudeTransport } from "./claude-transport.mjs";
 import { resolveResponsesTransport } from "./responses-transport.mjs";
 import { tools as workspaceTools } from "./workspace.mjs";
@@ -111,7 +112,7 @@ function snapshotRuntime(options, platform) {
     instructions: options.instructions,
     workspace,
     filesystem,
-    durability: options.durability,
+    durability: options.durability ?? createMemoryDurabilityStore(createSessionId()),
     cua: snapshotCua(options.cua),
     codeEvaluator: options.codeEvaluator,
     module: options.module,

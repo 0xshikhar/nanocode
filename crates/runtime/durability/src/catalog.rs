@@ -308,15 +308,14 @@ mod store {
             let ids = self.store.clone().list_states(usize::MAX).await?;
             let mut sessions = Vec::new();
             for id in ids {
-                if is_child_journal(&id) {
+                if is_auxiliary_state(&id) {
                     continue;
                 }
-                if let Ok(Some(summary)) = self.summary(&id).await {
+                if let Some(summary) = self.summary(&id).await? {
                     sessions.push(summary);
                 }
             }
             sessions.sort_by_key(|session| std::cmp::Reverse(session.record.updated_at_ms));
-            sessions.truncate(LIST_LIMIT);
             Ok(sessions)
         }
 
@@ -337,7 +336,7 @@ mod store {
             {
                 return Ok(None);
             }
-            let preview = self.first_prompt(id, &state).await;
+            let preview = self.first_prompt(id, &state).await?;
             let record = match state.session() {
                 Some(record) => record.clone(),
                 None => {
@@ -551,11 +550,11 @@ mod store {
                 .transpose()?;
 
             record.start_checkpoint = checkpoint.as_ref().map(|payload| payload.key.to_string());
-            self.publish(record.clone(), checkpoint).await?;
             let preview = match &at {
                 BranchPoint::Before(_) => None,
-                _ => self.first_prompt(id, &state).await,
+                _ => self.first_prompt(id, &state).await?,
             };
+            self.publish(record.clone(), checkpoint).await?;
             Ok(SessionSummary { record, preview })
         }
 
@@ -785,18 +784,16 @@ mod store {
             Ok(turns)
         }
 
-        async fn first_prompt(&self, id: &str, state: &DurableState) -> Option<String> {
-            let (_, first) = state
+        async fn first_prompt(&self, id: &str, state: &DurableState) -> Result<Option<String>> {
+            let Some((_, first)) = state
                 .operations()
                 .iter()
-                .min_by_key(|(_, op)| op.accepted_order)?;
-            let input: Value = self
-                .load_payload(id, &first.input)
-                .await
-                .ok()?
-                .decode()
-                .ok()?;
-            prompt_text(&input)
+                .min_by_key(|(_, op)| op.accepted_order)
+            else {
+                return Ok(None);
+            };
+            let input: Value = self.load_payload(id, &first.input).await?.decode()?;
+            Ok(prompt_text(&input))
         }
     }
 
@@ -815,8 +812,8 @@ mod store {
         }
     }
 
-    fn is_child_journal(id: &str) -> bool {
-        id.ends_with(":subagents")
+    fn is_auxiliary_state(id: &str) -> bool {
+        id.ends_with(":subagents") || id.ends_with(":process-routes")
     }
 
     fn is_portable(value: &Value) -> bool {

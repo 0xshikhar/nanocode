@@ -37,6 +37,33 @@ impl Inner {
 struct SharedJournal(Arc<Inner>);
 
 impl ChildJournalStore for SharedJournal {
+    fn pending_turn(
+        &self,
+        session_id: String,
+    ) -> BackendFuture<std::io::Result<Option<(String, serde_json::Value)>>> {
+        let inner = Arc::clone(&self.0);
+        Box::pin(async move {
+            let mut store = inner.fenced.lock().await.store.clone();
+            let stored = store
+                .peek(&session_id)
+                .await
+                .map_err(std::io::Error::other)?;
+            let state = crate::session::reduce_peeked(stored).map_err(std::io::Error::other)?;
+            let Some((id, operation)) = state.pending_operations().into_iter().next() else {
+                return Ok(None);
+            };
+            let input = operation
+                .input
+                .load(&mut store, &session_id)
+                .await
+                .map_err(std::io::Error::other)?;
+            Ok(Some((
+                id.to_owned(),
+                input.decode().map_err(std::io::Error::other)?,
+            )))
+        })
+    }
+
     fn load(&self) -> BackendFuture<std::io::Result<Option<String>>> {
         let inner = Arc::clone(&self.0);
         Box::pin(async move {

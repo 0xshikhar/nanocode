@@ -21,6 +21,7 @@ use serde_json::{Value, json};
 mod durable;
 mod images;
 mod shared;
+mod side;
 use crate::execution::{Admission, ClaudeExecutionPolicy, Step};
 pub use durable::{
     ClaudeCheckpointView, decode_checkpoint, decode_session_checkpoint, rewind_checkpoint,
@@ -506,7 +507,7 @@ impl ClaudeBuilder {
             max_tokens: None,
             effort: None,
             thinking_explicit: false,
-            automatic_cache: false,
+            automatic_cache: true,
             cache_one_hour: false,
             adaptive_thinking: false,
             keep_thinking: false,
@@ -1438,6 +1439,7 @@ impl ClaudeBuilder {
             parallel_safe_tools: self.parallel_safe_tools,
             conversation: Mutex::new(restored.conversation),
             round_boundary: std::sync::RwLock::new(round_boundary),
+            side_view: std::sync::RwLock::new(None),
             boundary_stale: AtomicBool::new(false),
             policy: self.policy,
             admission: Mutex::new(()),
@@ -2622,6 +2624,8 @@ struct State {
 
     round_boundary: std::sync::RwLock<Arc<Snapshot>>,
 
+    side_view: std::sync::RwLock<Option<Arc<Vec<Message>>>>,
+
     boundary_stale: AtomicBool,
     policy: Option<Arc<dyn ClaudeExecutionPolicy>>,
     admission: Mutex<()>,
@@ -3117,6 +3121,7 @@ const CLAUDE_CAPABILITIES: Capabilities = {
     capabilities.fork = true;
     capabilities.fork_at = true;
     capabilities.side_conversation = true;
+    capabilities.side_question = true;
     capabilities.spawn = true;
     capabilities.steering = true;
     capabilities.identified_steering = true;
@@ -4391,12 +4396,14 @@ impl State {
             && let Some((input, withdrawn)) = turn.receipts.get(id)
         {
             if input != &input_json {
-                return Err(NanocodexError::InvalidRequest(
-                    "steer identity was reused with different input".into(),
-                ));
+                return Err(NanocodexError::InvalidRequest(format!(
+                    "steering message `{id}` already has different input"
+                )));
             }
             if *withdrawn {
-                return Err(NanocodexError::InvalidRequest("steer was withdrawn".into()));
+                return Err(NanocodexError::InvalidRequest(format!(
+                    "steering message `{id}` was withdrawn"
+                )));
             }
             return Ok(());
         }
@@ -4409,7 +4416,6 @@ impl State {
             return Err(NanocodexError::InvalidRequest("durable Claude steering requires inline images; local image paths cannot be retained safely".into()));
         }
         let frozen = crate::prompt::freeze(prompt, turn.images).await?;
-        let capacity = turn.pending.len() < 8;
         let local_index = || {
             turn.next_index
                 .checked_add(1)
@@ -4426,7 +4432,7 @@ impl State {
                     id.clone(),
                     turn.model_call_index,
                     journaled,
-                    capacity,
+                    true,
                 )
                 .await?
             else {
@@ -4438,9 +4444,6 @@ impl State {
                 return Err(NanocodexError::InvalidRequest(
                     "Claude execution policy does not support identified steering receipts".into(),
                 ));
-            }
-            if !capacity {
-                return Err(NanocodexError::SteerQueueFull);
             }
             (local_index()?, false)
         };
@@ -4738,6 +4741,7 @@ impl State {
         if cancel.flag.load(Ordering::SeqCst) && self.policy.is_none() {
             return Err(NanocodexError::TurnCancelled);
         }
+        self.publish_side_view(None);
         let mut prompt = prompt_messages(&request.prompt)?;
         let mut cursor = self
             .cursor(
@@ -4948,6 +4952,7 @@ impl State {
             if let Some(turn) = self.steering.lock().await.get_mut(&request.key) {
                 turn.model_call_index = index.saturating_add(cursor.model_step_offset).max(1);
             }
+            self.publish_side_view(Some(pending.clone()));
             let response = self
                 .response(
                     &pending,
@@ -5000,6 +5005,16 @@ impl State {
                 conversation.recovery_notices.push(upgrade.notice);
             }
             let response = response.message;
+            self.publish_side_view(Some(
+                pending
+                    .iter()
+                    .cloned()
+                    .chain([Message {
+                        role: Role::Assistant,
+                        content: response.content.clone(),
+                    }])
+                    .collect(),
+            ));
             if cursor.model_step_offset == 0 {
                 cursor.model_step_offset = 1;
                 cursor.model_receipt_start = Some(index.saturating_add(2));
@@ -5494,7 +5509,6 @@ impl State {
                 )
                 .await?;
             Self::hook_context(conversation, &outcome);
-            let hook_stopped = matches!(&outcome.decision, crate::ClaudeLifecycleDecision::Stop(_));
             if let crate::ClaudeLifecycleDecision::Block(reason) = outcome.decision {
                 if cursor.stop_hook_active {
                     return Err(unsupported(&format!(
@@ -5515,9 +5529,7 @@ impl State {
                 continue;
             }
 
-            let more_instructions = if hook_stopped {
-                false
-            } else {
+            let more_instructions = {
                 let mut turns = self.steering.lock().await;
                 if let Some(turn) = turns.get_mut(&request.key) {
                     if turn.pending.is_empty() {
@@ -5645,13 +5657,20 @@ impl Driver {
                 return Err(NanocodexError::AgentStopped);
             }
             let mut turns = state.steering.lock().await;
-            let turn = turns.get_mut(&key).ok_or(NanocodexError::TurnStopped)?;
+            let turn = turns
+                .get_mut(&key)
+                .ok_or(NanocodexError::TurnNotSteerable)?;
             state.accept_steer(turn, id, prompt).await
         })
     }
 }
 
 impl LifecycleBackend for Driver {
+    fn decode_durable_prompt(&self, input: Value) -> Result<Prompt> {
+        serde_json::from_value(input.get("prompt").cloned().ok_or_else(|| NanocodexError::InvalidCheckpoint("durable Claude prompt envelope is missing its prompt".into()))?)
+            .map_err(|error| NanocodexError::InvalidCheckpoint(error.to_string()))
+    }
+
     fn harness_family(&self) -> HarnessFamily {
         HarnessFamily::Claude
     }
@@ -5893,9 +5912,6 @@ impl LifecycleBackend for Driver {
                     .filter(|(_, turn)| turn.accepting)
                     .min_by_key(|(key, _)| key.0)
                 {
-                    if turn.pending.len() >= 8 {
-                        return Err(unsupported("Claude steering queue is full"));
-                    }
                     state.accept_steer(turn, None, prompt).await?;
                     return Ok(BackendPromptRoute::Steered);
                 }
@@ -5918,7 +5934,9 @@ impl LifecycleBackend for Driver {
         let state = self.state.clone();
         Box::pin(async move {
             let mut turns = state.steering.lock().await;
-            let turn = turns.get_mut(&key).ok_or(NanocodexError::TurnStopped)?;
+            let Some(turn) = turns.get_mut(&key) else {
+                return Ok(false);
+            };
             let Some(steer) = turn.pending.back().filter(|steer| {
                 steer.message_id.as_deref() == Some(&id) && steer.boundary.is_none()
             }) else {
@@ -5947,6 +5965,9 @@ impl LifecycleBackend for Driver {
                     .get(&key)
                     .ok_or(NanocodexError::TurnNotCancellable)?
                     .cancel();
+            }
+            if let Some(turn) = state.steering.lock().await.get_mut(&key) {
+                turn.accepting = false;
             }
             if state.policy.is_some() {
                 loop {
@@ -6139,6 +6160,10 @@ impl LifecycleBackend for Driver {
                 capability: "context",
             })
         })
+    }
+    fn side_question(&self, question: String) -> BackendFuture<Result<nanocode_agent::SideAnswer>> {
+        let state = self.state.clone();
+        Box::pin(async move { state.side_question(question).await })
     }
     fn spawn(&self, options: SpawnOptions) -> BackendFuture<Result<(Nanocodex, AgentEvents)>> {
         let handle = self.handle.clone();

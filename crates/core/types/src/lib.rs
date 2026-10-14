@@ -38,8 +38,8 @@ impl Model {
     #[must_use]
     pub const fn default_thinking(self) -> Thinking {
         match self {
-            Self::Astra | Self::Sol | Self::Glm53 | Self::Kimi | Self::Mimo => Thinking::Low,
-            Self::Luna => Thinking::Medium,
+            Self::Astra | Self::Glm53 | Self::Kimi | Self::Mimo => Thinking::Low,
+            Self::Sol | Self::Luna => Thinking::Medium,
         }
     }
 
@@ -74,10 +74,7 @@ impl Model {
 
     #[must_use]
     pub const fn supports_reasoning_mode(self, mode: ReasoningMode) -> bool {
-        !matches!(
-            (self, mode),
-            (Self::Glm53 | Self::Kimi | Self::Mimo, ReasoningMode::Pro)
-        )
+        matches!(mode, ReasoningMode::Standard)
     }
 
     #[must_use]
