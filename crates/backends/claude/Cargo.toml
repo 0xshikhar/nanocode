@@ -1,0 +1,64 @@
+[package]
+autotests = false
+autobenches = false
+name = "nanocode-backend-claude"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Typed Anthropic Messages protocol and streaming transport"
+
+[features]
+default = []
+tools = ["nanocode-code-mode/code-mode", "dep:nanocode-home", "dep:schemars", "dep:ignore", "dep:globset", "dep:tempfile", "dep:serde_yaml_ng", "dep:nix"]
+
+workspace-files = ["tools"]
+
+[dependencies]
+nanocode-agent.workspace = true
+nanocode-types.workspace = true
+nanocode-tools.workspace = true
+nanocode-media.workspace = true
+nanocode-home = { workspace = true, optional = true }
+schemars = { workspace = true, optional = true }
+base64.workspace = true
+getrandom = { workspace = true, features = ["wasm_js"] }
+sha2.workspace = true
+regex.workspace = true
+xxhash-rust = { version = "0.8.15", features = ["xxh64"] }
+url.workspace = true
+futures-util.workspace = true
+httpdate = "1.0.3"
+image.workspace = true
+nanocode-code-mode = { path = "../../runtime/code-mode", version = "0.6.7", default-features = false, features = ["image-processing"] }
+tokio = { workspace = true, features = ["macros", "sync", "time"] }
+web-time.workspace = true
+uuid.workspace = true
+reqwest = { workspace = true, features = ["stream", "gzip", "brotli", "deflate", "zstd"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+nix = { workspace = true, features = ["fs"], optional = true }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+ignore = { workspace = true, optional = true }
+globset = { version = "0.4.19", optional = true }
+tempfile = { workspace = true, optional = true }
+serde_yaml_ng = { workspace = true, optional = true }
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+wasm-bindgen-futures.workspace = true
+wasmtimer = { version = "0.4.3", default-features = false, features = ["tokio"] }
+
+[lints]
+workspace = true
+
+[lib]
+test = false
+doctest = false
+bench = false

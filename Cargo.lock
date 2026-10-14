@@ -2076,7 +2076,6 @@ dependencies = [
  "nanocode-agent",
  "nanocode-backend-claude",
  "nanocode-backend-codex",
- "nanocode-claude-tools",
  "nanocode-code-mode",
  "nanocode-cua",
  "nanocode-durability",
@@ -2108,20 +2107,26 @@ dependencies = [
  "base64 0.22.1",
  "futures-util",
  "getrandom 0.4.3",
+ "globset",
  "httpdate",
+ "ignore",
  "image",
  "libc",
  "nanocode-agent",
- "nanocode-claude-tools",
  "nanocode-code-mode",
+ "nanocode-home",
  "nanocode-media",
  "nanocode-tools",
  "nanocode-types",
+ "nix 0.31.3",
  "regex",
  "reqwest",
+ "schemars",
  "serde",
  "serde_json",
+ "serde_yaml_ng",
  "sha2 0.11.0",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "url",
@@ -2176,26 +2181,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nanocode-claude-tools"
-version = "0.6.7"
-dependencies = [
- "base64 0.22.1",
- "globset",
- "ignore",
- "image",
- "nanocode-home",
- "nanocode-tools",
- "nix 0.31.3",
- "regex",
- "schemars",
- "serde",
- "serde_json",
- "serde_yaml_ng",
- "tempfile",
- "tokio",
-]
-
-[[package]]
 name = "nanocode-code-mode"
 version = "0.6.7"
 dependencies = [
@@ -2206,7 +2191,6 @@ dependencies = [
  "getrandom 0.4.3",
  "http",
  "httpdate",
- "image",
  "nanocode-home",
  "nanocode-media",
  "nanocode-tls",
@@ -2312,8 +2296,6 @@ dependencies = [
  "base64 0.22.1",
  "image",
  "nanocode-types",
- "serde",
- "serde_json",
  "sha1 0.11.0",
  "symphonia",
  "thiserror 2.0.18",

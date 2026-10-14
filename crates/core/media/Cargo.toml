@@ -1,0 +1,34 @@
+[package]
+autotests = false
+autobenches = false
+name = "nanocode-media"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shared image preparation and audio accounting"
+[features]
+default = ["audio", "image"]
+audio = ["dep:base64", "dep:sha1", "dep:symphonia", "dep:tracing"]
+image = ["dep:base64", "dep:image", "dep:nanocode-types", "dep:sha1", "dep:thiserror", "dep:tokio", "dep:tracing"]
+
+[dependencies]
+tracing = { workspace = true, optional = true }
+nanocode-types = { workspace = true, optional = true }
+base64 = { workspace = true, optional = true }
+image = { workspace = true, optional = true }
+sha1 = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
+symphonia = { version = "0.6.0", default-features = false, features = ["isomp4", "mkv", "mp3", "ogg", "wav"], optional = true }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+tokio = { workspace = true, features = ["rt"], optional = true }
+
+[lints]
+workspace = true
+
+[lib]
+test = false
+doctest = false
+bench = false

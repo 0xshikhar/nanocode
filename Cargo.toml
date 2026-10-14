@@ -1,24 +1,23 @@
 [workspace]
 members = [
-    "crates/nanocode-backend-codex",
-    "crates/nanocode-agent",
-    "crates/nanocode-media",
-    "crates/nanocode-tls",
-    "crates/nanocode-types",
     "crates/nanocode",
-    "crates/nanocode-tools",
-    "crates/nanocode-backend-claude",
-    "crates/nanocode-backend-claude/tools",
-    "crates/nanocode-durability",
-    "crates/nanocode-hand",
-    "crates/nanocode-home",
-    "crates/nanocode-code-mode",
-    "crates/nanocode-observability",
-    "crates/nanocode-subagents",
-    "crates/nanocode-voice-protocol",
-    "crates/nanocode-tools-macros",
-    "crates/nanocode-cua",
-    "js"
+    "crates/runtime/agent",
+    "crates/runtime/code-mode",
+    "crates/runtime/durability",
+    "crates/runtime/subagents",
+    "crates/backends/claude",
+    "crates/backends/codex",
+    "crates/core/home",
+    "crates/core/media",
+    "crates/core/tls",
+    "crates/core/tools",
+    "crates/core/tools-macros",
+    "crates/core/types",
+    "crates/integrations/cua",
+    "crates/integrations/hand",
+    "crates/integrations/observability",
+    "crates/integrations/voice-protocol",
+    "js",
 ]
 default-members = ["crates/nanocode"]
 resolver = "2"
@@ -36,13 +35,13 @@ categories = ["api-bindings", "asynchronous", "development-tools"]
 publish = true
 
 [workspace.dependencies]
-nanocode-backend-codex = { version = "0.6.7", path = "crates/nanocode-backend-codex" }
-nanocode-agent = { version = "0.6.7", path = "crates/nanocode-agent" }
-nanocode-media = { version = "0.6.7", path = "crates/nanocode-media" }
-nanocode-tls = { version = "0.6.7", path = "crates/nanocode-tls" }
-nanocode-types = { version = "0.6.7", path = "crates/nanocode-types" }
-nanocode-cua = { version = "0.6.7", path = "crates/nanocode-cua" }
-nanocode-tools = { version = "0.6.7", path = "crates/nanocode-tools" }
+nanocode-backend-codex = { version = "0.6.7", path = "crates/backends/codex" }
+nanocode-agent = { version = "0.6.7", path = "crates/runtime/agent" }
+nanocode-media = { version = "0.6.7", path = "crates/core/media" }
+nanocode-tls = { version = "0.6.7", path = "crates/core/tls" }
+nanocode-types = { version = "0.6.7", path = "crates/core/types" }
+nanocode-cua = { version = "0.6.7", path = "crates/integrations/cua" }
+nanocode-tools = { version = "0.6.7", path = "crates/core/tools" }
 libc = "0.2"
 base64 = "0.22.1"
 async-trait = "=0.1.89"
@@ -60,15 +59,14 @@ httpdate = "1.0.3"
 ignore = "0.4.31"
 jsonschema = { version = "0.48.5", default-features = false }
 nanocode = { version = "0.6.7", path = "crates/nanocode" }
-nanocode-backend-claude = { version = "0.6.7", path = "crates/nanocode-backend-claude" }
-nanocode-claude-tools = { version = "0.6.7", path = "crates/nanocode-backend-claude/tools", default-features = false }
-nanocode-home = { version = "0.6.7", path = "crates/nanocode-home" }
-nanocode-durability = { version = "0.6.7", path = "crates/nanocode-durability" }
-nanocode-voice-protocol = { version = "0.6.7", path = "crates/nanocode-voice-protocol" }
-nanocode-observability = { version = "0.6.7", path = "crates/nanocode-observability" }
-nanocode-subagents = { version = "0.6.7", path = "crates/nanocode-subagents" }
-nanocode-code-mode = { version = "0.6.7", path = "crates/nanocode-code-mode", default-features = false }
-nanocode-tools-macros = { version = "0.6.7", path = "crates/nanocode-tools-macros" }
+nanocode-backend-claude = { version = "0.6.7", path = "crates/backends/claude" }
+nanocode-home = { version = "0.6.7", path = "crates/core/home" }
+nanocode-durability = { version = "0.6.7", path = "crates/runtime/durability" }
+nanocode-voice-protocol = { version = "0.6.7", path = "crates/integrations/voice-protocol" }
+nanocode-observability = { version = "0.6.7", path = "crates/integrations/observability" }
+nanocode-subagents = { version = "0.6.7", path = "crates/runtime/subagents" }
+nanocode-code-mode = { version = "0.6.7", path = "crates/runtime/code-mode", default-features = false }
+nanocode-tools-macros = { version = "0.6.7", path = "crates/core/tools-macros" }
 image = { version = "0.25.9", default-features = false, features = ["bmp", "gif", "jpeg", "png", "pnm", "webp"] }
 iana-time-zone = "0.1.64"
 js-sys = "0.3.82"

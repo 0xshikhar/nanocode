@@ -89,7 +89,7 @@ pub use nanocode_code_mode as oai_tools;
 #[cfg(not(target_family = "wasm"))]
 #[cfg_attr(docsrs, doc(cfg(not(target_family = "wasm"))))]
 #[doc(inline)]
-pub use nanocode_claude_tools as claude_tools;
+pub use nanocode_backend_claude::tools as claude_tools;
 
 #[cfg(all(not(target_family = "wasm"), feature = "observability"))]
 #[cfg_attr(

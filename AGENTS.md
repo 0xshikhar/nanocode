@@ -1,6 +1,7 @@
 # Development
 
 - Do not add code comments, doc comments, or comment headers.
+- Follow [the crate layout](crates/README.md): active orchestration in `runtime/`, provider code in `backends/`, shared contracts in `core/`, and host adapters in `integrations/`. Keep each backend's API definitions and tools in its own crate.
 - Build Rust and JavaScript/WASM SDKs. Keep managed services and apps outside this repo.
 - Preserve agreed public APIs. Use upstream Claude/Codex prompts and tools; share Code Mode and CUA across both backends.
 - Preserve native and JavaScript/WASM parity for agents, subagents, durability, and shared runtime contracts, including existing spawn/events, cancellation, and checkpoint/resume behavior. Keep native-only dependencies behind platform adapters; support WASM-local futures. Validate affected SDK builds on native and WASM targets.

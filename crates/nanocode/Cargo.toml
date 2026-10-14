@@ -41,7 +41,7 @@ nanocode-backend-codex.workspace = true
 nanocode-tools.workspace = true
 nanocode-backend-claude = { workspace = true }
 nanocode-durability = { workspace = true, optional = true, features = ["claude"] }
-nanocode-code-mode = { path = "../nanocode-code-mode", version = "0.6.7", default-features = false, features = ["code-mode", "attachment"] }
+nanocode-code-mode = { path = "../runtime/code-mode", version = "0.6.7", default-features = false, features = ["code-mode", "attachment"] }
 serde_json.workspace = true
 uuid.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
@@ -50,7 +50,6 @@ tokio = { workspace = true, features = ["rt", "sync", "time"] }
 nanocode-cua.workspace = true
 
 nanocode-backend-claude = { workspace = true, features = ["tools"] }
-nanocode-claude-tools = { workspace = true }
 nanocode-observability = { workspace = true, optional = true }
 
 [lints]
