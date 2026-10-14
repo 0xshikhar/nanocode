@@ -3709,14 +3709,12 @@ pub(super) fn forward_events(
             let kind = event.kind;
             let payload = matches!(kind, AgentEventKind::ToolCall | AgentEventKind::ToolResult)
                 .then(|| event.payload.clone());
-            if !send_update(
+            let _ = send_update(
                 &updates,
                 &root_session_id,
                 AgentUpdate::Event { id, event },
                 false,
-            ) {
-                return;
-            }
+            );
             if let Some(registry) = registry.upgrade() {
                 registry
                     .track_in_flight(&root_session_id, id, &kind, &payload)

@@ -6,7 +6,7 @@
 | `runtime/` | Agent lifecycle, Code Mode, durability, and subagent orchestration | Active runtime development |
 | `backends/` | Provider APIs, execution adapters, prompts, backend-owned tools, and each backend's durability adapter | Provider-specific maintenance |
 | `core/` | Shared types, tool contracts, macros, media, TLS, and home configuration | Changes to shared contracts or infrastructure |
-| `integrations/` | Computer use, host execution, observability, voice, and state stores | Integration-specific development |
+| `integrations/` | Computer use, observability, voice protocol, and state stores | Integration-specific development |
 
 Each backend is one crate containing its API definitions, tools, and durability
 adapter. `core/` depends on nothing above it; `runtime/` depends only on `core/`
@@ -34,7 +34,7 @@ WASM hosts implement `StateStore` over their own storage.
 
 | Host | Crates |
 | --- | --- |
-| Native TUI or CLI | `nanocode`, `nanocode-store-sqlite`, optionally `nanocode-observability` and `nanocode-voice` |
+| Native TUI or CLI | `nanocode`, `nanocode-store-sqlite`, optionally `nanocode-observability` |
 | Native server | `nanocode`, `nanocode-store-postgres`, `nanocode-observability` |
 | WASM worker | `nanocode` and a host `StateStore` |
 | Browser JS | `nanocode-wasm` |

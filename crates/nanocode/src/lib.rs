@@ -15,7 +15,6 @@ pub use nanocode_agent::{
 pub use nanocode_backend_codex::NanocodexBuilder as CodexBuilder;
 mod harness;
 pub use harness::{Harness, HarnessBuilder, HarnessRequest};
-#[cfg(not(target_family = "wasm"))]
 mod runtime;
 pub use nanocode_agent::{Model, ReasoningMode, Thinking};
 pub use nanocode_backend_claude::{Claude, ClaudeClient};
@@ -45,12 +44,13 @@ pub(crate) fn register_builtin_formats(store: &durability::SessionStore) -> dura
         nanocode_backend_claude::durability::ClaudeCheckpointFormat,
     ))
 }
-#[cfg(not(target_family = "wasm"))]
+pub use nanocode_subagents::{
+    AgentDescriptor, AgentId, AgentMessageUpdate, AgentStatus, AgentUpdate, ScopedAgentUpdate,
+    SubagentControl, SubagentRuntimeId,
+};
 pub use runtime::ClaudeHarness;
-#[cfg(not(target_family = "wasm"))]
 pub use runtime::CodexHarness;
-#[cfg(not(target_family = "wasm"))]
-pub use runtime::{Nanocodex, NanocodexBuilder, SpawnBuilder, Unselected};
+pub use runtime::{Nanocodex, NanocodexBuilder, SpawnBuilder, SubagentUpdates, Unselected};
 
 pub mod agent {
 
@@ -80,6 +80,9 @@ pub use nanocode_backend_claude as claude;
 pub use nanocode_durability as durability;
 
 #[doc(inline)]
+pub use nanocode_subagents as subagents;
+
+#[doc(inline)]
 pub use nanocode_backend_codex::client as oai;
 
 pub use nanocode_backend_codex::client as codex;
@@ -100,15 +103,14 @@ pub use nanocode_cua as cua;
 pub use nanocode_cua::{ComputerConfig, ComputerTools};
 
 pub mod prelude {
-    #[cfg(not(target_family = "wasm"))]
     pub use crate::ClaudeHarness;
-    #[cfg(not(target_family = "wasm"))]
     pub use crate::CodexHarness;
 
     pub use crate::DurableAgentExt;
-    #[cfg(not(target_family = "wasm"))]
     pub use crate::Nanocodex;
+    pub use crate::SubagentUpdates;
     pub use crate::Tool;
+    pub use crate::{AgentStatus, AgentUpdate, ScopedAgentUpdate, SubagentControl};
 
     pub use crate::Tools;
     #[cfg(not(target_family = "wasm"))]

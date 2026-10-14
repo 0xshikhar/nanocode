@@ -581,35 +581,6 @@ pub(super) fn attempt_factory(
     ))
 }
 
-pub(super) fn tool_runtime(workspace: &str, config: &ModelConfig, tools: &Tools) -> ToolRuntime {
-    #[cfg(not(target_family = "wasm"))]
-    {
-        ToolRuntime::new_with_tools(
-            workspace,
-            crate::builtin_tools::handlers(
-                tools.web_search_enabled().then(|| WebSearchConfig {
-                    endpoint: config.search_endpoint(),
-                    auth: config.auth.clone(),
-                }),
-                tools
-                    .image_generation_enabled()
-                    .then(|| ImageGenerationConfig {
-                        api_base_url: config.api_base_url.clone(),
-                        auth: config.auth.clone(),
-                        save_root: Path::new(workspace).to_path_buf(),
-                    }),
-                tools.remote_http_client().unwrap_or_default(),
-            ),
-            tools,
-        )
-    }
-    #[cfg(target_family = "wasm")]
-    {
-        let _ = config;
-        ToolRuntime::new_with_tools(workspace, Vec::new(), tools)
-    }
-}
-
 pub(super) const fn status(success: bool) -> &'static str {
     if success { "completed" } else { "failed" }
 }

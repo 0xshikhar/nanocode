@@ -652,7 +652,4 @@ pub(crate) fn prepare_history_checkpoint(
     })
 }
 
-#[cfg(not(target_family = "wasm"))]
-use crate::builtin_tools::{ImageGenerationConfig, WebSearchConfig};
-#[cfg(not(target_family = "wasm"))]
-use std::path::Path;
+use crate::builtin_tools::tool_runtime;

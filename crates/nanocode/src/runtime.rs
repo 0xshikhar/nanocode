@@ -18,11 +18,17 @@ use std::{
     sync::{Arc, Mutex, MutexGuard, PoisonError},
 };
 
+mod computer;
+
 type Result<T> = nanocode_agent::Result<T>;
 
 use crate::durability::DurableBackendRegistration as RegisteredBackend;
 
 type Recipe = Arc<dyn Fn(AgentSpec) -> BackendFuture<AgentResult> + Send + Sync>;
+
+pub type SubagentUpdates =
+    tokio::sync::mpsc::UnboundedReceiver<nanocode_subagents::ScopedAgentUpdate>;
+type UpdateSlot = Arc<Mutex<Option<SubagentUpdates>>>;
 
 type CodexHook = Arc<dyn Fn(CodexBuilder) -> Result<CodexBuilder> + Send + Sync>;
 type ClaudeHook = Arc<dyn Fn(ClaudeBuilder) -> Result<ClaudeBuilder> + Send + Sync>;
@@ -187,7 +193,9 @@ pub struct NanocodexBuilder<B = Unselected> {
     thinking: Option<Thinking>,
     settings: Settings,
     workspace: Option<PathBuf>,
+    #[cfg(not(target_family = "wasm"))]
     cua: Option<crate::ComputerTools>,
+    #[cfg(not(target_family = "wasm"))]
     cua_disabled: bool,
     max_subagents: Option<usize>,
     subagents_disabled: bool,
@@ -231,6 +239,7 @@ impl<B> NanocodexBuilder<B> {
         self
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[must_use]
     pub fn cua(mut self, tools: crate::ComputerTools) -> Self {
         self.cua = Some(tools);
@@ -238,6 +247,7 @@ impl<B> NanocodexBuilder<B> {
         self
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[must_use]
     pub fn without_cua(mut self) -> Self {
         self.cua = None;
@@ -259,16 +269,8 @@ impl<B> NanocodexBuilder<B> {
         self
     }
 
-    pub fn build(mut self) -> Result<Nanocodex> {
-        let preferred = if self.codex.is_some() {
-            Some(HarnessFamily::Codex)
-        } else if self.claude.is_some() {
-            Some(HarnessFamily::Claude)
-        } else {
-            self.backends
-                .first()
-                .map(|backend| HarnessFamily::from(backend.id()))
-        };
+    #[cfg(not(target_family = "wasm"))]
+    fn with_default_clients(mut self) -> Self {
         let registered = |family: HarnessFamily| {
             self.backends
                 .iter()
@@ -280,6 +282,27 @@ impl<B> NanocodexBuilder<B> {
         if self.claude.is_none() && !registered(HarnessFamily::Claude) {
             self.claude = Some(ClaudeClient::default().into());
         }
+        self
+    }
+
+    pub fn build(self) -> Result<Nanocodex> {
+        let preferred = if self.codex.is_some() {
+            Some(HarnessFamily::Codex)
+        } else if self.claude.is_some() {
+            Some(HarnessFamily::Claude)
+        } else {
+            self.backends
+                .first()
+                .map(|backend| HarnessFamily::from(backend.id()))
+        };
+        #[cfg(not(target_family = "wasm"))]
+        let builder = self.with_default_clients();
+        #[cfg(target_family = "wasm")]
+        let builder = self;
+        builder.assemble(preferred)
+    }
+
+    fn assemble(self, preferred: Option<HarnessFamily>) -> Result<Nanocodex> {
         let mut configured = Vec::new();
 
         if self.codex.is_some() {
@@ -359,7 +382,11 @@ impl<B> NanocodexBuilder<B> {
         }
         let workspace: Arc<Path> = resolve_workspace(self.workspace)?.into();
 
-        let cua = (!self.cua_disabled).then(|| Arc::new(tokio::sync::OnceCell::new_with(self.cua)));
+        #[cfg(not(target_family = "wasm"))]
+        let cua: computer::Cell =
+            (!self.cua_disabled).then(|| Arc::new(tokio::sync::OnceCell::new_with(self.cua)));
+        #[cfg(target_family = "wasm")]
+        let cua: computer::Cell = None;
         let ownership = Arc::new(Ownership::default());
         let backend_defaults: Vec<_> = self
             .backends
@@ -389,13 +416,16 @@ impl<B> NanocodexBuilder<B> {
                 }
             }
         }
-        let subagents = (!self.subagents_disabled).then(|| {
-            let (registry, _, _) = nanocode_subagents::channel(
+        let (subagents, subagent_control, subagent_updates) = if self.subagents_disabled {
+            (None, None, None)
+        } else {
+            let (registry, control, updates) = nanocode_subagents::channel(
                 self.max_subagents
                     .unwrap_or(nanocode_subagents::DEFAULT_MAX_SUBAGENTS),
             );
-            registry
-        });
+            (Some(registry), Some(control), Some(updates))
+        };
+        let subagent_updates: UpdateSlot = Arc::new(Mutex::new(subagent_updates));
         let mut recipes: Vec<(HarnessFamily, Recipe)> = Vec::new();
 
         if let Some(codex) = self.codex {
@@ -446,6 +476,11 @@ impl<B> NanocodexBuilder<B> {
                 *recipe = persistent_recipe(recipe.clone(), store.clone(), workspace.clone());
             }
         }
+        if subagent_control.is_some() {
+            for (_, recipe) in &mut recipes {
+                *recipe = unclaimed_updates_recipe(recipe.clone(), subagent_updates.clone());
+            }
+        }
         let mut router = Harness::builder();
 
         if let Some(store) = &durability {
@@ -469,6 +504,8 @@ impl<B> NanocodexBuilder<B> {
                 ownership,
 
                 durability,
+                subagents: subagent_control,
+                subagent_updates,
             }),
         })
     }
@@ -490,7 +527,9 @@ impl NanocodexBuilder<Unselected> {
             thinking: self.thinking,
             settings: self.settings,
             workspace: self.workspace,
+            #[cfg(not(target_family = "wasm"))]
             cua: self.cua,
+            #[cfg(not(target_family = "wasm"))]
             cua_disabled: self.cua_disabled,
             max_subagents: self.max_subagents,
             subagents_disabled: self.subagents_disabled,
@@ -510,7 +549,7 @@ fn registered_recipe(
     backend: Arc<dyn RegisteredBackend>,
     runtime: &Settings,
     workspace: &Arc<Path>,
-    cua: Option<Arc<tokio::sync::OnceCell<crate::ComputerTools>>>,
+    cua: computer::Cell,
     subagents: Option<Arc<nanocode_subagents::Registry>>,
 ) -> Recipe {
     let workspace = Arc::clone(workspace);
@@ -523,21 +562,7 @@ fn registered_recipe(
         let subagents = subagents.clone();
         Box::pin(async move {
             backend.validate_model(spec.model.as_str())?;
-            let cua_tools: Vec<Arc<dyn nanocode_tools::Tool>> = if let Some(cua) = cua {
-                let cua = cua
-                    .get_or_try_init(|| async {
-                        crate::ComputerTools::connect(crate::ComputerConfig::installed()?).await
-                    })
-                    .await
-                    .map_err(|error: nanocode_tools::ToolError| {
-                        NanocodexError::InvalidRequest(error.to_string())
-                    })?;
-                cua.tools()
-                    .map(|tool| Arc::new(tool) as Arc<dyn nanocode_tools::Tool>)
-                    .collect()
-            } else {
-                Vec::new()
-            };
+            let cua_tools = computer::shared(computer::connect(cua).await?.as_ref());
             let mut tools = nanocode_agent::RuntimeTools::default().shared(cua_tools);
             if let Some(registry) = subagents {
                 tools = tools.per_agent(Arc::new(move |handle| {
@@ -567,6 +592,22 @@ fn registered_recipe(
                 return backend.build_durable(request, state).await;
             }
             backend.build(request).await
+        })
+    })
+}
+
+fn unclaimed_updates_recipe(recipe: Recipe, updates: UpdateSlot) -> Recipe {
+    Arc::new(move |spec| {
+        let recipe = recipe.clone();
+        let updates = updates.clone();
+        Box::pin(async move {
+            drop(
+                updates
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .take(),
+            );
+            recipe(spec).await
         })
     })
 }
@@ -662,6 +703,8 @@ struct Runtime {
     ownership: Arc<Ownership>,
 
     durability: Option<crate::durability::SessionStore>,
+    subagents: Option<nanocode_subagents::SubagentControl>,
+    subagent_updates: UpdateSlot,
 }
 
 impl Nanocodex {
@@ -702,6 +745,20 @@ impl Nanocodex {
     #[must_use]
     pub fn spawn_factory(&self) -> Arc<dyn AgentFactory> {
         self.inner.harness.spawn_factory()
+    }
+
+    #[must_use]
+    pub fn subagents(&self) -> Option<&nanocode_subagents::SubagentControl> {
+        self.inner.subagents.as_ref()
+    }
+
+    #[must_use]
+    pub fn take_subagent_updates(&self) -> Option<SubagentUpdates> {
+        self.inner
+            .subagent_updates
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
     }
 
     pub async fn resume(&self, checkpoint: SessionCheckpoint) -> AgentResult {
@@ -894,24 +951,19 @@ impl AgentSpec {
 
 fn exposed(
     tools: crate::Tools,
-    cua: Option<&crate::ComputerTools>,
+    cua: Option<&computer::Computer>,
 ) -> std::result::Result<crate::Tools, nanocode_code_mode::ToolsBuildError> {
-    let mut builder = tools
+    let builder = tools
         .into_builder()
         .exposure(nanocode_code_mode::ToolExposure::CodeModeOnly);
-    if let Some(cua) = cua {
-        for tool in cua.tools() {
-            builder = builder.tool(tool);
-        }
-    }
-    builder.build()
+    computer::expose(builder, cua).build()
 }
 
 fn codex_recipe(
     harness: CodexHarness,
     runtime: &Settings,
     workspace: &Arc<Path>,
-    cua: Option<Arc<tokio::sync::OnceCell<crate::ComputerTools>>>,
+    cua: computer::Cell,
     subagents: Option<Arc<nanocode_subagents::Registry>>,
 ) -> Recipe {
     let CodexHarness {
@@ -929,20 +981,7 @@ fn codex_recipe(
         let workspace = Arc::clone(&workspace);
         let subagents = subagents.clone();
         Box::pin(async move {
-            let cua = if let Some(cua) = cua {
-                Some(
-                    cua.get_or_try_init(|| async {
-                        crate::ComputerTools::connect(crate::ComputerConfig::installed()?).await
-                    })
-                    .await
-                    .map_err(|error: nanocode_tools::ToolError| {
-                        NanocodexError::InvalidRequest(error.to_string())
-                    })?
-                    .clone(),
-                )
-            } else {
-                None
-            };
+            let cua = computer::connect(cua).await?;
             let Some(model) = spec.model.as_codex() else {
                 return Err(NanocodexError::InvalidRequest(
                     "the Codex harness requires a Codex model".into(),
@@ -1000,7 +1039,7 @@ fn claude_recipe(
     harness: ClaudeHarness,
     runtime: &Settings,
     workspace: &Arc<Path>,
-    cua: Option<Arc<tokio::sync::OnceCell<crate::ComputerTools>>>,
+    cua: computer::Cell,
     subagents: Option<Arc<nanocode_subagents::Registry>>,
 ) -> Recipe {
     let ClaudeHarness {
@@ -1018,20 +1057,7 @@ fn claude_recipe(
         let workspace = Arc::clone(&workspace);
         let subagents = subagents.clone();
         Box::pin(async move {
-            let cua = if let Some(cua) = cua {
-                Some(
-                    cua.get_or_try_init(|| async {
-                        crate::ComputerTools::connect(crate::ComputerConfig::installed()?).await
-                    })
-                    .await
-                    .map_err(|error: nanocode_tools::ToolError| {
-                        NanocodexError::InvalidRequest(error.to_string())
-                    })?
-                    .clone(),
-                )
-            } else {
-                None
-            };
+            let cua = computer::connect(cua).await?;
             if spec.model.family() != HarnessFamily::Claude {
                 return Err(NanocodexError::InvalidRequest(
                     "the Claude harness requires a Claude model".into(),
@@ -1046,9 +1072,7 @@ fn claude_recipe(
                 builder = builder.system(instructions.to_string());
             }
             if let Some(configure) = configure {
-                builder = configure(builder)?
-                    .workspace(workspace.to_string_lossy().into_owned())
-                    .code_only(true);
+                builder = configure(builder)?.workspace(workspace.to_string_lossy().into_owned());
             }
             let tools = settings.tools;
             let root = workspace.to_path_buf();
@@ -1058,14 +1082,7 @@ fn claude_recipe(
                     .map(|tools| tools.materialize(handle.clone()))
                     .transpose()
                     .map_err(|error| NanocodexError::InvalidRequest(error.to_string()))?;
-                let mut additive: Vec<Arc<dyn nanocode_tools::Tool>> = cua
-                    .as_ref()
-                    .map(|cua| {
-                        cua.tools()
-                            .map(|tool| Arc::new(tool) as Arc<dyn nanocode_tools::Tool>)
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                let mut additive = computer::shared(cua.as_ref());
                 if let Some(registry) = &subagents {
                     let Ok(SharedTools(tools)) = nanocode_subagents::install_claude_tools(
                         SharedTools(Vec::new()),
@@ -1074,14 +1091,12 @@ fn claude_recipe(
                     );
                     additive.extend(tools);
                 }
-                nanocode_backend_claude::install_default_tools(
-                    root.clone(),
-                    &handle,
-                    selected,
-                    additive,
-                )
+                claude_tools(root.clone(), &handle, selected, additive)
             });
-            builder = builder.code_only(true);
+            #[cfg(not(target_family = "wasm"))]
+            {
+                builder = builder.code_only(true);
+            }
             if let Some(checkpoint) = spec.checkpoint {
                 builder = builder.resume(checkpoint)?;
             }
@@ -1093,6 +1108,35 @@ fn claude_recipe(
             builder.build()
         })
     })
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn claude_tools(
+    workspace: PathBuf,
+    handle: &AgentHandle,
+    selected: Option<crate::Tools>,
+    additive: Vec<Arc<dyn nanocode_tools::Tool>>,
+) -> Result<nanocode_backend_claude::ClaudeTools> {
+    nanocode_backend_claude::install_default_tools(workspace, handle, selected, additive)
+}
+
+#[cfg(target_family = "wasm")]
+fn claude_tools(
+    _workspace: PathBuf,
+    _handle: &AgentHandle,
+    selected: Option<crate::Tools>,
+    additive: Vec<Arc<dyn nanocode_tools::Tool>>,
+) -> Result<nanocode_backend_claude::ClaudeTools> {
+    use nanocode_tools::ToolCollection as _;
+    if selected.is_some() {
+        return Err(NanocodexError::InvalidRequest(
+            "Claude Code Mode tools are native-only; add WASM Claude tools with ClaudeHarness::configure".into(),
+        ));
+    }
+    additive.into_iter().try_fold(
+        nanocode_backend_claude::ClaudeTools::new(),
+        nanocode_backend_claude::ClaudeTools::add_shared_tool,
+    )
 }
 
 struct SharedTools(Vec<Arc<dyn nanocode_tools::Tool>>);
@@ -1109,6 +1153,18 @@ impl nanocode_tools::ToolCollection for SharedTools {
     }
 }
 
+#[cfg(target_family = "wasm")]
+fn resolve_workspace(workspace: Option<PathBuf>) -> Result<PathBuf> {
+    workspace
+        .filter(|workspace| workspace.is_absolute())
+        .ok_or_else(|| {
+            NanocodexError::InvalidRequest(
+                "a WASM runtime requires an absolute workspace path".into(),
+            )
+        })
+}
+
+#[cfg(not(target_family = "wasm"))]
 fn resolve_workspace(workspace: Option<PathBuf>) -> Result<PathBuf> {
     match workspace {
         Some(workspace) if workspace.is_absolute() => Ok(workspace),

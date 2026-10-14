@@ -83,3 +83,4 @@ js/egress/output/
 /js/pkg-node/
 /js/pkg-web/
 **/output/
+js/packages/*/dist/

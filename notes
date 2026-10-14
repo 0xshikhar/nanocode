@@ -1,0 +1,39 @@
+no tests
+no comments
+CI - what do we actually run?
+
+rebuild around the nanocodex frontend
+focus on the rust and js bindings
+the cua tools get shared
+voice agent frontend shared
+code mode default
+durability 
+
+
+remote tool calls - this sets up hands, two ways to do them, one via outward connection (needs auth or tailscale) one via reverse connection (agent needs to open endpoint to serve / get connected to)
+
+
+
+
+
+
+
+
+
+things i was working on
+
+the movie
+the frontiers presentation
+
+lots of shit so we gotta reinstall the hands n shit
+
+cut stable release
+
+optimization around routing w/ the milan DO  - debt
+durable subagents - we  didnt do that but its become important now as tihngs may crash and we lose all the subagent logs and shit-obviously duh
+build time optimization / ci / cd
+web ui optimization and style
+
+rust optimization project
+
+zk 

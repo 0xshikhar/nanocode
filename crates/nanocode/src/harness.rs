@@ -22,7 +22,6 @@ pub struct HarnessRequest {
 
     pub checkpoint: Option<SessionCheckpoint>,
 
-    #[cfg(not(target_family = "wasm"))]
     pub durable_state: Option<crate::durability::DurableSession>,
 
     pub spawn_factory: Arc<dyn AgentFactory>,
@@ -43,7 +42,6 @@ pub struct HarnessBuilder {
 }
 
 impl HarnessBuilder {
-    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn recovery_store(mut self, store: crate::durability::SessionStore) -> Self {
         self.recovery_store = Some(store);
         self
@@ -96,13 +94,11 @@ impl HarnessBuilder {
                 thinking_defaults: self.thinking_defaults,
 
                 recovery_store: self.recovery_store,
-                #[cfg(not(target_family = "wasm"))]
                 children: None,
             }),
         }
     }
 
-    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn build_tracked(
         self,
         children: std::sync::Weak<crate::runtime::Ownership>,
@@ -121,7 +117,6 @@ impl HarnessBuilder {
 }
 
 impl Harness {
-    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn resolve_options(
         &self,
         options: SpawnOptions,
@@ -174,7 +169,6 @@ impl Harness {
             .await
     }
 
-    #[cfg(not(target_family = "wasm"))]
     pub async fn open(
         &self,
         store: &crate::durability::SessionStore,
@@ -220,14 +214,12 @@ impl Harness {
 #[derive(Default)]
 struct Reopen {
     checkpoint: Option<SessionCheckpoint>,
-    #[cfg(not(target_family = "wasm"))]
     durable_state: Option<crate::durability::DurableSession>,
 }
 impl Reopen {
-    fn checkpoint(checkpoint: SessionCheckpoint) -> Self {
+    const fn checkpoint(checkpoint: SessionCheckpoint) -> Self {
         Self {
             checkpoint: Some(checkpoint),
-            #[cfg(not(target_family = "wasm"))]
             durable_state: None,
         }
     }
@@ -240,7 +232,6 @@ struct Router {
 
     recovery_store: Option<crate::durability::SessionStore>,
 
-    #[cfg(not(target_family = "wasm"))]
     children: Option<std::sync::Weak<crate::runtime::Ownership>>,
 }
 impl Router {
@@ -301,7 +292,6 @@ impl Router {
     where
         F: Future<Output = nanocode_agent::Result<Vec<(Agent, AgentEvents)>>>,
     {
-        #[cfg(not(target_family = "wasm"))]
         if let Some(owner) = self.children.as_ref().and_then(std::sync::Weak::upgrade) {
             return owner.track_children(construct).await;
         }
@@ -349,7 +339,6 @@ impl Router {
             parent,
             host_context,
             checkpoint: reopen.checkpoint,
-            #[cfg(not(target_family = "wasm"))]
             durable_state: reopen.durable_state,
             spawn_factory,
         })
@@ -487,7 +476,6 @@ impl AgentFactory for RoutedFactory {
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
 fn catalog_error(error: crate::durability::Error) -> NanocodexError {
     match error {
         crate::durability::Error::SessionNotFound { .. } => {

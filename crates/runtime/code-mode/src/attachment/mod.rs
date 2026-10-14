@@ -1,5 +1,8 @@
 mod driver;
+mod host;
 mod protocol;
+
+pub use host::{RemoteRunner, RemoteTool, RemoteTools, RunnerHost};
 
 use std::{collections::HashSet, fmt, sync::Arc};
 use tokio::sync::{mpsc, watch};

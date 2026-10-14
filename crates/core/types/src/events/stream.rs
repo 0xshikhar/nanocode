@@ -749,7 +749,6 @@ impl EventSink {
         Ok(seq)
     }
 
-    #[doc(hidden)]
     #[must_use]
     pub const fn from_publisher(publisher: AgentEventPublisher) -> Self {
         Self {
@@ -765,7 +764,6 @@ impl EventSink {
         self
     }
 
-    #[doc(hidden)]
     #[must_use]
     pub fn publisher(&self) -> AgentEventPublisher {
         self.publisher.clone()

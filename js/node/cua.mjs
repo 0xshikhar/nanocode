@@ -280,7 +280,7 @@ class LineBuffer {
   clear() { this.chunks = []; }
 }
 
-export function outputContent(result) {
+function outputContent(result) {
   if (!Array.isArray(result?.content)) throw new TypeError("CUA result requires content");
   return result.content.map(item => {
     if (item.type === "text" && typeof item.text === "string") return { type: "input_text", text: item.text };

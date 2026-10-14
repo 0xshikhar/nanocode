@@ -14,11 +14,10 @@ members = [
     "crates/core/tools-macros",
     "crates/core/types",
     "crates/integrations/cua",
-    "crates/integrations/hand",
+    "crates/integrations/decisions",
     "crates/integrations/observability",
     "crates/integrations/store-postgres",
     "crates/integrations/store-sqlite",
-    "crates/integrations/voice",
     "crates/integrations/voice-protocol",
     "js",
 ]
@@ -44,8 +43,8 @@ nanocode-media = { version = "0.6.7", path = "crates/core/media" }
 nanocode-tls = { version = "0.6.7", path = "crates/core/tls" }
 nanocode-types = { version = "0.6.7", path = "crates/core/types" }
 nanocode-cua = { version = "0.6.7", path = "crates/integrations/cua" }
+nanocode-decisions = { version = "0.6.7", path = "crates/integrations/decisions" }
 nanocode-tools = { version = "0.6.7", path = "crates/core/tools" }
-nanocode-voice = { version = "0.6.7", path = "crates/integrations/voice" }
 nanocode-store-sqlite = { version = "0.6.7", path = "crates/integrations/store-sqlite" }
 nanocode-store-postgres = { version = "0.6.7", path = "crates/integrations/store-postgres" }
 libc = "0.2"
@@ -56,7 +55,6 @@ bm25 = { version = "2.3.2", default-features = false }
 chrono = { version = "0.4.43", default-features = false, features = ["clock", "std", "wasmbind"] }
 clap = { version = "4.5.54", features = ["derive", "env"] }
 eyre = "0.6.12"
-fs2 = "0.4"
 futures-util = { version = "0.3.31", default-features = false, features = ["async-await", "sink", "std"] }
 roxmltree = "0.21.1"
 getrandom = "0.4.3"
@@ -82,7 +80,6 @@ opentelemetry = { version = "0.32", default-features = false, features = ["trace
 opentelemetry-otlp = { version = "0.32", default-features = false, features = ["http-proto", "reqwest-blocking-client", "reqwest-client", "trace"] }
 opentelemetry-semantic-conventions = "0.32"
 opentelemetry_sdk = { version = "0.32", default-features = false, features = ["experimental_trace_batch_span_processor_with_async_runtime", "rt-tokio", "trace"] }
-opusic-c = "1.6.1"
 proc-macro-crate = "3"
 proc-macro2 = "1.0.106"
 quote = "1.0.46"
@@ -121,7 +118,6 @@ uuid = { version = "1", features = ["js", "serde", "v4", "v5", "v7"] }
 wasm-bindgen = "0.2.105"
 wasm-bindgen-futures = "0.4.55"
 web-time = "1.1.0"
-webrtc = "0.17.0"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

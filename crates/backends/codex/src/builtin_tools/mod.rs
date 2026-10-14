@@ -21,6 +21,40 @@ pub use nanocode_tools::tool;
 #[doc(hidden)]
 pub use nanocode_tools::__private;
 
+pub fn tool_runtime(
+    workspace: impl AsRef<std::path::Path>,
+    config: &crate::client::tower::ResponsesServiceConfig,
+    tools: &nanocode_code_mode::Tools,
+) -> nanocode_code_mode::runtime::ToolRuntime {
+    let workspace = workspace.as_ref();
+    #[cfg(not(target_family = "wasm"))]
+    {
+        nanocode_code_mode::runtime::ToolRuntime::new_with_tools(
+            workspace,
+            handlers(
+                tools.web_search_enabled().then(|| WebSearchConfig {
+                    endpoint: config.search_endpoint(),
+                    auth: config.auth.clone(),
+                }),
+                tools
+                    .image_generation_enabled()
+                    .then(|| ImageGenerationConfig {
+                        api_base_url: config.api_base_url.clone(),
+                        auth: config.auth.clone(),
+                        save_root: workspace.to_path_buf(),
+                    }),
+                tools.remote_http_client().unwrap_or_default(),
+            ),
+            tools,
+        )
+    }
+    #[cfg(target_family = "wasm")]
+    {
+        let _ = config;
+        nanocode_code_mode::runtime::ToolRuntime::new_with_tools(workspace, Vec::new(), tools)
+    }
+}
+
 pub fn handlers(
     web: Option<WebSearchConfig>,
     image: Option<ImageGenerationConfig>,

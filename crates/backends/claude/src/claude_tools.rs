@@ -1,12 +1,14 @@
 use std::{path::PathBuf, sync::Arc};
 
 use crate::{
-    ClaudeToolInvocation, ClaudeToolReply, ClaudeTools, ToolDefinition, ToolResultContent,
+    ClaudeNestedToolUpdate, ClaudeToolInvocation, ClaudeToolProgress, ClaudeToolReply, ClaudeTools,
+    ToolDefinition, ToolResultContent,
 };
 use nanocode_agent::{AgentHandle, Result};
 use nanocode_code_mode::{
     ToolContext, ToolDefinition as RuntimeDefinition, Tools,
     contract::{ToolOutputBody, ToolOutputContent},
+    embedded::{CodeModeExecution, CodeModeObserver, CodeModeUpdate, NestedToolCall},
     runtime::ToolRuntime,
 };
 use serde_json::{Value, json};
@@ -24,13 +26,17 @@ pub(super) fn install(
     ));
 
     let guard = Arc::new(RuntimeGuard(runtime.control()));
-    let mut native = ClaudeTools::new().adapter_cleanup(move || {
+    let mut native = ClaudeTools::new();
+    native.code_turn_cleanup.push(Arc::new(move |progress| {
         let guard = Arc::clone(&guard);
-        async move {
-            guard.0.cancel_turn().await;
+        Box::pin(async move {
+            guard
+                .0
+                .cancel_turn_with_updates(&mut Progress(Some(&progress)))
+                .await;
             guard.0.begin_turn();
-        }
-    });
+        })
+    }));
     for definition in flatten(runtime.model_specs(handle.session_id())) {
         let (name, description, input_schema, call) = match definition {
             RuntimeDefinition::Custom {
@@ -113,27 +119,90 @@ impl Call {
         .with_turn_id(Some(&invocation.turn_id))
         .with_host_context(invocation.host_context.as_deref())
         .with_instruction_revision(invocation.instruction_revision);
-        match self {
+        let mut progress = Progress(invocation.progress.as_ref());
+        let execution = match self {
             Self::Exec => {
                 let code = input
                     .get("code")
                     .and_then(Value::as_str)
                     .ok_or("exec requires a `code` string")?;
-                let execution = runtime
-                    .execute_code(code, context)
+                runtime
+                    .execute_code_with_updates(code, context, &mut progress)
                     .await
-                    .map_err(|error| error.to_string())?;
-                Ok(reply(execution.output, execution.success, None, None))
             }
             Self::Wait => {
-                let execution = runtime
-                    .wait_for_code(&input.to_string(), context)
+                runtime
+                    .wait_for_code_with_updates(&input.to_string(), context, &mut progress)
                     .await
-                    .map_err(|error| error.to_string())?;
-                Ok(reply(execution.output, execution.success, None, None))
+            }
+        }
+        .map_err(|error| error.to_string())?;
+        Ok(code_reply(execution, &invocation.call_id))
+    }
+}
+
+struct Progress<'a>(Option<&'a ClaudeToolProgress>);
+
+impl CodeModeObserver for Progress<'_> {
+    fn update(&mut self, update: CodeModeUpdate<'_>) {
+        let Some(progress) = self.0 else {
+            return;
+        };
+        progress.update(match update {
+            CodeModeUpdate::NestedCallStarted {
+                call_id,
+                name,
+                input,
+            } => ClaudeNestedToolUpdate::Started {
+                call_id: call_id.to_owned(),
+                name: name.to_owned(),
+                input: input.clone(),
+            },
+            CodeModeUpdate::NestedCallCompleted(call) => {
+                ClaudeNestedToolUpdate::Completed(nested_call(call))
+            }
+        });
+    }
+}
+
+fn nested_call(call: &NestedToolCall) -> Value {
+    json!({
+        "call_id": call.call_id,
+        "name": call.name,
+        "input": call.input,
+        "output": call.output,
+        "structured_result": call.structured_result,
+        "metadata": call.metadata,
+        "success": call.success,
+        "started_after_ns": call.started_after_ns,
+        "duration_ns": call.duration_ns,
+    })
+}
+
+fn code_reply(execution: CodeModeExecution, call_id: &str) -> ClaudeToolReply {
+    let metadata = json!({
+        "_nanocodex_code": {
+            "calls": execution.nested_calls.iter().map(nested_call).collect::<Vec<_>>(),
+            "origin_call_id": execution
+                .cell
+                .as_ref()
+                .map_or(call_id, |cell| cell.origin_call_id.as_str()),
+            "running": execution.cell.as_ref().is_some_and(|cell| cell.running),
+        }
+    });
+    let mut reply = reply(execution.output, execution.success, Some(metadata), None);
+    for notification in execution.notifications {
+        match &mut reply.content {
+            ToolResultContent::Text(text) => {
+                text.push('\n');
+                text.push_str(&notification.text);
+            }
+            ToolResultContent::Blocks(blocks) => {
+                blocks.push(json!({"type": "text", "text": notification.text}));
             }
         }
     }
+    reply
 }
 
 fn flatten(definitions: Vec<RuntimeDefinition>) -> Vec<RuntimeDefinition> {

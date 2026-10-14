@@ -91,6 +91,9 @@ mod source_sealed {
 
     #[cfg(not(target_family = "wasm"))]
     impl Sealed for crate::mcp::Mcp {}
+
+    #[cfg(not(target_family = "wasm"))]
+    impl Sealed for crate::attachment::RemoteTools {}
 }
 
 pub trait ToolSource: source_sealed::Sealed + Sized {
@@ -127,6 +130,13 @@ impl ToolSource for crate::mcp::Mcp {
         builder.tools.attachment_mcps.push(provider);
         builder.refresh_provider_direct();
         builder
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl ToolSource for crate::attachment::RemoteTools {
+    fn install(self, builder: ToolsBuilder) -> ToolsBuilder {
+        self.into_iter().fold(builder, ToolsBuilder::tool)
     }
 }
 

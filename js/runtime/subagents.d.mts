@@ -107,3 +107,5 @@ export function send(agent: SubagentOwner, options: SendOptions): Promise<Messag
 export function interrupt(agent: SubagentOwner, agentId: AgentId): Promise<LifecycleReport>;
 
 export function close(agent: SubagentOwner, agentId: AgentId): Promise<LifecycleReport>;
+
+export {};

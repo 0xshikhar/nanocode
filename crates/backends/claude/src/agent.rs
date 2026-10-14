@@ -124,6 +124,7 @@ type ToolResultFuture =
 type ToolResultFuture = Pin<Box<dyn Future<Output = std::result::Result<ClaudeToolReply, String>>>>;
 type Handler = Arc<dyn Fn(Value, ClaudeToolInvocation) -> ToolResultFuture + Send + Sync>;
 type ToolCleanup = Arc<dyn Fn() -> BackendFuture<()> + Send + Sync>;
+type CodeTurnCleanup = Arc<dyn Fn(ClaudeToolProgress) -> BackendFuture<()> + Send + Sync>;
 
 #[derive(Clone, Debug)]
 pub struct ClaudeToolInvocation {
@@ -198,6 +199,7 @@ pub struct ClaudeTools {
     custom_tool_search: bool,
     adapter_cleanup: Vec<ToolCleanup>,
     adapter_shutdown: Vec<ToolCleanup>,
+    pub(crate) code_turn_cleanup: Vec<CodeTurnCleanup>,
     #[cfg(not(target_family = "wasm"))]
     pub(crate) shared_catalog: Option<(nanocode_code_mode::Tools, std::path::PathBuf, AgentHandle)>,
 }
@@ -213,6 +215,7 @@ impl nanocode_tools::ToolCollection for ClaudeTools {
                 .retain(|(definition, _)| !matches!(definition.name.as_str(), "exec" | "wait"));
             self.tools.extend(replacement.tools);
             self.adapter_cleanup.extend(replacement.adapter_cleanup);
+            self.code_turn_cleanup = replacement.code_turn_cleanup;
             self.shared_catalog = replacement.shared_catalog;
             return Ok(self);
         }
@@ -1121,6 +1124,7 @@ impl ClaudeBuilder {
         let mut custom_tool_search = false;
         let mut adapter_cleanup = Vec::new();
         let mut adapter_shutdown = Vec::new();
+        let mut code_turn_cleanup = Vec::new();
         if let Some(factory) = &self.tools_factory {
             let native = factory(handle.clone())?;
             custom_tool_search = native.custom_tool_search;
@@ -1129,6 +1133,7 @@ impl ClaudeBuilder {
             self.dynamic_tools.extend(native.dynamic);
             adapter_cleanup.extend(native.adapter_cleanup);
             adapter_shutdown.extend(native.adapter_shutdown);
+            code_turn_cleanup.extend(native.code_turn_cleanup);
         }
 
         if self.claude.model.trim().is_empty()
@@ -1311,6 +1316,7 @@ impl ClaudeBuilder {
                 custom_tool_search: false,
                 adapter_cleanup: Vec::new(),
                 adapter_shutdown: Vec::new(),
+                code_turn_cleanup: Vec::new(),
                 #[cfg(not(target_family = "wasm"))]
                 shared_catalog: None,
             };
@@ -1327,6 +1333,7 @@ impl ClaudeBuilder {
             self.dynamic_tools = adapted.dynamic;
             adapter_cleanup.extend(adapted.adapter_cleanup);
             adapter_shutdown.extend(adapted.adapter_shutdown);
+            code_turn_cleanup.extend(adapted.code_turn_cleanup);
             self.client_tool_search = false;
         }
         let mut names = handlers.keys().map(String::as_str).collect::<HashSet<_>>();
@@ -1419,6 +1426,7 @@ impl ClaudeBuilder {
             tools: definitions,
             adapter_cleanup,
             adapter_shutdown,
+            code_turn_cleanup,
             dynamic_tools: self.dynamic_tools,
             tool_hooks: self.tool_hooks,
             server_tools: self.server_tools,
@@ -2571,6 +2579,7 @@ struct TurnSteering {
 struct State {
     adapter_cleanup: Vec<ToolCleanup>,
     adapter_shutdown: Vec<ToolCleanup>,
+    code_turn_cleanup: Vec<CodeTurnCleanup>,
     lifecycle_opened: Mutex<Option<String>>,
     subagent_type: Option<String>,
     subagent_type_resolver: Option<SubagentTypeResolver>,
@@ -2905,15 +2914,38 @@ async fn start_turn(
     let running = state.clone();
 
     let speed = state.speed();
+    let events = request.events.clone();
     let task = async move {
-        let result = AssertUnwindSafe(running.run(request, speed, cancellation))
+        let started = Instant::now();
+        let outcome = AssertUnwindSafe(running.run(request, speed, cancellation))
             .catch_unwind()
             .await;
+        let panicked = outcome.is_err();
+        let result = outcome.unwrap_or(Err(NanocodexError::TurnStopped));
+        if panicked {
+            running.stopped.store(true, Ordering::SeqCst);
+            for cancel in running.cancellations.lock().await.values() {
+                cancel.cancel();
+            }
+            let model_call_index = running
+                .steering
+                .lock()
+                .await
+                .get(&key)
+                .map_or(0, |turn| turn.model_call_index);
+            for cleanup in &running.adapter_cleanup {
+                cleanup().await;
+            }
+            running.settle_code_turn(&events, model_call_index).await;
+            let (reasoning_mode, effort) = running.run_labels();
+            let ns = started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+            running.emit_run_finished(&events, &result, reasoning_mode, &effort, ns);
+        }
         running.steering.lock().await.remove(&key);
         running.cancellations.lock().await.remove(&key);
         drop(attempt);
         running.idle.notify_waiters();
-        let _ = sender.send(result.unwrap_or_else(|panic| std::panic::resume_unwind(panic)));
+        let _ = sender.send(result);
     };
     #[cfg(not(target_family = "wasm"))]
     tokio::spawn(task);
@@ -3538,6 +3570,11 @@ impl State {
         );
     }
     fn emit_run_started(&self, request: &BackendPrompt) -> (&'static str, String) {
+        let (reasoning_mode, effort) = self.run_labels();
+        self.emit(&request.events,AgentEventKind::RunStarted,json!({"mode":"claude","model":self.model(),"reasoning_mode":reasoning_mode,"effort":effort,"transport":"messages_sse","orchestration":"claude","websocket_url":"","workspace":self.workspace(),"instruction_bytes":request.prompt.text_bytes()}));
+        (reasoning_mode, effort)
+    }
+    fn run_labels(&self) -> (&'static str, String) {
         let reasoning_mode = if matches!(
             self.model().as_str(),
             "claude-opus-5-5" | "claude-fable-5-1"
@@ -3550,7 +3587,6 @@ impl State {
             .effort()
             .map(|effort| format!("{effort:?}").to_lowercase())
             .unwrap_or_else(|| "model_default".into());
-        self.emit(&request.events,AgentEventKind::RunStarted,json!({"mode":"claude","model":self.model(),"reasoning_mode":reasoning_mode,"effort":effort,"transport":"messages_sse","orchestration":"claude","websocket_url":"","workspace":self.workspace(),"instruction_bytes":request.prompt.text_bytes()}));
         (reasoning_mode, effort)
     }
     fn emit_run_finished(
@@ -3960,13 +3996,16 @@ impl State {
             .run_locked(&mut conversation, &request, speed, &cancel)
             .await;
 
+        let mut model_call_index = 0;
         if let Some(turn) = self.steering.lock().await.get_mut(&request.key) {
             turn.accepting = false;
+            model_call_index = turn.model_call_index;
         }
 
         for cleanup in &self.adapter_cleanup {
             cleanup().await;
         }
+        self.settle_code_turn(events, model_call_index).await;
         if result
             .as_ref()
             .err()
@@ -4040,6 +4079,32 @@ impl State {
         let ns = started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
         self.emit_run_finished(events, &result, reasoning_mode, &effort, ns);
         result
+    }
+    async fn settle_code_turn(&self, events: &AgentEventPublisher, model_call_index: u32) {
+        for cleanup in &self.code_turn_cleanup {
+            let (sender, mut updates) = tokio::sync::mpsc::unbounded_channel();
+            let mut live = LiveNestedCalls {
+                state: self,
+                events,
+                model_call_index,
+                fallback_parent: "",
+                open: Vec::new(),
+                completed: HashSet::new(),
+                unknown: Vec::new(),
+            };
+            let settled = cleanup(ClaudeToolProgress(sender));
+            tokio::pin!(settled);
+            loop {
+                tokio::select! {
+                    biased;
+                    Some(update) = updates.recv() => live.publish(update),
+                    () = &mut settled => break,
+                }
+            }
+            while let Ok(update) = updates.try_recv() {
+                live.publish(update);
+            }
+        }
     }
     fn available_tools(&self) -> Vec<ClaudeToolSpec> {
         self.tools
