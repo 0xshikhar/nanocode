@@ -296,7 +296,17 @@ impl ToolRegistry {
                 "exec_command" | "write_stdin" | "apply_patch" | "view_image"
             ) || (pool.is_some()
                 && (name.starts_with("mcp__")
-                    || matches!(name.as_str(), "Read" | "Write" | "Edit" | "Glob" | "Grep")))
+                    || matches!(
+                        name.as_str(),
+                        "Read"
+                            | "Write"
+                            | "Edit"
+                            | "Glob"
+                            | "Grep"
+                            | "Bash"
+                            | "TaskOutput"
+                            | "TaskStop"
+                    )))
                 || routes.iter().any(|route| {
                     route
                         .tools

@@ -29,6 +29,22 @@ pub fn install_default_tools_with_process_routes(
     )
 }
 
+pub fn runner_tools(workspace: PathBuf) -> Result<Tools> {
+    let files = crate::tools::ClaudeWorkspaceFiles::new(&workspace).map_err(|error| {
+        NanocodexError::InvalidRequest(format!(
+            "Claude file tools require the runner workspace {}: {error}",
+            workspace.display()
+        ))
+    })?;
+    crate::claude_files::selection(
+        &Arc::new(files),
+        workspace,
+        None,
+        Arc::new(crate::claude_bash::Jobs::default()),
+    )
+    .map_err(|error| NanocodexError::InvalidRequest(error.to_string()))
+}
+
 pub fn install_default_tools_with_runner_pool(
     workspace: PathBuf,
     handle: &AgentHandle,
@@ -50,7 +66,7 @@ pub fn install_default_tools_with_runner_pool(
             crate::claude_files::selection(
                 &Arc::new(files),
                 workspace.clone(),
-                handle.session_environment(),
+                Some(handle.session_environment()),
                 jobs.clone(),
             )
             .map_err(|error| NanocodexError::InvalidRequest(error.to_string()))?

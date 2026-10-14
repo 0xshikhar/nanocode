@@ -12,7 +12,7 @@ use serde_json::Value;
 pub(super) fn selection(
     files: &Arc<ClaudeWorkspaceFiles>,
     workspace: PathBuf,
-    session: SessionEnvironment,
+    session: Option<SessionEnvironment>,
     jobs: Arc<super::claude_bash::Jobs>,
 ) -> Result<Tools, ToolsBuildError> {
     let mut tools = Tools::builder().without_defaults();
@@ -40,7 +40,7 @@ struct ClaudeFileTool {
     name: String,
     definition: ToolDefinition,
     files: Arc<ClaudeWorkspaceFiles>,
-    session: SessionEnvironment,
+    session: Option<SessionEnvironment>,
 }
 
 #[async_trait]
@@ -56,7 +56,7 @@ impl Tool for ClaudeFileTool {
             .as_ref()
             .clone()
             .with_read_token_budget(context.output_token_budget().min(200_000))
-            .execute_output_in_session(&self.name, input, true, Some(self.session.clone()))
+            .execute_output_in_session(&self.name, input, true, self.session.clone())
             .await
         {
             Ok(output) => output,

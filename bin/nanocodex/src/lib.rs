@@ -22,7 +22,7 @@ use futures_util::StreamExt;
 use nanocode::{
     ModelSelection, ServiceTier, Thinking,
     agent::events::AgentEventKind,
-    tools::attachment::{RunnerConfig, RunnerEndpoint, run_runner, run_runner_with_tools},
+    tools::attachment::{RunnerConfig, RunnerEndpoint, run_runner_with_tools},
 };
 
 use crate::{
@@ -421,27 +421,23 @@ async fn runner(args: RunnerArgs) -> Result<()> {
         workspace: workspace.clone(),
         name: args.name.clone(),
     };
+    let mut tools = nanocode::claude::runner_tools(workspace.clone())?.into_builder();
     if args.cua {
         let computer =
             nanocode::ComputerTools::connect(nanocode::ComputerConfig::installed()?).await?;
-        let tools = nanocode::Tools::builder()
-            .without_defaults()
-            .tool(computer.js())
-            .tool(computer.reset())
-            .build()?;
+        tools = tools.tool(computer.js()).tool(computer.reset());
         eprintln!(
             "nanocodex runner {} serving {} with computer use",
             args.name,
             workspace.display()
         );
-        run_runner_with_tools(config, tools).await?;
     } else {
         eprintln!(
             "nanocodex runner {} serving {}",
             args.name,
             workspace.display()
         );
-        run_runner(config).await?;
     }
+    run_runner_with_tools(config, tools.build()?).await?;
     Ok(())
 }

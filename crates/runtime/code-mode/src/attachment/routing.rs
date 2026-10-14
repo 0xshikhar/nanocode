@@ -367,6 +367,13 @@ impl Tool for RoutedTool {
                         }
                     }
                 }
+                if name == "Bash"
+                    && let Some(workdir) = value.get("workdir").and_then(Value::as_str)
+                    && let Some(command) = value.get("command").and_then(Value::as_str)
+                {
+                    value["command"] =
+                        format!("cd '{}' && {command}", workdir.replace('\'', "'\\''")).into();
+                }
                 if !matches!(name, "exec_command" | "write_stdin" | "view_image") {
                     if let Some(object) = value.as_object_mut() {
                         object.remove("workdir");

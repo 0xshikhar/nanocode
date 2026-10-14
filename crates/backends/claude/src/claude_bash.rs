@@ -167,7 +167,7 @@ async fn completion(job: &Job) -> Outcome {
 pub(super) fn install(
     mut tools: ToolsBuilder,
     workspace: PathBuf,
-    session: SessionEnvironment,
+    session: Option<SessionEnvironment>,
     jobs: Arc<Jobs>,
 ) -> ToolsBuilder {
     let executor = LocalBash { workspace, jobs };
@@ -185,7 +185,7 @@ pub(super) fn install(
 }
 struct BashTool {
     bash: ClaudeBash<LocalBash>,
-    session: SessionEnvironment,
+    session: Option<SessionEnvironment>,
 }
 #[async_trait]
 impl Tool for BashTool {
@@ -202,7 +202,7 @@ impl Tool for BashTool {
         Ok(
             match self
                 .bash
-                .execute_in_session("Bash", input, Some(self.session.clone()))
+                .execute_in_session("Bash", input, self.session.clone())
                 .await
             {
                 Ok(output) => {
