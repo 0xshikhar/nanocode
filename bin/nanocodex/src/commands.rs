@@ -1,4 +1,4 @@
-pub const COMMANDS: [(&str, &str); 22] = [
+pub const COMMANDS: [(&str, &str); 23] = [
     (
         "/model",
         "choose harness, model, thinking and speed for a new thread",
@@ -26,6 +26,10 @@ pub const COMMANDS: [(&str, &str); 22] = [
     ("/mouse", "toggle mouse capture for native text selection"),
     ("/help", "show key bindings"),
     ("/clear", "start a new session"),
+    (
+        "/reload",
+        "restart with the newest nanocodex on PATH, keeping this session",
+    ),
     ("/quit", "exit nanocodex"),
 ];
 

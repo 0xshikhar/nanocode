@@ -2,26 +2,38 @@ use std::path::{Path, PathBuf};
 
 use clap::{Args, ValueEnum, builder::NonEmptyStringValueParser};
 
-use crate::{LogFormat, LogOutput, ObservabilityBuilder, ObservabilityError, ObservabilityGuard};
+use crate::{LogFormat, LogOutput, METRICS_TARGET, ObservabilityBuilder};
 
-#[derive(Args)]
+#[derive(Clone, Debug, Args)]
 pub struct ObservabilityOutputArgs {
-    #[arg(long, env = "NANOCODEX_LOG_FORMAT", default_value_t, value_enum)]
+    #[arg(
+        long = "log",
+        env = "NANOCODEX_LOG",
+        global = true,
+        value_parser = NonEmptyStringValueParser::new(),
+        help = "Tracing filter in RUST_LOG syntax for the log file and OpenTelemetry export"
+    )]
+    log_filter: Option<String>,
+
+    #[arg(long, env = "NANOCODEX_LOG_FORMAT", global = true, default_value_t, value_enum)]
     log_format: LogFormatArg,
 
-    #[arg(long, env = "NANOCODEX_LOG_FILE")]
+    #[arg(long, env = "NANOCODEX_LOG_FILE", global = true, help = "Write tracing logs to this file")]
     log_file: Option<PathBuf>,
 
     #[arg(
         long,
         env = "OTEL_EXPORTER_OTLP_ENDPOINT",
-        value_parser = NonEmptyStringValueParser::new()
+        global = true,
+        value_parser = NonEmptyStringValueParser::new(),
+        help = "OTLP/HTTP collector base URL; enables trace and metric export"
     )]
     otel_endpoint: Option<String>,
 
     #[arg(
         long,
         env = "OTEL_DEPLOYMENT_ENVIRONMENT",
+        global = true,
         default_value = "development",
         value_parser = NonEmptyStringValueParser::new()
     )]
@@ -34,32 +46,44 @@ impl ObservabilityOutputArgs {
         self.log_file.as_deref()
     }
 
-    pub fn install(
+    #[must_use]
+    pub fn log_filter(&self) -> Option<&str> {
+        self.log_filter.as_deref()
+    }
+
+    #[must_use]
+    pub const fn enabled(&self) -> bool {
+        self.otel_endpoint.is_some() || self.log_file.is_some() || self.log_filter.is_some()
+    }
+
+    #[must_use]
+    pub fn builder(
         &self,
         service_name: impl Into<String>,
         service_version: impl Into<String>,
-        log_filter: impl Into<String>,
-        otel_filter: impl Into<String>,
         default_output: LogOutput,
-    ) -> Result<ObservabilityGuard, ObservabilityError> {
+    ) -> ObservabilityBuilder {
         let output = self
             .log_file
             .clone()
             .map_or(default_output, LogOutput::File);
         let mut builder = ObservabilityBuilder::new(service_name, service_version)
-            .filter(log_filter)
-            .otel_filter(otel_filter)
             .format(self.log_format.into())
             .output(output)
             .environment(self.otel_environment.clone());
+        if let Some(filter) = &self.log_filter {
+            builder = builder
+                .filter(format!("{filter},{METRICS_TARGET}=off"))
+                .otel_filter(format!("{filter},{METRICS_TARGET}=info"));
+        }
         if let Some(endpoint) = &self.otel_endpoint {
             builder = builder.otlp_endpoint(endpoint.clone());
         }
-        builder.install()
+        builder
     }
 }
 
-#[derive(Clone, Copy, Default, ValueEnum)]
+#[derive(Clone, Copy, Debug, Default, ValueEnum)]
 enum LogFormatArg {
     Pretty,
     #[default]

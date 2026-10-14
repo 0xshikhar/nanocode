@@ -15,6 +15,9 @@ pub struct Cli {
 
     #[command(flatten)]
     pub session: SessionArgs,
+
+    #[command(flatten)]
+    pub observability: nanocode_observability::ObservabilityOutputArgs,
 }
 
 #[derive(Debug, Subcommand)]
@@ -27,6 +30,11 @@ pub enum Command {
     Exec(SessionArgs),
     #[command(about = "List models per harness with thinking levels and speed tiers")]
     Models,
+    #[command(about = "Resume a saved session; without an id, pick one interactively")]
+    Resume {
+        #[arg(help = "Session id to resume")]
+        id: Option<String>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]

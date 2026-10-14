@@ -202,6 +202,7 @@ pub struct App {
     pub(crate) session_started: bool,
     pub(crate) tx: UnboundedSender<AppEvent>,
     quit: bool,
+    reload: bool,
     quit_armed: Option<Instant>,
     esc_armed: Option<Instant>,
     stashed_draft: Option<String>,
@@ -209,6 +210,7 @@ pub struct App {
     pub(crate) next_btw: u64,
     next_local: u64,
     history_path: Option<PathBuf>,
+    spans: crate::telemetry::TurnSpans,
 }
 
 pub async fn run(launch: Launch, mut terminal: TerminalSession) -> Result<()> {
@@ -259,6 +261,7 @@ pub async fn run(launch: Launch, mut terminal: TerminalSession) -> Result<()> {
         session_started: false,
         tx,
         quit: false,
+        reload: false,
         quit_armed: None,
         esc_armed: None,
         stashed_draft: None,
@@ -266,6 +269,7 @@ pub async fn run(launch: Launch, mut terminal: TerminalSession) -> Result<()> {
         next_btw: 0,
         next_local: 0,
         history_path: launch.history_path.clone(),
+        spans: crate::telemetry::TurnSpans::default(),
     };
     for server in app.host.runtime.runner_servers() {
         app.notice(NoticeLevel::Info, listener_notice(&server));
@@ -289,16 +293,124 @@ pub async fn run(launch: Launch, mut terminal: TerminalSession) -> Result<()> {
     }
     let outcome = app.event_loop(&mut terminal, rx).await;
     drop(terminal);
+    let session = app.session_id();
     if let Some(agent) = app.agent.take() {
         drop(agent.flush().await);
     }
     drop(app.host.runtime.shutdown().await);
-    if let Some(agent_session) = app.session_id() {
-        eprintln!(
-            "nanocodex: session {agent_session}  (resume with: nanocodex --resume {agent_session})"
-        );
+    if app.reload && outcome.is_ok() {
+        return Err(reload(session).into());
+    }
+    if let Some(agent_session) = session {
+        eprintln!("{} resume {agent_session}", invoked_name());
     }
     outcome
+}
+
+fn invoked_name() -> String {
+    std::env::args_os()
+        .next()
+        .and_then(|arg| {
+            std::path::Path::new(&arg)
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| "nanocodex".to_owned())
+}
+
+fn reload_program() -> std::io::Result<PathBuf> {
+    let name = invoked_name();
+    if let Some(paths) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&paths) {
+            let candidate = dir.join(&name);
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
+        }
+    }
+    std::env::current_exe()
+}
+
+fn reload_args(session: Option<&str>) -> Vec<std::ffi::OsString> {
+    let mut command = <crate::cli::Cli as clap::CommandFactory>::command();
+    command.build();
+    let mut args: Vec<std::ffi::OsString> = Vec::new();
+    let mut original = std::env::args_os().skip(1).peekable();
+    while let Some(arg) = original.next() {
+        let text = arg.to_string_lossy().into_owned();
+        if text == "--" {
+            break;
+        }
+        let (definition, inline) = if let Some(long) = text.strip_prefix("--") {
+            let (name, value) = long
+                .split_once('=')
+                .map_or((long, None), |(name, value)| (name, Some(value)));
+            (
+                command
+                    .get_arguments()
+                    .find(|arg| arg.get_long() == Some(name)),
+                value.is_some(),
+            )
+        } else if let Some(short) = text.strip_prefix('-').filter(|short| !short.is_empty()) {
+            let mut chars = short.chars();
+            let flag = chars.next();
+            (
+                command.get_arguments().find(|arg| arg.get_short() == flag),
+                !chars.as_str().is_empty(),
+            )
+        } else {
+            continue;
+        };
+        let Some(definition) = definition else {
+            args.push(arg);
+            continue;
+        };
+        let value = (!inline && definition.get_action().takes_values())
+            .then(|| {
+                let required = definition
+                    .get_num_args()
+                    .is_some_and(|range| range.min_values() > 0);
+                let present = original
+                    .peek()
+                    .is_some_and(|next| !next.to_string_lossy().starts_with('-'));
+                (required || present).then(|| original.next()).flatten()
+            })
+            .flatten();
+        if matches!(definition.get_id().as_str(), "resume" | "continue_last") {
+            continue;
+        }
+        args.push(arg);
+        args.extend(value);
+    }
+    if let Some(session) = session {
+        args.push("--resume".into());
+        args.push(session.into());
+    }
+    args
+}
+
+#[cfg(unix)]
+fn reload(session: Option<String>) -> String {
+    use std::os::unix::process::CommandExt;
+    let program = match reload_program() {
+        Ok(program) => program,
+        Err(error) => return format!("reload failed to locate nanocodex: {error}"),
+    };
+    let error = std::process::Command::new(&program)
+        .args(reload_args(session.as_deref()))
+        .exec();
+    format!("reload failed to start {}: {error}", program.display())
+}
+
+#[cfg(not(unix))]
+fn reload(session: Option<String>) -> String {
+    match session {
+        Some(session) => format!(
+            "reload is not supported on this platform; run {} resume {session}",
+            invoked_name()
+        ),
+        None => "reload is not supported on this platform".to_owned(),
+    }
 }
 
 fn runner_status_label(status: &RunnerStatus) -> String {
@@ -377,10 +489,14 @@ impl App {
     ) -> Result<()> {
         let mut input = EventStream::new();
         let mut scheduler = RenderScheduler::new(DISPLAY_FRAME, Instant::now());
+        let mut metrics = crate::telemetry::FrameMetrics::new();
         while !self.quit {
+            metrics.wakeup();
             let now = Instant::now();
             if scheduler.is_due(now) {
+                let frame_started = metrics.begin();
                 terminal.draw(|frame| view::draw(self, frame))?;
+                metrics.presented(frame_started);
                 scheduler.presented(Instant::now());
                 if self.animating() {
                     scheduler.request_at(self.spinner.next_deadline(Instant::now()));
@@ -397,7 +513,9 @@ impl App {
                 event = input.next() => {
                     match event {
                         Some(Ok(event)) => {
+                            let resize = matches!(event, Event::Resize(..));
                             if self.handle_terminal(event, terminal) {
+                                metrics.input(resize);
                                 scheduler.request_immediate(Instant::now());
                             }
                         }
@@ -411,6 +529,7 @@ impl App {
                     while let Ok(event) = rx.try_recv() {
                         self.handle_app(event);
                     }
+                    metrics.stream();
                     if immediate {
                         scheduler.request_immediate(Instant::now());
                     } else {
@@ -766,6 +885,8 @@ impl App {
     }
 
     fn agent_event(&mut self, event: &AgentEvent) {
+        let session_id = self.agent.as_ref().map(Agent::session_id);
+        self.spans.event(event, session_id);
         let mapped = self.mapper.apply(&mut self.transcript, event);
         if event.kind == AgentEventKind::RunStarted
             && matches!(self.turn, TurnState::Idle)
@@ -910,25 +1031,29 @@ impl App {
         self.transcript.scroll_to_bottom();
         let generation = self.generation;
         let tx = self.tx.clone();
-        tokio::spawn(async move {
-            match agent.prompt(PromptRequest::new(sent).request_id(id)).await {
-                Ok(turn) => {
-                    drop(tx.send(AppEvent::TurnStarted {
-                        generation,
-                        control: turn.control(),
-                    }));
-                    let result = turn.await.map_err(|error| error.to_string());
-                    drop(tx.send(AppEvent::TurnFinished { generation, result }));
+        let span = self.spans.begin(&id, Some(agent.session_id()));
+        tokio::spawn(tracing::Instrument::instrument(
+            async move {
+                match agent.prompt(PromptRequest::new(sent).request_id(id)).await {
+                    Ok(turn) => {
+                        drop(tx.send(AppEvent::TurnStarted {
+                            generation,
+                            control: turn.control(),
+                        }));
+                        let result = turn.await.map_err(|error| error.to_string());
+                        drop(tx.send(AppEvent::TurnFinished { generation, result }));
+                    }
+                    Err(error) => {
+                        drop(tx.send(AppEvent::PromptFailed {
+                            generation,
+                            error: error.to_string(),
+                            text,
+                        }));
+                    }
                 }
-                Err(error) => {
-                    drop(tx.send(AppEvent::PromptFailed {
-                        generation,
-                        error: error.to_string(),
-                        text,
-                    }));
-                }
-            }
-        });
+            },
+            span,
+        ));
     }
 
     fn enqueue_follow_up(&mut self, text: String) -> String {
@@ -1536,6 +1661,14 @@ impl App {
             "mouse" => self.toggle_mouse = true,
             "help" | "keys" | "?" => self.overlay = Some(Overlay::Help),
             "quit" | "exit" | "q" => self.quit = true,
+            "reload" | "restart" if !matches!(self.turn, TurnState::Idle) => self.notice(
+                NoticeLevel::Warning,
+                "a turn is running; wait for it to finish or press Esc Esc, then /reload",
+            ),
+            "reload" | "restart" => {
+                self.reload = true;
+                self.quit = true;
+            }
             other => self.notice(
                 NoticeLevel::Warning,
                 format!("unknown command /{other}; try /help"),

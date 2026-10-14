@@ -64,6 +64,12 @@ pub fn replay(transcript: &mut Transcript, history: Vec<TranscriptItem>) {
     let mut tools = std::collections::HashMap::new();
     for item in history {
         match item {
+            TranscriptItem::User(text) if text.trim_start().starts_with("<turn_aborted>") => {
+                transcript.push(CellKind::Notice(
+                    nanocode_tui::transcript::NoticeLevel::Warning,
+                    "turn interrupted".to_owned(),
+                ));
+            }
             TranscriptItem::User(text) => {
                 transcript.push(CellKind::User(text));
             }

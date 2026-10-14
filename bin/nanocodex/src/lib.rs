@@ -8,6 +8,7 @@ mod history;
 mod host;
 mod models;
 mod sessions;
+mod telemetry;
 mod view;
 
 use std::{
@@ -29,8 +30,42 @@ use crate::{
     host::{Host, HostConfig, Result},
 };
 
+const TELEMETRY_SHUTDOWN: std::time::Duration = std::time::Duration::from_millis(500);
+
+fn install_telemetry(cli: &Cli) -> Result<Option<nanocode_observability::ObservabilityGuard>> {
+    let args = &cli.observability;
+    if !args.enabled() {
+        return Ok(None);
+    }
+    let interactive = !matches!(
+        cli.command,
+        Some(Command::Exec(_) | Command::Runner(_) | Command::Sessions(_) | Command::Models)
+    );
+    let output = match (args.log_filter().is_some(), interactive) {
+        (false, _) => nanocode_observability::LogOutput::Disabled,
+        (true, false) => nanocode_observability::LogOutput::Stderr,
+        (true, true) => nanocode_observability::LogOutput::File(
+            host::home_dir(cli.session.home.as_deref())?
+                .join("log")
+                .join("nanocodex.log"),
+        ),
+    };
+    Ok(Some(
+        args.builder("nanocodex", env!("CARGO_PKG_VERSION"), output)
+            .shutdown_timeout(TELEMETRY_SHUTDOWN)
+            .install()?,
+    ))
+}
+
 pub fn main() -> ExitCode {
     let cli = Cli::parse();
+    let telemetry = match install_telemetry(&cli) {
+        Ok(telemetry) => telemetry,
+        Err(error) => {
+            eprintln!("nanocodex: failed to start telemetry: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -53,10 +88,16 @@ pub fn main() -> ExitCode {
                 print_models();
                 Ok(())
             }
+            Some(Command::Resume { id }) => {
+                let mut args = cli.session;
+                args.resume = Some(id.unwrap_or_default());
+                interactive(args).await
+            }
             None => interactive(cli.session).await,
         }
     });
     runtime.shutdown_timeout(std::time::Duration::from_secs(1));
+    drop(telemetry);
     match outcome {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {

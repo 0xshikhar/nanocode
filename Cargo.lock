@@ -2005,7 +2005,6 @@ dependencies = [
  "reqwest",
  "rustls",
  "thiserror 2.0.18",
- "tokio",
  "tracing",
  "tracing-appender",
  "tracing-opentelemetry",
@@ -2155,10 +2154,12 @@ dependencies = [
  "futures-util",
  "nanocode",
  "nanocode-home",
+ "nanocode-observability",
  "nanocode-store-jsonl",
  "nanocode-tui",
  "serde_json",
  "tokio",
+ "tracing",
  "uuid",
 ]
 
@@ -2417,8 +2418,6 @@ dependencies = [
  "portable-atomic",
  "rand 0.9.5",
  "thiserror 2.0.18",
- "tokio",
- "tokio-stream",
 ]
 
 [[package]]
@@ -4125,6 +4124,7 @@ checksum = "adbc64cba7137545b8044cb1fe9814f7aacf3c6b5f9b45be8bb5db538befdb26"
 dependencies = [
  "js-sys",
  "opentelemetry",
+ "smallvec",
  "tracing",
  "tracing-core",
  "tracing-subscriber",
