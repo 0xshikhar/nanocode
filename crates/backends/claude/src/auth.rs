@@ -22,10 +22,13 @@ impl ClaudeAccessToken {
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || b"-._~+/=".contains(&byte))
         {
-            return Err(ClaudeAuthUnavailable);
+            return Err(ClaudeAuthUnavailable::new(
+                "the Claude access token is empty or contains characters outside the OAuth token alphabet",
+            ));
         }
-        let mut authorization =
-            HeaderValue::from_str(&format!("Bearer {token}")).map_err(|_| ClaudeAuthUnavailable)?;
+        let mut authorization = HeaderValue::from_str(&format!("Bearer {token}")).map_err(|_| {
+            ClaudeAuthUnavailable::new("the Claude access token is not a valid HTTP header value")
+        })?;
         authorization.set_sensitive(true);
         Ok(Self {
             authorization,
@@ -80,7 +83,9 @@ impl ClaudeAuthProvider for RefreshingClaudeAuth {
             *cached = None;
             let token = self.source.refresh().await?;
             if !token.usable(self.refresh_margin) {
-                return Err(ClaudeAuthUnavailable);
+                return Err(ClaudeAuthUnavailable::new(
+                    "the refreshed Claude access token is already expired or within its refresh margin",
+                ));
             }
             let headers = token.headers();
             *cached = Some(token);

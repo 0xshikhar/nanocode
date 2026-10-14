@@ -252,22 +252,35 @@ impl ClaudeAuthProvider for JavaScriptClaudeAuth {
         &self,
     ) -> ClaudeAuthFuture<'_, Result<reqwest::header::HeaderMap, ClaudeAuthUnavailable>> {
         Box::pin(async move {
-            let promise = host_claude_auth(self.auth_host_id).map_err(|_| ClaudeAuthUnavailable)?;
-            let result = JsFuture::from(promise)
-                .await
-                .map_err(|_| ClaudeAuthUnavailable)?;
-            let encoded = result.as_string().ok_or(ClaudeAuthUnavailable)?;
+            let promise = host_claude_auth(self.auth_host_id).map_err(|_| {
+                ClaudeAuthUnavailable::new("the JavaScript Claude auth callback could not be called")
+            })?;
+            let result = JsFuture::from(promise).await.map_err(|error| {
+                ClaudeAuthUnavailable::new(match error.as_string() {
+                    Some(reason) => format!("the JavaScript Claude auth callback rejected: {reason}"),
+                    None => "the JavaScript Claude auth callback rejected".to_owned(),
+                })
+            })?;
+            let encoded = result.as_string().ok_or_else(|| {
+                ClaudeAuthUnavailable::new("the JavaScript Claude auth callback returned a non-string value")
+            })?;
             let headers: BTreeMap<String, String> =
-                serde_json::from_str(&encoded).map_err(|_| ClaudeAuthUnavailable)?;
+                serde_json::from_str(&encoded).map_err(|_| {
+                    ClaudeAuthUnavailable::new("the JavaScript Claude auth headers are not a JSON string map")
+                })?;
             if headers.is_empty() {
-                return Err(ClaudeAuthUnavailable);
+                return Err(ClaudeAuthUnavailable::new(
+                    "the JavaScript Claude auth callback returned no headers",
+                ));
             }
             let mut output = reqwest::header::HeaderMap::new();
             for (name, value) in headers {
-                let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
-                    .map_err(|_| ClaudeAuthUnavailable)?;
-                let mut value = reqwest::header::HeaderValue::from_str(&value)
-                    .map_err(|_| ClaudeAuthUnavailable)?;
+                let name = reqwest::header::HeaderName::from_bytes(name.as_bytes()).map_err(|_| {
+                    ClaudeAuthUnavailable::new(format!("invalid Claude auth header name {name:?}"))
+                })?;
+                let mut value = reqwest::header::HeaderValue::from_str(&value).map_err(|_| {
+                    ClaudeAuthUnavailable::new(format!("invalid value for Claude auth header {name}"))
+                })?;
                 value.set_sensitive(true);
                 output.insert(name, value);
             }

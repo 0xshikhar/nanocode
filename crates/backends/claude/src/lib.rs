@@ -48,8 +48,8 @@ pub enum ClaudeError {
     Protocol(String),
     #[error("Messages stream ended before message_stop")]
     IncompleteStream,
-    #[error("approved Claude authentication provider unavailable")]
-    AuthUnavailable,
+    #[error(transparent)]
+    AuthUnavailable(#[from] ClaudeAuthUnavailable),
 }
 
 impl ClaudeError {
@@ -62,7 +62,7 @@ impl ClaudeError {
                 "overloaded_error" | "api_error" | "rate_limit_error" | "timeout_error"
             ),
             Self::IncompleteStream => true,
-            Self::Json(_) | Self::Protocol(_) | Self::AuthUnavailable => false,
+            Self::Json(_) | Self::Protocol(_) | Self::AuthUnavailable(_) => false,
         }
     }
 }
@@ -820,8 +820,22 @@ pub trait ClaudeAuthProvider: Send + Sync {
 }
 
 #[derive(Debug, Error)]
-#[error("approved Claude authentication provider unavailable")]
-pub struct ClaudeAuthUnavailable;
+#[error("Claude authentication unavailable: {reason}")]
+pub struct ClaudeAuthUnavailable {
+    reason: std::borrow::Cow<'static, str>,
+}
+
+impl ClaudeAuthUnavailable {
+    pub fn new(reason: impl Into<std::borrow::Cow<'static, str>>) -> Self {
+        Self {
+            reason: reason.into(),
+        }
+    }
+
+    pub fn reason(&self) -> &str {
+        &self.reason
+    }
+}
 
 #[derive(Clone)]
 enum ClientAuth {
@@ -1056,18 +1070,16 @@ impl ClaudeClient {
             let mut headers = match &self.auth {
                 ClientAuth::ApiKey(key) => {
                     let mut headers = reqwest::header::HeaderMap::new();
-                    let mut value = reqwest::header::HeaderValue::from_str(key)
-                        .map_err(|_| ClaudeError::AuthUnavailable)?;
+                    let mut value = reqwest::header::HeaderValue::from_str(key).map_err(|_| {
+                        ClaudeAuthUnavailable::new("the Claude API key is not a valid HTTP header value")
+                    })?;
                     value.set_sensitive(true);
                     headers.insert("x-api-key", value);
                     headers
                 }
                 ClientAuth::Headers(headers) => headers.clone(),
                 ClientAuth::Provider(provider) => {
-                    let headers = provider
-                        .headers()
-                        .await
-                        .map_err(|_| ClaudeError::AuthUnavailable)?;
+                    let headers = provider.headers().await?;
                     provider_headers = Some(headers.clone());
                     headers
                 }
@@ -1077,7 +1089,11 @@ impl ClaudeClient {
             for value in headers.get_all("anthropic-beta") {
                 for beta in value
                     .to_str()
-                    .map_err(|_| ClaudeError::AuthUnavailable)?
+                    .map_err(|_| {
+                        ClaudeAuthUnavailable::new(
+                            "the Claude authentication anthropic-beta header is not visible ASCII",
+                        )
+                    })?
                     .split(',')
                     .map(str::trim)
                     .filter(|beta| !beta.is_empty())
@@ -1144,8 +1160,9 @@ impl ClaudeClient {
                 betas.push(FAST_MODE_BETA);
             }
             if !betas.is_empty() {
-                let value = reqwest::header::HeaderValue::from_str(&betas.join(","))
-                    .map_err(|_| ClaudeError::AuthUnavailable)?;
+                let value = reqwest::header::HeaderValue::from_str(&betas.join(",")).map_err(|_| {
+                    ClaudeAuthUnavailable::new("the combined anthropic-beta header is invalid")
+                })?;
                 headers.insert("anthropic-beta", value);
             }
             if self.subscription_compatibility {
@@ -1221,10 +1238,7 @@ impl ClaudeClient {
                 && !retried
                 && let (ClientAuth::Provider(provider), Some(headers)) =
                     (&self.auth, provider_headers.as_ref())
-                && provider
-                    .recover_unauthorized(headers)
-                    .await
-                    .map_err(|_| ClaudeError::AuthUnavailable)?
+                && provider.recover_unauthorized(headers).await?
             {
                 retried = true;
                 continue;

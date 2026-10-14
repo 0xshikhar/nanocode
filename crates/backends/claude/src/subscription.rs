@@ -826,7 +826,7 @@ impl ClaudeAuthProvider for ClaudeSubscription {
         Box::pin(async move {
             self.resolve_headers()
                 .await
-                .map_err(|_| ClaudeAuthUnavailable)
+                .map_err(|error| ClaudeAuthUnavailable::new(error.to_string()))
         })
     }
     fn recover_unauthorized<'a>(
@@ -836,7 +836,7 @@ impl ClaudeAuthProvider for ClaudeSubscription {
         Box::pin(async move {
             self.reject(rejected)
                 .await
-                .map_err(|_| ClaudeAuthUnavailable)
+                .map_err(|error| ClaudeAuthUnavailable::new(error.to_string()))
         })
     }
 }

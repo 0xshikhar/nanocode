@@ -14,6 +14,7 @@ struct ClaudeCodeLogin;
 
 impl ClaudeCodeLogin {
     async fn stored() -> Result<Vec<u8>, ClaudeAuthUnavailable> {
+        let mut keychain = None;
         if cfg!(target_os = "macos") {
             let output = tokio::process::Command::new("security")
                 .args(["find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"])
@@ -23,13 +24,23 @@ impl ClaudeCodeLogin {
             if output.status.success() {
                 return Ok(output.stdout);
             }
+            keychain = Some(format!(
+                "macOS keychain item {KEYCHAIN_SERVICE:?}: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
         }
         let home = nanocode_home::AgentHome::from_env()
             .map_err(|error| unavailable(&error.to_string()))?;
         let path = home.claude_home().join(".credentials.json");
-        tokio::fs::read(&path)
-            .await
-            .map_err(|error| unavailable(&format!("{}: {error}", path.display())))
+        tokio::fs::read(&path).await.map_err(|error| {
+            let file = format!("{}: {error}", path.display());
+            unavailable(&match keychain {
+                Some(keychain) => format!(
+                    "no Claude Code login found ({keychain}; {file}); run `claude` to log in"
+                ),
+                None => format!("no Claude Code login found ({file}); run `claude` to log in"),
+            })
+        })
     }
 }
 
@@ -58,7 +69,7 @@ impl ClaudeTokenSource for ClaudeCodeLogin {
 
 fn unavailable(reason: &str) -> ClaudeAuthUnavailable {
     tracing::warn!(target: "nanocodex_claude", reason, "Claude Code login unavailable");
-    ClaudeAuthUnavailable
+    ClaudeAuthUnavailable::new(reason.to_owned())
 }
 
 impl Default for ClaudeClient {
