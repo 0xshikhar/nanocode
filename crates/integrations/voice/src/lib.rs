@@ -1,3 +1,5 @@
+#![cfg(not(target_family = "wasm"))]
+
 use std::{
     borrow::Cow,
     collections::{BTreeMap, HashMap, VecDeque},
@@ -28,9 +30,13 @@ use tokio_tungstenite::{
 use tracing::{debug, trace, warn};
 use url::Url;
 
-use crate::client::{
-    OpenAiAuth, OpenAiAuthError, OpenAiAuthMode, connector::connect_async, responses::MessagePhase,
+use nanocode_backend_codex::client::{
+    OpenAi,
+    auth::{OpenAiAuth, OpenAiAuthError, OpenAiAuthMode},
+    session::truncate_middle_with_token_budget,
+    transport::connect_async,
 };
+use nanocode_types::responses::MessagePhase;
 
 mod webrtc;
 pub use webrtc::RealtimeMediaPeer;
@@ -2695,10 +2701,7 @@ fn realtime_backend_output(protocol: RealtimeProtocol, output: String) -> String
 fn truncate_realtime_text_to_token_budget(text: &str, budget_tokens: usize) -> String {
     let mut truncation_budget = budget_tokens;
     loop {
-        let candidate = crate::client::session::compaction::truncate_middle_with_token_budget(
-            text,
-            truncation_budget,
-        );
+        let candidate = truncate_middle_with_token_budget(text, truncation_budget);
         let candidate_tokens = approx_token_count(&candidate);
         if candidate_tokens <= budget_tokens {
             break candidate;
@@ -2706,7 +2709,7 @@ fn truncate_realtime_text_to_token_budget(text: &str, budget_tokens: usize) -> S
         let excess_tokens = candidate_tokens.saturating_sub(budget_tokens);
         let next_budget = truncation_budget.saturating_sub(excess_tokens.max(1));
         if next_budget == 0 {
-            break crate::client::session::compaction::truncate_middle_with_token_budget(text, 0);
+            break truncate_middle_with_token_budget(text, 0);
         }
         truncation_budget = next_budget;
     }
@@ -3460,4 +3463,24 @@ fn realtime_endpoint(
 
 fn map_websocket_error(error: WebSocketError) -> RealtimeError {
     RealtimeError::WebSocket(error.to_string())
+}
+
+pub trait OpenAiRealtime {
+    fn realtime(&self, instructions: impl Into<Arc<str>>) -> RealtimeSessionBuilder;
+
+    fn attach_realtime_call(&self, call_id: impl Into<String>) -> RealtimeCallAttachmentBuilder;
+}
+
+impl<F> OpenAiRealtime for OpenAi<F> {
+    fn realtime(&self, instructions: impl Into<Arc<str>>) -> RealtimeSessionBuilder {
+        RealtimeSessionBuilder::new(
+            self.config().auth.clone(),
+            self.config().api_base_url.clone(),
+            instructions.into(),
+        )
+    }
+
+    fn attach_realtime_call(&self, call_id: impl Into<String>) -> RealtimeCallAttachmentBuilder {
+        RealtimeCallAttachmentBuilder::new(self.config().auth.clone(), call_id.into())
+    }
 }

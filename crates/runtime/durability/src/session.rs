@@ -1526,7 +1526,7 @@ impl DurableSession {
         Self::open_shared(store, state_id, terminal_receipt_limit).await
     }
 
-    pub(crate) async fn open_shared(
+    pub async fn open_shared(
         mut store: SharedStore,
         state_id: String,
         terminal_receipt_limit: Option<usize>,
@@ -1594,7 +1594,8 @@ impl DurableSession {
         .await
     }
 
-    pub(crate) fn shared_store(&self) -> SharedStore {
+    #[must_use]
+    pub fn shared_store(&self) -> SharedStore {
         self.store.clone()
     }
 
@@ -1613,10 +1614,7 @@ impl DurableSession {
         receiver.await.map_err(|_| Error::DriverStopped)
     }
 
-    pub(crate) async fn resolve_many(
-        &self,
-        payloads: Vec<EncodedPayload>,
-    ) -> Result<Vec<EncodedPayload>> {
+    pub async fn resolve_many(&self, payloads: Vec<EncodedPayload>) -> Result<Vec<EncodedPayload>> {
         let (result, receiver) = oneshot::channel();
         self.send(Command::LoadPayloads {
             caller: None,
@@ -1636,36 +1634,6 @@ impl DurableSession {
         })
         .await?;
         receive(receiver).await
-    }
-
-    pub async fn agent_snapshot(
-        &self,
-    ) -> Result<Option<nanocode_backend_codex::session::SessionSnapshot>> {
-        match self.latest_checkpoint().await? {
-            Some(payload) => crate::context::load_snapshot(self.into(), payload)
-                .await
-                .map(Some),
-            None => Ok(None),
-        }
-    }
-
-    pub async fn agent_continuation(
-        &self,
-        operation_id: &str,
-    ) -> Result<Option<nanocode_backend_codex::execution::ExecutionContinuation>> {
-        let state = self.state().await?;
-        match state
-            .operation(operation_id)
-            .and_then(|operation| operation.continuation.as_ref())
-        {
-            Some(reference) => {
-                let payload = self.resolve(reference).await?;
-                crate::context::load_continuation(self.into(), payload)
-                    .await
-                    .map(|(value, _)| Some(value))
-            }
-            None => Ok(None),
-        }
     }
 
     pub async fn latest_checkpoint(&self) -> Result<Option<EncodedPayload>> {

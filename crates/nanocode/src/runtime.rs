@@ -338,6 +338,13 @@ impl<B> NanocodexBuilder<B> {
                 (model, thinking)
             })
             .collect();
+        let durability = self.durability.map(|store| {
+            self.backends
+                .iter()
+                .fold(crate::builtin_formats(&store), |store, backend| {
+                    store.with_format(backend.checkpoint_format())
+                })
+        });
         let mut recipes: Vec<(HarnessFamily, Recipe)> = Vec::new();
 
         if let Some(codex) = self.codex {
@@ -362,14 +369,14 @@ impl<B> NanocodexBuilder<B> {
             ));
         }
 
-        if let Some(store) = &self.durability {
+        if let Some(store) = &durability {
             for (_, recipe) in &mut recipes {
                 *recipe = persistent_recipe(recipe.clone(), store.clone(), workspace.clone());
             }
         }
         let mut router = Harness::builder();
 
-        if let Some(store) = &self.durability {
+        if let Some(store) = &durability {
             router = router.recovery_store(store.clone());
         }
         for (family, recipe) in &recipes {
@@ -389,7 +396,7 @@ impl<B> NanocodexBuilder<B> {
                 thinking,
                 ownership,
 
-                durability: self.durability,
+                durability,
             }),
         })
     }
@@ -650,7 +657,7 @@ impl Nanocodex {
                 "session store differs from the runtime's configured durability store".into(),
             ));
         }
-        let stored = store.load(session_id).await.map_err(catalog_error)?;
+        let stored = configured.load(session_id).await.map_err(catalog_error)?;
         let model = stored.summary.record.model.clone();
         let thinking = stored
             .session_checkpoint()
@@ -660,7 +667,7 @@ impl Nanocodex {
                 |checkpoint| checkpoint.thinking(),
             );
         self.inner.recipe(model.family())?;
-        let durable_state = store.resume(session_id).await.map_err(catalog_error)?;
+        let durable_state = configured.resume(session_id).await.map_err(catalog_error)?;
         self.construct(AgentSpec {
             parent: None,
             options: SpawnOptions::new()

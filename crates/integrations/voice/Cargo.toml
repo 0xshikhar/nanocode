@@ -1,0 +1,38 @@
+[package]
+autotests = false
+autobenches = false
+name = "nanocode-voice"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Native OpenAI Realtime voice sessions over WebSocket and WebRTC"
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+nanocode-backend-codex.workspace = true
+nanocode-types.workspace = true
+base64.workspace = true
+futures-util.workspace = true
+opusic-c.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+http.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt", "sync", "time"] }
+tokio-tungstenite.workspace = true
+tracing.workspace = true
+url.workspace = true
+webrtc.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+test = false
+doctest = false
+bench = false

@@ -11,6 +11,7 @@ description = "Typed Anthropic Messages protocol and streaming transport"
 
 [dependencies]
 nanocode-agent.workspace = true
+nanocode-durability.workspace = true
 nanocode-types.workspace = true
 nanocode-tools.workspace = true
 nanocode-media.workspace = true

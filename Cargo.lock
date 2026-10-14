@@ -1910,9 +1910,9 @@ checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
 name = "libredox"
-version = "0.1.18"
+version = "0.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c943259e342f1e06ff2da7a83eabdfe7f92ce10262688dbf1895ff0b3e6e4652"
+checksum = "6480ccc157a1389bb2e4891b24751b0f798ba640d22386f23143fbcc89da195a"
 dependencies = [
  "libc",
 ]
@@ -2081,7 +2081,6 @@ dependencies = [
  "nanocode-code-mode",
  "nanocode-cua",
  "nanocode-durability",
- "nanocode-observability",
  "nanocode-tools",
  "serde_json",
  "tokio",
@@ -2116,6 +2115,7 @@ dependencies = [
  "libc",
  "nanocode-agent",
  "nanocode-code-mode",
+ "nanocode-durability",
  "nanocode-home",
  "nanocode-media",
  "nanocode-tools",
@@ -2154,12 +2154,12 @@ dependencies = [
  "image",
  "nanocode-agent",
  "nanocode-code-mode",
+ "nanocode-durability",
  "nanocode-home",
  "nanocode-media",
  "nanocode-tls",
  "nanocode-tools",
  "nanocode-types",
- "opusic-c",
  "reqwest",
  "rustls",
  "rustls-native-certs",
@@ -2179,7 +2179,6 @@ dependencies = [
  "uuid",
  "wasm-bindgen-futures",
  "web-time",
- "webrtc",
 ]
 
 [[package]]
@@ -2240,16 +2239,11 @@ name = "nanocode-durability"
 version = "0.6.7"
 dependencies = [
  "nanocode-agent",
- "nanocode-backend-claude",
- "nanocode-backend-codex",
- "rusqlite",
  "serde",
  "serde_json",
  "sha2 0.11.0",
  "thiserror 2.0.18",
  "tokio",
- "tokio-postgres",
- "tower",
  "uuid",
  "wasm-bindgen-futures",
  "web-time",
@@ -2325,6 +2319,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "nanocode-store-postgres"
+version = "0.6.7"
+dependencies = [
+ "nanocode-durability",
+ "tokio-postgres",
+]
+
+[[package]]
+name = "nanocode-store-sqlite"
+version = "0.6.7"
+dependencies = [
+ "nanocode-durability",
+ "rusqlite",
+]
+
+[[package]]
 name = "nanocode-subagents"
 version = "0.6.7"
 dependencies = [
@@ -2389,6 +2399,27 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "web-time",
+]
+
+[[package]]
+name = "nanocode-voice"
+version = "0.6.7"
+dependencies = [
+ "base64 0.22.1",
+ "futures-util",
+ "http",
+ "nanocode-backend-codex",
+ "nanocode-types",
+ "opusic-c",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "url",
+ "webrtc",
 ]
 
 [[package]]
@@ -4036,9 +4067,9 @@ checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
 
 [[package]]
 name = "siphasher"
-version = "1.0.3"
+version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ee5873ec9cce0195efcb7a4e9507a04cd49aec9c83d0389df45b1ef7ba2e649"
+checksum = "33f4fe9184a62d842c9ef383018f3306d8ba224fd9d836f56d7288308847c256"
 
 [[package]]
 name = "slab"

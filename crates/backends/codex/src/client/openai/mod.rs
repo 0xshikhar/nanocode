@@ -42,6 +42,13 @@ impl OpenAi<StandardServiceFactory> {
     }
 }
 
+impl<F> OpenAi<F> {
+    #[must_use]
+    pub const fn config(&self) -> &ModelConfig {
+        &self.config
+    }
+}
+
 impl<F> OpenAi<F>
 where
     F: ResponsesServiceFactory,
@@ -51,38 +58,9 @@ where
         self.config.auth.mode()
     }
 
-    #[cfg(not(target_family = "wasm"))]
-    #[must_use]
-    pub fn realtime(
-        &self,
-        instructions: impl Into<Arc<str>>,
-    ) -> crate::client::realtime::RealtimeSessionBuilder {
-        crate::client::realtime::RealtimeSessionBuilder::new(
-            self.config.auth.clone(),
-            self.config.api_base_url.clone(),
-            instructions.into(),
-        )
-    }
-
-    #[cfg(not(target_family = "wasm"))]
-    #[must_use]
-    pub fn attach_realtime_call(
-        &self,
-        call_id: impl Into<String>,
-    ) -> crate::client::realtime::RealtimeCallAttachmentBuilder {
-        crate::client::realtime::RealtimeCallAttachmentBuilder::new(
-            self.config.auth.clone(),
-            call_id.into(),
-        )
-    }
-
     #[must_use]
     pub fn instructions(&self, instructions: impl Into<Arc<str>>) -> SessionBuilder<F> {
         SessionBuilder::new(self.clone(), instructions.into())
-    }
-
-    pub(crate) const fn config(&self) -> &ModelConfig {
-        &self.config
     }
 
     pub(crate) fn make_service(&self) -> F::Service {

@@ -1,20 +1,53 @@
 use std::sync::Arc;
 
-use nanocode_agent::Result as AgentResult;
-use nanocode_backend_claude::{
-    ClaudeBuilder,
-    execution::{
-        Admission as ClaudeAdmission, ClaudeExecutionPolicy, ClaudeSteer, PolicyFuture, Step,
-    },
+use nanocode_agent::{
+    AgentEvents, BackendRequest, Nanocodex, Result as AgentResult, backend::BackendFuture,
+};
+use nanocode_durability::{
+    Admission, BeginStep, Branches, CheckpointFormat, DurableAgentExt, DurableBackendRegistration,
+    DurableOwner, DurableSession, EncodedPayload, SessionRecord, SharedStore, agent_error,
 };
 use serde_json::{Value, value::RawValue};
 
 use crate::{
-    Admission, BeginStep, DurableAgentExt, DurableSession, EncodedPayload, SessionRecord,
-    agent::{Branches, agent_error},
-    session::DurableOwner,
-    shared_store::SharedStore,
+    Claude, ClaudeBuilder,
+    execution::{
+        Admission as ClaudeAdmission, ClaudeExecutionPolicy, ClaudeSteer, PolicyFuture, Step,
+    },
 };
+
+mod format;
+
+pub use format::ClaudeCheckpointFormat;
+
+impl DurableBackendRegistration for ClaudeBuilder {
+    fn checkpoint_format(&self) -> Arc<dyn CheckpointFormat> {
+        Arc::new(ClaudeCheckpointFormat)
+    }
+
+    fn build_durable(
+        &self,
+        request: BackendRequest,
+        state: DurableSession,
+    ) -> BackendFuture<AgentResult<(Nanocodex, AgentEvents)>> {
+        let prepared = self.clone().prepare(request);
+        Box::pin(async move { prepared?.durability(state).await?.build() })
+    }
+}
+
+impl DurableBackendRegistration for Claude {
+    fn checkpoint_format(&self) -> Arc<dyn CheckpointFormat> {
+        Arc::new(ClaudeCheckpointFormat)
+    }
+
+    fn build_durable(
+        &self,
+        request: BackendRequest,
+        state: DurableSession,
+    ) -> BackendFuture<AgentResult<(Nanocodex, AgentEvents)>> {
+        Nanocodex::builder(self.clone()).build_durable(request, state)
+    }
+}
 
 impl DurableAgentExt for ClaudeBuilder {
     async fn durability(self, state: DurableSession) -> AgentResult<Self> {
@@ -495,7 +528,7 @@ impl ClaudeExecutionPolicy for ClaudeExecution {
         Box::pin(async move {
             match self.owner.cancel(id, None).await {
                 Ok(()) => Ok(true),
-                Err(crate::Error::CancellationCheckpointRequired { .. }) => Ok(false),
+                Err(nanocode_durability::Error::CancellationCheckpointRequired { .. }) => Ok(false),
                 Err(error) => Err(agent_error(error)),
             }
         })

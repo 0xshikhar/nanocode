@@ -33,13 +33,13 @@ pub struct SessionRecord {
     pub(crate) start_checkpoint: Option<String>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) initial: Option<InitialSettings>,
+    pub initial: Option<InitialSettings>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct InitialSettings {
-    pub(crate) thinking: nanocode_agent::Thinking,
-    pub(crate) service_tier: nanocode_agent::ServiceTier,
+pub struct InitialSettings {
+    pub thinking: nanocode_agent::Thinking,
+    pub service_tier: nanocode_agent::ServiceTier,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -162,17 +162,17 @@ fn now_ms() -> u64 {
 pub use store::*;
 
 mod store {
-    use std::{collections::HashSet, path::PathBuf};
+    use std::{path::PathBuf, sync::Arc};
 
     use nanocode_agent::{HarnessFamily, Lineage, ModelSelection, Origin};
-    use nanocode_backend_codex::CodexCheckpointExt as _;
     use serde::Serialize;
     use serde_json::Value;
 
     use super::{BranchBoundary, SessionRecord};
     use crate::{
-        DurableSession, DurableState, EncodedPayload, Error, OperationStatus, OwnerId, Result,
-        StateStore, Transition, session::reduce_peeked, shared_store::SharedStore,
+        AdmittedTurn, CheckpointFormat, DurableSession, DurableState, EncodedPayload, Error,
+        OperationStatus, OwnerId, PayloadReader, Result, StateStore, Transition, format::Formats,
+        session::reduce_peeked, shared_store::SharedStore,
     };
 
     pub use nanocode_agent::session::TranscriptItem;
@@ -218,6 +218,8 @@ mod store {
         pub turns: Vec<StoredTurn>,
 
         pub checkpoint: Option<Value>,
+
+        formats: Formats,
     }
 
     impl StoredSession {
@@ -247,34 +249,10 @@ mod store {
                     .map_err(|error| Error::InvalidState(error.to_string()))?;
                 return Ok(Some(rebound));
             }
-            match record.family() {
-                family if family == HarnessFamily::Codex => {
-                    let snapshot: nanocode_backend_codex::session::SessionSnapshot =
-                        serde_json::from_value(checkpoint.clone())
-                            .map_err(Error::InvalidPayload)?;
-                    nanocode_agent::SessionCheckpoint::codex(
-                        record.session_id.clone(),
-                        record.lineage.clone(),
-                        record.model.default_thinking(),
-                        snapshot,
-                    )
-                    .map(Some)
-                    .map_err(|error| Error::InvalidState(error.to_string()))
-                }
-
-                family if family == HarnessFamily::Claude => {
-                    nanocode_backend_claude::session_checkpoint(
-                        &record.session_id,
-                        record.lineage.clone(),
-                        checkpoint.clone(),
-                    )
-                    .map(Some)
-                    .map_err(|error| Error::InvalidState(error.to_string()))
-                }
-                family => Err(Error::InvalidState(format!(
-                    "portable checkpoints for {family} require the owning backend adapter"
-                ))),
-            }
+            self.formats
+                .family(record.family())?
+                .session_checkpoint(record, checkpoint.clone())
+                .map(Some)
         }
     }
 
@@ -290,6 +268,7 @@ mod store {
     #[derive(Clone)]
     pub struct SessionStore {
         store: SharedStore,
+        formats: Formats,
     }
 
     impl SessionStore {
@@ -301,29 +280,16 @@ mod store {
         pub fn new<S: StateStore + 'static>(store: S) -> Result<Self> {
             Ok(Self {
                 store: SharedStore::new(store)?,
+                formats: Formats::default(),
             })
         }
 
-        #[cfg(not(target_family = "wasm"))]
         #[must_use]
-        pub fn path(codex_home: &std::path::Path) -> PathBuf {
-            codex_home.join("sessions.sqlite")
-        }
-
-        #[cfg(not(target_family = "wasm"))]
-        pub fn open(codex_home: &std::path::Path) -> Result<Self> {
-            std::fs::create_dir_all(codex_home).map_err(|error| {
-                Error::Store(crate::StoreError::NotCommitted(format!(
-                    "failed to create {}: {error}",
-                    codex_home.display()
-                )))
-            })?;
-            Self::open_path(Self::path(codex_home))
-        }
-
-        #[cfg(not(target_family = "wasm"))]
-        pub fn open_path(path: impl AsRef<std::path::Path>) -> Result<Self> {
-            Self::new(crate::SqliteStore::open(path)?)
+        pub fn with_format(&self, format: Arc<dyn CheckpointFormat>) -> Self {
+            Self {
+                store: self.store.clone(),
+                formats: self.formats.with(format),
+            }
         }
 
         pub async fn list(&self) -> Result<Vec<SessionSummary>> {
@@ -366,7 +332,7 @@ mod store {
                     let Some(checkpoint) = self.native_checkpoint(id, &state).await? else {
                         return Ok(None);
                     };
-                    infer_record(id, &checkpoint)?
+                    self.infer_record(id, &checkpoint)?
                 }
             };
             Ok(Some(SessionSummary { record, preview }))
@@ -377,7 +343,7 @@ mod store {
             let checkpoint = self.native_checkpoint(id, &state).await?;
             let record = match (state.session(), &checkpoint) {
                 (Some(record), _) => record.clone(),
-                (None, Some(checkpoint)) => infer_record(id, checkpoint)?,
+                (None, Some(checkpoint)) => self.infer_record(id, checkpoint)?,
                 (None, None) => {
                     return Err(Error::SessionNotFound {
                         session_id: id.to_owned(),
@@ -385,11 +351,11 @@ mod store {
                 }
             };
             let turns = self.state_turns(id, &state).await?;
-            let prompts = admitted_prompts(&turns, &state);
-            let transcript = checkpoint
-                .as_ref()
-                .map(|checkpoint| transcript(checkpoint, record.family(), &prompts))
-                .unwrap_or_default();
+            let admitted = admitted_turns(&turns, &state);
+            let transcript = match &checkpoint {
+                Some(checkpoint) => self.transcript(checkpoint, record.family(), &admitted)?,
+                None => Vec::new(),
+            };
             let preview = turns
                 .iter()
                 .find_map(|turn| turn.preview.clone())
@@ -404,6 +370,7 @@ mod store {
                 transcript,
                 turns,
                 checkpoint,
+                formats: self.formats.clone(),
             })
         }
 
@@ -448,7 +415,9 @@ mod store {
             if state.session().is_none()
                 && let Some(checkpoint) = self.native_checkpoint(id, &state).await?
             {
-                session.describe(infer_record(id, &checkpoint)?).await?;
+                session
+                    .describe(self.infer_record(id, &checkpoint)?)
+                    .await?;
             }
             Ok(session)
         }
@@ -487,7 +456,7 @@ mod store {
                                 "source session has no checkpoint to branch from".into(),
                             )
                         })?;
-                    infer_record(id, &checkpoint)?
+                    self.infer_record(id, &checkpoint)?
                 }
             };
             let selected = match &at {
@@ -566,7 +535,7 @@ mod store {
                 record.workspace = workspace;
             }
             let checkpoint = native
-                .map(|value| encode_native(record.family(), value))
+                .map(|value| self.encode_native(record.family(), value))
                 .transpose()?;
 
             record.start_checkpoint = checkpoint.as_ref().map(|payload| payload.key.to_string());
@@ -689,20 +658,81 @@ mod store {
             family: Option<HarnessFamily>,
         ) -> Result<Value> {
             let value: Value = self.load_payload(id, payload).await?.decode()?;
-            if is_portable(&value)
-                || family.is_some_and(|family| family != HarnessFamily::Codex)
-                || is_claude(&value)
-            {
+            if is_portable(&value) {
                 return Ok(value);
             }
-            let saved: crate::context::Snapshot =
-                serde_json::from_value(value).map_err(Error::InvalidPayload)?;
-            let snapshot = crate::context::restore_snapshot(
-                crate::context::Reader::Store(&self.store, id),
-                saved,
-            )
-            .await?;
-            serde_json::to_value(snapshot).map_err(Error::InvalidPayload)
+            let format = match family {
+                Some(family) => self.formats.family(family)?,
+                None => self.formats.owner(&value)?,
+            };
+            format
+                .hydrate(PayloadReader::store(&self.store, id), value)
+                .await
+        }
+
+        fn encode_native(&self, family: HarnessFamily, value: Value) -> Result<EncodedPayload> {
+            if is_portable(&value) {
+                portable_checkpoint(&value)?
+                    .require_family(family)
+                    .map_err(|error| Error::InvalidState(error.to_string()))?;
+                return EncodedPayload::encode(&value);
+            }
+            self.formats.family(family)?.encode(value)
+        }
+
+        fn infer_record(&self, id: &str, checkpoint: &Value) -> Result<SessionRecord> {
+            if is_portable(checkpoint) {
+                let checkpoint = portable_checkpoint(checkpoint)?;
+                let mut record = SessionRecord::root(id, checkpoint.model(), None)
+                    .with_lineage(checkpoint.lineage().clone());
+                record.created_at_ms = 0;
+                record.updated_at_ms = 0;
+                return Ok(record);
+            }
+            let model = checkpoint
+                .get("model")
+                .and_then(Value::as_str)
+                .and_then(|model| model.parse::<ModelSelection>().ok())
+                .ok_or_else(|| {
+                    Error::InvalidState("stored checkpoint has no known model".into())
+                })?;
+            if !self.formats.family(model.family())?.owns(checkpoint) {
+                return Err(Error::InvalidState(
+                    "stored checkpoint model belongs to another family".into(),
+                ));
+            }
+            let workspace = checkpoint
+                .get("workspace")
+                .and_then(Value::as_str)
+                .filter(|workspace| !workspace.is_empty())
+                .map(PathBuf::from);
+            Ok(SessionRecord {
+                session_id: id.to_owned(),
+                model,
+                workspace,
+                title: None,
+                lineage: Lineage::root(id),
+                created_at_ms: 0,
+                updated_at_ms: 0,
+                history_pruned: false,
+                branch: None,
+                start_checkpoint: None,
+                initial: None,
+            })
+        }
+
+        fn transcript(
+            &self,
+            checkpoint: &Value,
+            family: HarnessFamily,
+            turns: &[AdmittedTurn<'_>],
+        ) -> Result<Vec<TranscriptItem>> {
+            let checkpoint = if is_portable(checkpoint) {
+                &checkpoint["payload"]
+            } else {
+                checkpoint
+            };
+            Ok(self.formats.family(family)?.transcript(checkpoint, turns))
         }
 
         async fn native_checkpoint(&self, id: &str, state: &DurableState) -> Result<Option<Value>> {
@@ -773,30 +803,8 @@ mod store {
         }
     }
 
-    fn encode_native(family: HarnessFamily, value: Value) -> Result<EncodedPayload> {
-        if is_portable(&value) {
-            portable_checkpoint(&value)?
-                .require_family(family)
-                .map_err(|error| Error::InvalidState(error.to_string()))?;
-            return EncodedPayload::encode(&value);
-        }
-        match family {
-            family if family == HarnessFamily::Claude => EncodedPayload::encode(&value),
-            family if family == HarnessFamily::Codex => {
-                let snapshot: nanocode_backend_codex::session::SessionSnapshot =
-                    serde_json::from_value(value).map_err(Error::InvalidPayload)?;
-                Ok(crate::context::prepare_snapshot(snapshot, &HashSet::new())?.payload)
-            }
-            _ => EncodedPayload::encode(&value),
-        }
-    }
-
     fn is_child_journal(id: &str) -> bool {
         id.ends_with(":subagents")
-    }
-
-    fn is_claude(value: &Value) -> bool {
-        value.get("provider").and_then(Value::as_str) == Some("claude")
     }
 
     fn is_portable(value: &Value) -> bool {
@@ -813,45 +821,6 @@ mod store {
             .validate()
             .map_err(|error| Error::InvalidState(error.to_string()))?;
         Ok(checkpoint)
-    }
-
-    fn infer_record(id: &str, checkpoint: &Value) -> Result<SessionRecord> {
-        if is_portable(checkpoint) {
-            let checkpoint = portable_checkpoint(checkpoint)?;
-            let mut record = SessionRecord::root(id, checkpoint.model(), None)
-                .with_lineage(checkpoint.lineage().clone());
-            record.created_at_ms = 0;
-            record.updated_at_ms = 0;
-            return Ok(record);
-        }
-        let model = checkpoint
-            .get("model")
-            .and_then(Value::as_str)
-            .and_then(|model| model.parse::<ModelSelection>().ok())
-            .ok_or_else(|| Error::InvalidState("stored checkpoint has no known model".into()))?;
-        if is_claude(checkpoint) != (model.family() == HarnessFamily::Claude) {
-            return Err(Error::InvalidState(
-                "stored checkpoint model belongs to another family".into(),
-            ));
-        }
-        let workspace = checkpoint
-            .get("workspace")
-            .and_then(Value::as_str)
-            .filter(|workspace| !workspace.is_empty())
-            .map(PathBuf::from);
-        Ok(SessionRecord {
-            session_id: id.to_owned(),
-            model,
-            workspace,
-            title: None,
-            lineage: Lineage::root(id),
-            created_at_ms: 0,
-            updated_at_ms: 0,
-            history_pruned: false,
-            branch: None,
-            start_checkpoint: None,
-            initial: None,
-        })
     }
 
     fn prompt_text(input: &Value) -> Option<String> {
@@ -877,377 +846,19 @@ mod store {
         find(input, 0).map(|text| text.chars().take(500).collect())
     }
 
-    fn transcript(
-        checkpoint: &Value,
-        family: HarnessFamily,
-        prompts: &[AdmittedPrompt],
-    ) -> Vec<TranscriptItem> {
-        let checkpoint = if is_portable(checkpoint) {
-            &checkpoint["payload"]
-        } else {
-            checkpoint
-        };
-        if family == HarnessFamily::Claude {
-            claude_transcript(checkpoint, prompts)
-        } else if family == HarnessFamily::Codex {
-            codex_transcript(checkpoint)
-        } else {
-            Vec::new()
-        }
-    }
-
-    #[derive(Debug, PartialEq, Eq)]
-    enum PromptPart {
-        Text(String),
-        Media,
-    }
-
-    struct AdmittedPrompt {
-        parts: Vec<PromptPart>,
-        steers: usize,
-    }
-
-    fn admitted_prompts(turns: &[StoredTurn], state: &DurableState) -> Vec<AdmittedPrompt> {
+    fn admitted_turns<'a>(turns: &'a [StoredTurn], state: &DurableState) -> Vec<AdmittedTurn<'a>> {
         turns
             .iter()
-            .filter_map(|turn| {
-                let input = &turn.input;
-                if input["provider"] != "claude" || input["kind"] != "prompt" {
-                    return None;
-                }
-                let parts = match &input["prompt"]["instruction"] {
-                    Value::String(text) => vec![PromptPart::Text(text.clone())],
-                    Value::Array(items) => items
-                        .iter()
-                        .map(|item| match item["type"].as_str() {
-                            Some("text") => PromptPart::Text(
-                                item["text"].as_str().unwrap_or_default().to_owned(),
-                            ),
-                            _ => PromptPart::Media,
-                        })
-                        .collect(),
-                    _ => return None,
-                };
-
-                let steers = state
+            .map(|turn| AdmittedTurn {
+                input: &turn.input,
+                steers: state
                     .operations()
                     .iter()
                     .find(|(id, _)| id.as_str() == turn.id)
                     .map_or(0, |(_, operation)| {
                         operation.retired_steers as usize + operation.steers.len()
-                    });
-                Some(AdmittedPrompt { parts, steers })
+                    }),
             })
             .collect()
-    }
-
-    fn blocks(message: &Value) -> impl Iterator<Item = &Value> {
-        message["content"].as_array().into_iter().flatten()
-    }
-
-    fn prompt_parts(message: &Value) -> Vec<PromptPart> {
-        blocks(message)
-            .filter_map(|block| match block["type"].as_str()? {
-                "text" => Some(PromptPart::Text(block["text"].as_str()?.to_owned())),
-                "image" | "document" => Some(PromptPart::Media),
-                _ => None,
-            })
-            .collect()
-    }
-
-    fn prompt_display(message: &Value) -> String {
-        let (mut text, mut images, mut documents) = (String::new(), 0, 0);
-        for block in blocks(message) {
-            match block["type"].as_str() {
-                Some("text") => text.push_str(block["text"].as_str().unwrap_or_default()),
-                Some("image") => {
-                    images += 1;
-                    text.push_str(&format!("[Image #{images}]"));
-                }
-                Some("document") => {
-                    documents += 1;
-                    text.push_str(&format!("[Document #{documents}]"));
-                }
-                _ => {}
-            }
-        }
-        text
-    }
-
-    fn recovery_notice(message: &Value, notices: &[&str]) -> bool {
-        let mut text = String::new();
-        for block in blocks(message) {
-            match block["text"].as_str() {
-                Some(part) if block["type"] == "text" => text.push_str(part),
-                _ => return false,
-            }
-        }
-        notices.contains(&text.as_str())
-    }
-
-    fn tool_output(content: &Value) -> String {
-        match content {
-            Value::String(text) => text.clone(),
-            Value::Array(items) => items
-                .iter()
-                .filter_map(|item| match item["type"].as_str()? {
-                    "text" => item["text"].as_str().map(str::to_owned),
-                    "image" => Some("[image]".to_owned()),
-                    "document" => Some("[document]".to_owned()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("\n"),
-            _ => String::new(),
-        }
-    }
-
-    fn user_rows(messages: &[&Value], notices: &[&str], items: &mut Vec<TranscriptItem>) {
-        for message in messages {
-            if recovery_notice(message, notices) {
-                continue;
-            }
-            let text = prompt_display(message);
-            if !text.is_empty() {
-                items.push(TranscriptItem::User(text));
-            }
-        }
-    }
-
-    fn steer_rows(
-        segment: &[&Value],
-        steers: usize,
-        notices: &[&str],
-        items: &mut Vec<TranscriptItem>,
-    ) {
-        user_rows(
-            &segment[segment.len().saturating_sub(steers)..],
-            notices,
-            items,
-        );
-    }
-
-    fn claude_assistant_rows(message: &Value, items: &mut Vec<TranscriptItem>) {
-        for block in blocks(message) {
-            match block["type"].as_str() {
-                Some("text") => {
-                    if let Some(text) = block["text"].as_str() {
-                        items.push(TranscriptItem::Assistant(text.into()));
-                    }
-                }
-
-                Some("thinking") => {
-                    if let Some(text) = block["thinking"]
-                        .as_str()
-                        .filter(|text| !text.trim().is_empty())
-                    {
-                        items.push(TranscriptItem::Reasoning(text.into()));
-                    }
-                }
-                Some("tool_use" | "server_tool_use") => items.push(TranscriptItem::Tool {
-                    call_id: block["id"].as_str().unwrap_or_default().into(),
-                    name: block["name"].as_str().unwrap_or_default().into(),
-                    arguments: block["input"].to_string(),
-                    parent_call_id: None,
-                }),
-                Some("mcp_tool_use") => items.push(TranscriptItem::Tool {
-                    call_id: block["id"].as_str().unwrap_or_default().into(),
-                    name: format!(
-                        "mcp__{}__{}",
-                        block["server_name"].as_str().unwrap_or_default(),
-                        block["name"].as_str().unwrap_or_default()
-                    ),
-                    arguments: block["input"].to_string(),
-                    parent_call_id: None,
-                }),
-                _ => {}
-            }
-        }
-    }
-
-    fn claude_transcript(checkpoint: &Value, prompts: &[AdmittedPrompt]) -> Vec<TranscriptItem> {
-        use nanocode_backend_codex::session::ToolOutcome;
-        let mut items = Vec::new();
-        let conversation = &checkpoint["conversation"];
-        if let Some(summary) = conversation["summary"]
-            .as_str()
-            .filter(|summary| !summary.is_empty())
-        {
-            items.push(TranscriptItem::Assistant(format!(
-                "Retained conversation summary:\n{summary}"
-            )));
-        }
-        let notices = conversation["recovery_notices"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .collect::<Vec<_>>();
-        let messages = conversation["messages"]
-            .as_array()
-            .map_or(&[][..], Vec::as_slice);
-        let receipt = |message: &Value| blocks(message).any(|block| block["type"] == "tool_result");
-
-        let mut children = std::collections::HashMap::<&str, Vec<(&str, &Value)>>::new();
-        let mut outcomes = std::collections::HashMap::<&str, &str>::new();
-        for round in conversation["code_calls"].as_array().into_iter().flatten() {
-            let Some(receipt_id) = round["tool_use_id"].as_str() else {
-                continue;
-            };
-            let origin = round["origin_call_id"].as_str();
-            for call in round["calls"].as_array().into_iter().flatten() {
-                if let Some(call_id) = call["call_id"].as_str() {
-                    outcomes.insert(call_id, call["status"].as_str().unwrap_or("unknown"));
-                    let cell = call["parent_call_id"]
-                        .as_str()
-                        .or(origin)
-                        .unwrap_or(receipt_id);
-                    children.entry(receipt_id).or_default().push((cell, call));
-                }
-            }
-        }
-        let mut replayed_children = std::collections::HashSet::new();
-        let mut next_prompt = 0;
-        let mut index = 0;
-        while let Some(message) = messages.get(index) {
-            if message["role"].as_str() == Some("assistant") {
-                claude_assistant_rows(message, &mut items);
-                index += 1;
-                continue;
-            }
-            if receipt(message) {
-                for block in blocks(message).filter(|block| block["type"] == "tool_result") {
-                    let parent = block["tool_use_id"].as_str().unwrap_or_default();
-                    for (cell, call) in children.get(parent).into_iter().flatten() {
-                        let call_id = call["call_id"].as_str().unwrap_or_default();
-                        if !replayed_children.insert(call_id) {
-                            continue;
-                        }
-                        items.push(TranscriptItem::Tool {
-                            call_id: call_id.into(),
-                            name: call["name"].as_str().unwrap_or_default().into(),
-                            arguments: call["input"].to_string(),
-                            parent_call_id: Some((*cell).into()),
-                        });
-                        let outcome = match outcomes.get(call_id).copied() {
-                            Some("completed") => ToolOutcome::Completed,
-                            Some("failed") => ToolOutcome::Failed,
-                            _ => ToolOutcome::Unknown,
-                        };
-                        items.push(TranscriptItem::tool_result(call_id, "", outcome));
-                    }
-                    items.push(TranscriptItem::tool_result(
-                        parent,
-                        &tool_output(&block["content"]),
-                        if block["is_error"].as_bool() == Some(true) {
-                            ToolOutcome::Failed
-                        } else {
-                            ToolOutcome::Completed
-                        },
-                    ));
-                }
-
-                let content = blocks(message)
-                    .filter(|block| block["type"] != "tool_result")
-                    .cloned()
-                    .collect::<Vec<_>>();
-                if !content.is_empty() {
-                    let shared = serde_json::json!({ "content": content });
-                    user_rows(&[&shared], &notices, &mut items);
-                }
-                index += 1;
-                continue;
-            }
-
-            let end = messages[index..]
-                .iter()
-                .position(|message| message["role"].as_str() != Some("user") || receipt(message))
-                .map_or(messages.len(), |offset| index + offset);
-            let run = &messages[index..end];
-            index = end;
-            let mut segment = Vec::new();
-            let mut steers = None;
-            for message in run {
-                let parts = prompt_parts(message);
-                let Some(offset) = prompts
-                    .get(next_prompt..)
-                    .and_then(|rest| rest.iter().position(|prompt| prompt.parts == parts))
-                else {
-                    segment.push(message);
-                    continue;
-                };
-                match steers {
-                    Some(steers) => steer_rows(&segment, steers, &notices, &mut items),
-
-                    None if offset == 0 => {}
-                    None => user_rows(&segment, &notices, &mut items),
-                }
-                segment.clear();
-                steers = Some(prompts[next_prompt + offset].steers);
-                next_prompt += offset + 1;
-                items.push(TranscriptItem::User(prompt_display(message)));
-            }
-
-            match steers {
-                Some(steers) => steer_rows(&segment, steers, &notices, &mut items),
-                None => user_rows(&segment, &notices, &mut items),
-            }
-        }
-        items
-    }
-
-    fn codex_transcript(snapshot: &Value) -> Vec<TranscriptItem> {
-        let mut items = Vec::new();
-        for item in snapshot["history"].as_array().into_iter().flatten() {
-            match item["type"].as_str() {
-                Some("message") => {
-                    let role = item["role"].as_str();
-                    for content in item["content"].as_array().into_iter().flatten() {
-                        let Some(text) = content["text"].as_str().filter(|text| !text.is_empty())
-                        else {
-                            continue;
-                        };
-                        match (role, content["type"].as_str()) {
-                            (Some("user"), Some("input_text")) if !is_injected_context(text) => {
-                                items.push(TranscriptItem::User(text.into()));
-                            }
-                            (Some("assistant"), _) => {
-                                items.push(TranscriptItem::Assistant(text.into()));
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                Some("reasoning") => {
-                    for summary in item["summary"].as_array().into_iter().flatten() {
-                        if let Some(text) = summary["text"].as_str().filter(|text| !text.is_empty())
-                        {
-                            items.push(TranscriptItem::Reasoning(text.into()));
-                        }
-                    }
-                }
-                Some("function_call") => items.push(TranscriptItem::Tool {
-                    call_id: item["call_id"].as_str().unwrap_or_default().into(),
-                    name: item["name"].as_str().unwrap_or_default().into(),
-                    arguments: item["arguments"].as_str().unwrap_or_default().into(),
-                    parent_call_id: None,
-                }),
-                Some("custom_tool_call") => items.push(TranscriptItem::Tool {
-                    call_id: item["call_id"].as_str().unwrap_or_default().into(),
-                    name: item["name"].as_str().unwrap_or_default().into(),
-                    arguments: item["input"].as_str().unwrap_or_default().into(),
-                    parent_call_id: None,
-                }),
-                _ => {}
-            }
-        }
-        items
-    }
-
-    fn is_injected_context(text: &str) -> bool {
-        let text = text.trim_start();
-        text.starts_with("<environment_context")
-            || text.starts_with("<user_instructions")
-            || text.starts_with("# AGENTS.md")
     }
 }

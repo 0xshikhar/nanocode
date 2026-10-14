@@ -1,6 +1,10 @@
+#![cfg(not(target_family = "wasm"))]
+
 use tokio_postgres::Client;
 
-use crate::{OwnedState, OwnerId, OwnerToken, StateStore, StoreError, StoreFuture, StoredState};
+use nanocode_durability::{
+    OwnedState, OwnerId, OwnerToken, StateStore, StoreError, StoreFuture, StoredState,
+};
 
 const POSTGRES_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS nanocodex_durable_records (
        state_id TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL,
@@ -116,7 +120,7 @@ impl StateStore for PostgresStore {
         owner: &'a OwnerToken,
         expected_revision: u64,
         payload: &'a str,
-        records: &'a [crate::StoreRecord],
+        records: &'a [nanocode_durability::StoreRecord],
     ) -> StoreFuture<'a, Result<u64, StoreError>> {
         Box::pin(async move {
             let transaction = self.client.transaction().await.map_err(backend)?;

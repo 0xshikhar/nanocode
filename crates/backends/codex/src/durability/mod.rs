@@ -4,7 +4,13 @@ use std::{
 };
 
 use nanocode_agent::{ExecutionPolicyDisposition, NanocodexError, Result as AgentResult};
-use nanocode_backend_codex::{
+use nanocode_durability::{
+    Admission, BeginStep, Branches, DurableAgentExt, DurableOwner, DurableSession, InitialSettings,
+    OperationStatus, SessionRecord, SharedStore, agent_error,
+};
+use serde_json::value::RawValue;
+
+use crate::{
     NanocodexBuilder,
     execution::{
         ExecutionAdmission, ExecutionContinuation, ExecutionFuture, ExecutionOutput,
@@ -12,16 +18,14 @@ use nanocode_backend_codex::{
     },
     session::{SessionId, SessionSnapshot},
 };
-use serde_json::value::RawValue;
 
-use crate::{
-    Admission, BeginStep, DurableSession, Error, OperationStatus, SessionRecord,
-    session::DurableOwner, shared_store::SharedStore,
-};
+mod context;
+mod format;
+mod registration;
+mod session;
 
-pub trait DurableAgentExt: Sized {
-    fn durability(self, state: DurableSession) -> impl Future<Output = AgentResult<Self>>;
-}
+pub use format::CodexCheckpointFormat;
+pub use session::DurableSessionExt;
 
 impl<F> DurableAgentExt for NanocodexBuilder<F> {
     async fn durability(self, state: DurableSession) -> AgentResult<Self> {
@@ -51,7 +55,7 @@ impl<F> DurableAgentExt for NanocodexBuilder<F> {
         let (owner, checkpoint) = state.acquire_agent().await.map_err(agent_error)?;
         let mut known_records = HashSet::new();
         if let Some(checkpoint) = checkpoint {
-            let (restored, keys) = crate::context::load_snapshot_with_keys(
+            let (restored, keys) = context::load_snapshot_with_keys(
                 (&owner).into(),
                 checkpoint.decode().map_err(agent_error)?,
             )
@@ -70,8 +74,8 @@ impl<F> DurableAgentExt for NanocodexBuilder<F> {
             known_records = keys;
             builder = builder.resume_native_snapshot(restored);
         } else if let Some(snapshot) = builder.resume_snapshot() {
-            let prepared = crate::context::prepare_snapshot(snapshot.clone(), &known_records)
-                .map_err(agent_error)?;
+            let prepared =
+                context::prepare_snapshot(snapshot.clone(), &known_records).map_err(agent_error)?;
             owner
                 .commit_checkpoint(prepared.payload)
                 .await
@@ -109,29 +113,6 @@ impl<F> DurableAgentExt for NanocodexBuilder<F> {
     }
 }
 
-#[derive(Clone)]
-pub(crate) struct Branches {
-    pub(crate) store: SharedStore,
-    pub(crate) record: Option<SessionRecord>,
-}
-
-impl Branches {
-    pub(crate) fn child_record(
-        &self,
-        child: &nanocode_agent::SessionInfo,
-    ) -> AgentResult<SessionRecord> {
-        let parent = self.record.as_ref().ok_or_else(|| {
-            NanocodexError::InvalidExecutionPolicy(
-                "a durable session without a recorded model cannot persist forks; open it through SessionStore"
-                    .to_owned(),
-            )
-        })?;
-        Ok(parent
-            .derive(child.session_id.clone(), child.lineage.origin)
-            .with_lineage(child.lineage.clone()))
-    }
-}
-
 struct DurableExecution {
     owner: DurableOwner,
     state_id: String,
@@ -149,12 +130,15 @@ impl DurableExecution {
         }
     }
 
-    fn prepare_snapshot(&self, snapshot: SessionSnapshot) -> AgentResult<crate::context::Prepared> {
+    fn prepare_snapshot(
+        &self,
+        snapshot: SessionSnapshot,
+    ) -> AgentResult<nanocode_durability::Prepared> {
         let known = self
             .context_records
             .lock()
             .map_err(|_| NanocodexError::InvalidExecutionPolicy("context cache poisoned".into()))?;
-        crate::context::prepare_snapshot(snapshot, &known).map_err(agent_error)
+        context::prepare_snapshot(snapshot, &known).map_err(agent_error)
     }
 
     fn remember(&self, keys: HashSet<String>) -> AgentResult<()> {
@@ -253,7 +237,7 @@ impl ExecutionPolicy for DurableExecution {
             let input = raw(input_json)?;
             let owner = &self.owner;
             let admission = owner
-                .admit_typed::<_, crate::context::Snapshot, ExecutionOutput>(operation_id, &input)
+                .admit_typed::<_, context::Snapshot, ExecutionOutput>(operation_id, &input)
                 .await
                 .map_err(agent_error)?;
             map_admission(owner, admission).await
@@ -269,7 +253,7 @@ impl ExecutionPolicy for DurableExecution {
             let input = raw(input_json)?;
             let admission = self
                 .owner
-                .admit_automatic_typed::<_, crate::context::Snapshot, ExecutionOutput>(
+                .admit_automatic_typed::<_, context::Snapshot, ExecutionOutput>(
                     candidate_operation_id,
                     &input,
                 )
@@ -449,10 +433,9 @@ impl ExecutionPolicy for DurableExecution {
                 .map_err(agent_error)?
             {
                 Some(value) => {
-                    let (continuation, keys) =
-                        crate::context::load_continuation(owner.into(), value)
-                            .await
-                            .map_err(agent_error)?;
+                    let (continuation, keys) = context::load_continuation(owner.into(), value)
+                        .await
+                        .map_err(agent_error)?;
                     self.remember(keys)?;
                     Ok(Some(continuation))
                 }
@@ -471,7 +454,7 @@ impl ExecutionPolicy for DurableExecution {
                 let known = self.context_records.lock().map_err(|_| {
                     NanocodexError::InvalidExecutionPolicy("context cache poisoned".into())
                 })?;
-                crate::context::prepare_continuation(continuation, &known).map_err(agent_error)?
+                context::prepare_continuation(continuation, &known).map_err(agent_error)?
             };
             self.owner
                 .advance(operation_id, prepared.payload)
@@ -574,7 +557,7 @@ struct LazyExecution {
 
     initialized: std::sync::atomic::AtomicBool,
 
-    created_with: Mutex<Option<nanocode_backend_codex::execution::InitialSettings>>,
+    created_with: Mutex<Option<crate::execution::InitialSettings>>,
 }
 
 impl LazyExecution {
@@ -606,7 +589,7 @@ impl LazyExecution {
                         nanocode_agent::BackendId::Codex,
                         settings.model.as_str(),
                     );
-                    record.initial = Some(crate::catalog::InitialSettings {
+                    record.initial = Some(InitialSettings {
                         thinking: settings.thinking,
                         service_tier: settings.service_tier,
                     });
@@ -679,7 +662,7 @@ impl ExecutionPolicy for LazyExecution {
     fn commit_initial_checkpoint<'a>(
         &'a self,
         snapshot: Option<SessionSnapshot>,
-        settings: nanocode_backend_codex::execution::InitialSettings,
+        settings: crate::execution::InitialSettings,
     ) -> ExecutionFuture<'a, AgentResult<()>> {
         Box::pin(async move {
             if self.initialized.load(std::sync::atomic::Ordering::SeqCst) {
@@ -919,19 +902,19 @@ impl ExecutionPolicy for LazyExecution {
 
 async fn map_admission(
     owner: &DurableOwner,
-    admission: Admission<crate::context::Snapshot, ExecutionOutput>,
+    admission: Admission<context::Snapshot, ExecutionOutput>,
 ) -> AgentResult<ExecutionAdmission> {
     Ok(match admission {
         Admission::Accepted => ExecutionAdmission::Execute,
         Admission::Pending => ExecutionAdmission::Resume,
         Admission::Completed { checkpoint, output } => ExecutionAdmission::Completed {
-            snapshot: crate::context::restore_snapshot(owner.into(), checkpoint)
+            snapshot: context::restore_snapshot(owner.into(), checkpoint)
                 .await
                 .map_err(agent_error)?,
             output,
         },
         Admission::Failed { checkpoint, error } => ExecutionAdmission::Failed {
-            snapshot: crate::context::restore_snapshot(owner.into(), checkpoint)
+            snapshot: context::restore_snapshot(owner.into(), checkpoint)
                 .await
                 .map_err(agent_error)?,
             error,
@@ -942,30 +925,4 @@ async fn map_admission(
 
 fn raw(json: String) -> AgentResult<Box<RawValue>> {
     RawValue::from_string(json).map_err(NanocodexError::ExecutionPayload)
-}
-
-pub(crate) fn agent_error(error: Error) -> NanocodexError {
-    if matches!(error, Error::SteerQueueFull) {
-        return NanocodexError::SteerQueueFull;
-    }
-    if matches!(
-        error,
-        Error::SteerConflict { .. } | Error::SteerWithdrawn { .. }
-    ) {
-        return NanocodexError::InvalidRequest(error.to_string());
-    }
-    let disposition = match &error {
-        Error::Store(crate::StoreError::NotCommitted(_))
-        | Error::OperationBlocked { .. }
-        | Error::OperationActive { .. } => ExecutionPolicyDisposition::Retry,
-        Error::Store(
-            crate::StoreError::Fenced
-            | crate::StoreError::Conflict { .. }
-            | crate::StoreError::Backend(_),
-        )
-        | Error::ModelOwnerFenced
-        | Error::DriverStopped => ExecutionPolicyDisposition::Reopen,
-        _ => ExecutionPolicyDisposition::Fatal,
-    };
-    NanocodexError::execution_policy_with_disposition("durability", disposition, error)
 }

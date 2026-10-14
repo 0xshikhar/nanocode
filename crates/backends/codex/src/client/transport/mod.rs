@@ -4,6 +4,8 @@ pub(crate) mod chat;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod connector;
 #[cfg(not(target_family = "wasm"))]
+pub use connector::connect_async;
+#[cfg(not(target_family = "wasm"))]
 mod crypto;
 pub(crate) mod error;
 

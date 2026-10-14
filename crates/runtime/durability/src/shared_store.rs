@@ -43,7 +43,7 @@ enum Command {
 }
 
 #[derive(Clone)]
-pub(crate) struct SharedStore {
+pub struct SharedStore {
     commands: mpsc::Sender<Command>,
 }
 

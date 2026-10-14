@@ -1,0 +1,148 @@
+use std::collections::HashSet;
+
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+
+use crate::{
+    DurableSession, EncodedPayload, Result, StoreRecord, session::DurableOwner,
+    shared_store::SharedStore,
+};
+
+#[derive(Clone, Copy)]
+enum Source<'a> {
+    Owner(&'a DurableOwner),
+    Session(&'a DurableSession),
+    Store(&'a SharedStore, &'a str),
+}
+
+#[derive(Clone, Copy)]
+pub struct PayloadReader<'a>(Source<'a>);
+
+impl<'a> From<&'a DurableOwner> for PayloadReader<'a> {
+    fn from(value: &'a DurableOwner) -> Self {
+        Self(Source::Owner(value))
+    }
+}
+
+impl<'a> From<&'a DurableSession> for PayloadReader<'a> {
+    fn from(value: &'a DurableSession) -> Self {
+        Self(Source::Session(value))
+    }
+}
+
+impl<'a> PayloadReader<'a> {
+    pub(crate) const fn store(store: &'a SharedStore, state_id: &'a str) -> Self {
+        Self(Source::Store(store, state_id))
+    }
+
+    pub async fn load_payloads(self, payloads: Vec<EncodedPayload>) -> Result<Vec<EncodedPayload>> {
+        match self.0 {
+            Source::Owner(owner) => owner.load_payloads(payloads).await,
+            Source::Session(session) => session.resolve_many(payloads).await,
+            Source::Store(store, state_id) => {
+                EncodedPayload::load_many(&payloads, &mut store.clone(), state_id).await
+            }
+        }
+    }
+
+    pub async fn load_payload(self, payload: EncodedPayload) -> Result<EncodedPayload> {
+        match self.0 {
+            Source::Owner(owner) => owner.load_payload(payload).await,
+            Source::Session(session) => session.resolve(&payload).await,
+            Source::Store(store, state_id) => payload.load(&mut store.clone(), state_id).await,
+        }
+    }
+}
+
+const PAGE_ITEMS: usize = 64;
+
+#[derive(Clone, Default, Deserialize, Serialize)]
+pub struct Sequence {
+    tail: Option<EncodedPayload>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct Page {
+    previous: Option<EncodedPayload>,
+    items: Vec<EncodedPayload>,
+}
+
+pub struct Prepared {
+    pub payload: EncodedPayload,
+    pub keys: HashSet<String>,
+}
+
+pub struct PagedWriter<'a> {
+    known: &'a HashSet<String>,
+    keys: HashSet<String>,
+    records: Vec<StoreRecord>,
+}
+
+impl<'a> PagedWriter<'a> {
+    #[must_use]
+    pub fn new(known: &'a HashSet<String>) -> Self {
+        Self {
+            known,
+            keys: HashSet::new(),
+            records: Vec::new(),
+        }
+    }
+
+    fn record<T: Serialize>(&mut self, value: &T) -> Result<EncodedPayload> {
+        let mut payload = EncodedPayload::encode(value)?;
+        let key = payload.key.to_string();
+        if self.keys.insert(key.clone()) && !self.known.contains(&key) {
+            payload.stage(&mut self.records);
+        }
+
+        Ok(payload.reference())
+    }
+
+    pub fn sequence<T: Serialize>(&mut self, items: &[T]) -> Result<Sequence> {
+        let mut previous = None;
+        for chunk in items.chunks(PAGE_ITEMS) {
+            let mut values = Vec::with_capacity(chunk.len());
+            for item in chunk {
+                values.push(self.record(item)?);
+            }
+            previous = Some(self.record(&Page {
+                previous,
+                items: values,
+            })?);
+        }
+        Ok(Sequence { tail: previous })
+    }
+
+    pub fn finish<T: Serialize>(self, value: &T) -> Result<Prepared> {
+        Ok(Prepared {
+            payload: EncodedPayload::encode(value)?.with_records(self.records),
+            keys: self.keys,
+        })
+    }
+}
+
+pub async fn load_sequence<T: DeserializeOwned>(
+    reader: PayloadReader<'_>,
+    sequence: Sequence,
+    keys: &mut HashSet<String>,
+) -> Result<Vec<T>> {
+    let mut pages = Vec::new();
+    let mut next = sequence.tail;
+    while let Some(reference) = next {
+        keys.insert(reference.key.to_string());
+        let page: Page = reader.load_payload(reference).await?.decode()?;
+        next = page.previous;
+        pages.push(page.items);
+    }
+    let mut items = Vec::new();
+    for page in pages.into_iter().rev() {
+        for chunk in page.chunks(16) {
+            for reference in chunk {
+                keys.insert(reference.key.to_string());
+            }
+            for payload in reader.load_payloads(chunk.to_vec()).await? {
+                items.push(payload.decode()?);
+            }
+        }
+    }
+    Ok(items)
+}

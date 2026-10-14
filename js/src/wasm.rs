@@ -1718,7 +1718,7 @@ impl WasmHarnessFactory {
         };
         let lineage = if let (Some(route_id), Some(parent)) = (&factory.durability_host_id, parent)
         {
-            let store = nanocode::durability::SessionStore::new(JavaScriptDurabilityStore {
+            let store = nanocode::session_store(JavaScriptDurabilityStore {
                 route_id: route_id.clone(),
             })
             .map_err(|error| NanocodexError::InvalidRequest(error.to_string()))?;
@@ -1843,7 +1843,7 @@ impl AgentFactory for WasmHarnessFactory {
         Box::pin(async move {
             parent.ensure_available().await?;
             let checkpoint = if let Some(route_id) = &factory.durability_host_id {
-                nanocode::durability::SessionStore::new(JavaScriptDurabilityStore {
+                nanocode::session_store(JavaScriptDurabilityStore {
                     route_id: route_id.clone(),
                 })
                 .map_err(|error| NanocodexError::InvalidRequest(error.to_string()))?

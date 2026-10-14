@@ -41,6 +41,7 @@
 "nanocode-tools" = { "workspace" = true }
 "schemars" = { "workspace" = true }
 "nanocode-agent" = { "workspace" = true }
+"nanocode-durability" = { "workspace" = true }
 
 ["target"]
 
@@ -54,8 +55,6 @@
 "rustls-native-certs" = { "workspace" = true  }
 "tokio-tungstenite" = { "workspace" = true  }
 "url" = { "workspace" = true  }
-"opusic-c" = { "workspace" = true  }
-"webrtc" = { "workspace" = true  }
 "nanocode-tls" = { "workspace" = true }
 "async-trait" = { "workspace" = true }
 

@@ -28,6 +28,22 @@ pub use nanocode_code_mode::Tools;
 pub use nanocode_code_mode::tool;
 
 pub use nanocode_durability::DurableAgentExt;
+
+pub fn session_store<S: durability::StateStore + 'static>(
+    store: S,
+) -> durability::Result<durability::SessionStore> {
+    Ok(builtin_formats(&durability::SessionStore::new(store)?))
+}
+
+pub(crate) fn builtin_formats(store: &durability::SessionStore) -> durability::SessionStore {
+    store
+        .with_format(std::sync::Arc::new(
+            nanocode_backend_codex::durability::CodexCheckpointFormat,
+        ))
+        .with_format(std::sync::Arc::new(
+            nanocode_backend_claude::durability::ClaudeCheckpointFormat,
+        ))
+}
 #[cfg(not(target_family = "wasm"))]
 pub use runtime::ClaudeHarness;
 #[cfg(not(target_family = "wasm"))]
@@ -51,7 +67,8 @@ pub mod agent {
     };
 
     pub use nanocode_backend_codex::{
-        ExecutionEnvironment, NanocodexBuilder as CodexBuilder, execution,
+        ExecutionEnvironment, NanocodexBuilder as CodexBuilder, durability::DurableSessionExt,
+        execution,
     };
 }
 
@@ -75,10 +92,6 @@ pub use nanocode_code_mode as oai_tools;
 #[cfg(not(target_family = "wasm"))]
 #[doc(inline)]
 pub use nanocode_backend_claude::tools as claude_tools;
-
-#[cfg(not(target_family = "wasm"))]
-#[doc(inline)]
-pub use nanocode_observability as observability;
 
 #[cfg(not(target_family = "wasm"))]
 pub use nanocode_cua as cua;

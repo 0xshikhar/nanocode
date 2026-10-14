@@ -9,6 +9,7 @@ mod response;
 pub(crate) mod state;
 
 pub use builder::{ResponseTurn, Session, SessionBuildError, SessionBuilder};
+pub use compaction::truncate_middle_with_token_budget;
 pub use response::{
     CompletedCompaction, CompletedResponse, Response, ResponseError, ResponseErrorKind,
     ResponseInput,

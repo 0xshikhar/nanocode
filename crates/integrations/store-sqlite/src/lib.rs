@@ -1,8 +1,12 @@
-use std::path::Path;
+#![cfg(not(target_family = "wasm"))]
+
+use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OptionalExtension as _, TransactionBehavior, params};
 
-use crate::{OwnedState, OwnerId, OwnerToken, StateStore, StoreError, StoreFuture, StoredState};
+use nanocode_durability::{
+    OwnedState, OwnerId, OwnerToken, StateStore, StoreError, StoreFuture, StoredState,
+};
 
 const MAX_SQL_REVISION: u64 = i64::MAX as u64;
 
@@ -11,6 +15,18 @@ pub struct SqliteStore {
 }
 
 impl SqliteStore {
+    #[must_use]
+    pub fn home_path(home: &Path) -> PathBuf {
+        home.join("sessions.sqlite")
+    }
+
+    pub fn open_home(home: &Path) -> Result<Self, StoreError> {
+        std::fs::create_dir_all(home).map_err(|error| {
+            StoreError::NotCommitted(format!("failed to create {}: {error}", home.display()))
+        })?;
+        Self::open(Self::home_path(home))
+    }
+
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
         let connection = Connection::open(path).map_err(backend)?;
         Self::from_connection(connection)
@@ -90,7 +106,7 @@ impl SqliteStore {
         owner: &OwnerToken,
         expected_revision: u64,
         payload: &str,
-        records: &[crate::StoreRecord],
+        records: &[nanocode_durability::StoreRecord],
         after_begin: impl FnOnce(),
     ) -> Result<u64, StoreError> {
         let transaction = self
@@ -189,7 +205,7 @@ impl StateStore for SqliteStore {
         owner: &'a OwnerToken,
         expected_revision: u64,
         payload: &'a str,
-        records: &'a [crate::StoreRecord],
+        records: &'a [nanocode_durability::StoreRecord],
     ) -> StoreFuture<'a, Result<u64, StoreError>> {
         let result =
             self.replace_transactional(state_id, owner, expected_revision, payload, records, || {});

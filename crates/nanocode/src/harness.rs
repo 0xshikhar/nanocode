@@ -180,6 +180,7 @@ impl Harness {
         store: &crate::durability::SessionStore,
         session_id: &str,
     ) -> AgentResult {
+        let store = &crate::builtin_formats(store);
         let stored = store.load(session_id).await.map_err(catalog_error)?;
         let model = stored.summary.record.model.clone();
         let thinking = stored

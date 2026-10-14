@@ -19,7 +19,7 @@ use tokio_tungstenite::{
 const HAPPY_EYEBALLS_DELAY: Duration = Duration::from_millis(250);
 const MAX_CONNECT_RESPONSE_SIZE: usize = 8_192;
 
-pub(crate) async fn connect_async(
+pub async fn connect_async(
     request: Request,
 ) -> Result<(WebSocketStream<MaybeTlsStream<TcpStream>>, Response)> {
     let host = request

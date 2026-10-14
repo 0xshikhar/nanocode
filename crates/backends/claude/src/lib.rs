@@ -1962,6 +1962,8 @@ pub use agent::{
     rewind_checkpoint, session_checkpoint,
 };
 
+pub mod durability;
+
 pub mod execution;
 
 #[cfg(not(target_family = "wasm"))]

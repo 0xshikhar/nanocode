@@ -15,9 +15,6 @@ mod openai;
 
 pub mod pricing;
 
-#[cfg(not(target_family = "wasm"))]
-pub mod realtime;
-
 pub mod responses;
 
 #[cfg(not(target_family = "wasm"))]

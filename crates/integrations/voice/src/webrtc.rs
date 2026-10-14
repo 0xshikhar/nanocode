@@ -39,11 +39,14 @@ use webrtc::{
     track::track_local::{TrackLocal, track_local_static_sample::TrackLocalStaticSample},
 };
 
-use super::{
+use crate::{
     CONNECT_TIMEOUT, EVENT_CAPACITY, RealtimeAudio, RealtimeError, RealtimeInitialItem,
     RealtimeVersion, RealtimeVoice, Socket, map_websocket_error,
 };
-use crate::client::{OpenAiAuth, OpenAiAuthSnapshot, connector::connect_async};
+use nanocode_backend_codex::client::{
+    auth::{OpenAiAuth, OpenAiAuthSnapshot},
+    transport::{connect_async, install_default_rustls_crypto_provider},
+};
 
 const DATA_CHANNEL_LABEL: &str = "oai-events";
 const CALL_BODY_LIMIT: usize = 1024 * 1024;
@@ -118,7 +121,7 @@ pub struct RealtimeMediaPeer {
 
 impl RealtimeMediaPeer {
     pub async fn offer() -> Result<Self, RealtimeError> {
-        crate::client::transport::install_default_rustls_crypto_provider();
+        install_default_rustls_crypto_provider();
         let offer = create_offer().await?;
         let cleanup = PendingPeer(Some(Arc::clone(&offer.peer)));
         Ok(Self {
@@ -283,7 +286,7 @@ async fn send_v1_session_update(
     socket: &mut Socket,
     config: &ConnectConfig<'_>,
 ) -> Result<(), RealtimeError> {
-    super::send_json(socket, &v1_session_update(config)).await
+    crate::send_json(socket, &v1_session_update(config)).await
 }
 
 fn v1_session_update(config: &ConnectConfig<'_>) -> Value {
@@ -294,7 +297,7 @@ fn v1_session_update(config: &ConnectConfig<'_>) -> Value {
             "instructions": config.instructions,
             "audio": {
                 "input": {
-                    "format": { "type": "audio/pcm", "rate": super::REALTIME_SAMPLE_RATE }
+                    "format": { "type": "audio/pcm", "rate": crate::REALTIME_SAMPLE_RATE }
                 },
                 "output": { "voice": config.voice.as_str() }
             }
@@ -760,7 +763,7 @@ fn call_session(config: &ConnectConfig<'_>) -> Value {
             "instructions": config.instructions,
             "audio": {
                 "input": {
-                    "format": { "type": "audio/pcm", "rate": super::REALTIME_SAMPLE_RATE }
+                    "format": { "type": "audio/pcm", "rate": crate::REALTIME_SAMPLE_RATE }
                 },
                 "output": { "voice": config.voice.as_str() }
             }

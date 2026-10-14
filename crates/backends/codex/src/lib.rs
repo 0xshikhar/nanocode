@@ -114,6 +114,7 @@ pub mod __private {
 pub mod client;
 
 pub mod builtin_tools;
+pub mod durability;
 pub use error::ErrorExt;
 
 pub use agent::checkpoint::CodexCheckpointExt;

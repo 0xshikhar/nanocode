@@ -79,7 +79,7 @@ pub struct EncodedPayload {
 }
 
 impl EncodedPayload {
-    pub(crate) fn encode<T: Serialize + ?Sized>(value: &T) -> Result<Self> {
+    pub fn encode<T: Serialize + ?Sized>(value: &T) -> Result<Self> {
         let json = serde_json::to_string(value).map_err(Error::InvalidPayload)?;
         Ok(Self {
             key: record_key(&json).into(),
