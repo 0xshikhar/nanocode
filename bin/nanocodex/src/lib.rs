@@ -208,6 +208,11 @@ async fn interactive(args: SessionArgs) -> Result<()> {
             remote_label,
             history_path: Some(prepared.home.join("history.jsonl")),
             home: prepared.home.clone(),
+            thinking_override: args
+                .thinking
+                .as_deref()
+                .map(host::parse_thinking)
+                .transpose()?,
         },
         terminal,
     )

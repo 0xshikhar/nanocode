@@ -106,6 +106,14 @@ pub struct Ready {
     pub history: Option<Vec<TranscriptItem>>,
     pub notice: String,
     pub reset_transcript: bool,
+    pub pending: Vec<PendingTurn>,
+    pub prompts: Vec<String>,
+}
+
+pub struct PendingTurn {
+    pub id: String,
+    pub text: String,
+    pub prompt: nanocode::agent::input::Prompt,
 }
 
 pub enum TurnState {
@@ -150,6 +158,7 @@ pub struct Launch {
     pub remote_label: Option<String>,
     pub history_path: Option<PathBuf>,
     pub home: PathBuf,
+    pub thinking_override: Option<Thinking>,
 }
 
 pub struct App {
@@ -184,6 +193,7 @@ pub struct App {
     next_attachments: Vec<PathBuf>,
     pub(crate) pending_copy: Option<String>,
     pub(crate) interrupting: bool,
+    thinking_override: Option<Thinking>,
     awaiting_terminal: bool,
     pub(crate) session_started: bool,
     pub(crate) tx: UnboundedSender<AppEvent>,
@@ -239,6 +249,7 @@ pub async fn run(launch: Launch, mut terminal: TerminalSession) -> Result<()> {
         next_attachments: Vec::new(),
         pending_copy: None,
         interrupting: false,
+        thinking_override: launch.thinking_override,
         awaiting_terminal: false,
         session_started: false,
         tx,
@@ -382,6 +393,7 @@ impl App {
 
     pub fn connect(&mut self, resume: Option<String>) {
         self.starting = true;
+        let thinking_override = self.thinking_override.take();
         let host = self.host.clone();
         let model = self.model.clone();
         let thinking = self.thinking;
@@ -390,7 +402,9 @@ impl App {
         tokio::spawn(async move {
             let ready = async {
                 match resume {
-                    Some(session_id) => open_session(&host, &session_id, tier).await,
+                    Some(session_id) => {
+                        open_session(&host, &session_id, tier, thinking_override).await
+                    }
                     None => {
                         let (agent, events) = host.start(&model, thinking).await?;
                         apply_tier(&agent, &model, tier).await?;
@@ -403,6 +417,8 @@ impl App {
                             tier,
                             history: None,
                             reset_transcript: false,
+                            pending: Vec::new(),
+                            prompts: Vec::new(),
                         })
                     }
                 }
@@ -622,9 +638,18 @@ impl App {
         self.session_started = ready
             .history
             .as_ref()
-            .is_some_and(|history| !history.is_empty());
-        if let Some(history) = ready.history {
-            crate::sessions::replay(&mut self.transcript, history);
+            .is_some_and(|history| !history.is_empty())
+            || !ready.prompts.is_empty()
+            || !ready.pending.is_empty();
+        match ready.history {
+            Some(history) if !history.is_empty() => {
+                crate::sessions::replay(&mut self.transcript, history);
+            }
+            _ => {
+                for prompt in &ready.prompts {
+                    self.transcript.push(CellKind::User(prompt.clone()));
+                }
+            }
         }
         self.model = ready.model;
         self.thinking = ready.thinking;
@@ -643,6 +668,18 @@ impl App {
         });
         self.agent = Some(ready.agent);
         self.notice(NoticeLevel::Info, ready.notice);
+        let mut pending = ready.pending.into_iter();
+        if let Some(turn) = pending.next() {
+            self.notice(NoticeLevel::Info, "continuing the interrupted turn…");
+            for later in pending {
+                let id = self.enqueue_follow_up(later.text);
+                drop(id);
+            }
+            if let Some(agent) = self.agent.clone() {
+                self.launch_turn(agent, turn.id, turn.text, turn.prompt);
+            }
+            return;
+        }
         self.after_turn();
     }
 
@@ -768,6 +805,17 @@ impl App {
             return;
         };
         let id = uuid::Uuid::now_v7().to_string();
+        let sent = crate::extras::prompt_for(&text, &attachments);
+        self.launch_turn(agent, id, text, sent);
+    }
+
+    fn launch_turn(
+        &mut self,
+        agent: Agent,
+        id: String,
+        text: String,
+        sent: nanocode::agent::input::Prompt,
+    ) {
         self.queue.push(QueuedPrompt {
             id: id.clone(),
             kind: QueueKind::FollowUp,
@@ -780,7 +828,6 @@ impl App {
         self.transcript.scroll_to_bottom();
         let generation = self.generation;
         let tx = self.tx.clone();
-        let sent = crate::extras::prompt_for(&text, &attachments);
         tokio::spawn(async move {
             match agent.prompt(PromptRequest::new(sent).request_id(id)).await {
                 Ok(turn) => {
@@ -1575,7 +1622,12 @@ pub async fn apply_tier(agent: &Agent, model: &ModelSelection, tier: ServiceTier
     Ok(())
 }
 
-pub async fn open_session(host: &Host, session_id: &str, tier: ServiceTier) -> Result<Ready> {
+pub async fn open_session(
+    host: &Host,
+    session_id: &str,
+    tier: ServiceTier,
+    thinking_override: Option<Thinking>,
+) -> Result<Ready> {
     let store = host
         .config
         .store
@@ -1583,17 +1635,55 @@ pub async fn open_session(host: &Host, session_id: &str, tier: ServiceTier) -> R
         .ok_or("resume requires durability; remove --ephemeral")?;
     let stored = store.load(session_id).await?;
     let model = stored.summary.record.model.clone();
-    let thinking = stored.session_checkpoint()?.map_or_else(
-        || model.default_thinking(),
-        |checkpoint| checkpoint.thinking(),
-    );
+    let checkpoint_thinking = stored
+        .session_checkpoint()?
+        .map(|checkpoint| checkpoint.thinking());
+    let opened_thinking = checkpoint_thinking.unwrap_or_else(|| model.default_thinking());
+    let thinking = thinking_override
+        .or(checkpoint_thinking)
+        .or_else(|| {
+            stored
+                .summary
+                .record
+                .initial
+                .map(|initial| initial.thinking)
+        })
+        .unwrap_or(opened_thinking);
+    model
+        .capabilities(nanocode::ModelTransport::Native)
+        .check_thinking(thinking)?;
+    let pending = stored
+        .turns
+        .iter()
+        .filter(|turn| turn.status == nanocode::durability::TurnStatus::Pending)
+        .map(|turn| {
+            let input = turn.input.get("prompt").unwrap_or(&turn.input).clone();
+            let prompt = serde_json::from_value::<nanocode::agent::input::Prompt>(input).map_err(
+                |error| format!("pending turn {} has an unreadable prompt: {error}", turn.id),
+            )?;
+            Ok::<_, crate::host::Error>(PendingTurn {
+                id: turn.id.clone(),
+                text: turn.preview.clone().unwrap_or_default(),
+                prompt,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let prompts = stored
+        .turns
+        .iter()
+        .filter(|turn| turn.status != nanocode::durability::TurnStatus::Pending)
+        .filter_map(|turn| turn.preview.clone())
+        .collect();
     let (agent, events) = host.open(session_id).await?;
+    if thinking != opened_thinking {
+        agent.set_thinking(thinking).await?;
+    }
     let tier = model
         .capabilities(nanocode::ModelTransport::Native)
         .normalize_service_tier(tier);
     apply_tier(&agent, &model, tier).await?;
     Ok(Ready {
-        notice: format!("resumed session {session_id} · {model}"),
+        notice: format!("resumed session {session_id} · {model} · thinking {thinking}"),
         agent,
         events,
         model,
@@ -1601,6 +1691,8 @@ pub async fn open_session(host: &Host, session_id: &str, tier: ServiceTier) -> R
         tier,
         history: Some(stored.transcript),
         reset_transcript: true,
+        pending,
+        prompts,
     })
 }
 

@@ -125,6 +125,8 @@ impl App {
                     tier,
                     history: None,
                     reset_transcript: false,
+                    pending: Vec::new(),
+                    prompts: Vec::new(),
                 })
             };
             let event = match ready.await {
@@ -341,7 +343,7 @@ impl App {
                 drop(previous.flush().await);
                 drop(previous.shutdown().await);
             }
-            let event = match open_session(&host, &session_id, tier).await {
+            let event = match open_session(&host, &session_id, tier, None).await {
                 Ok(ready) => AppEvent::AgentReady(Box::new(ready)),
                 Err(error) => AppEvent::AgentFailed(format!("resume failed: {error}")),
             };
@@ -379,6 +381,8 @@ impl App {
                     tier,
                     history: None,
                     reset_transcript: true,
+                    pending: Vec::new(),
+                    prompts: Vec::new(),
                 })
             };
             let event = match ready.await {
