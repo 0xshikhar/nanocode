@@ -345,6 +345,10 @@ export async function interruptSubagent(agent, agentId) {
   return JSON.parse(await agentState(agent).raw.interruptSubagent(JSON.stringify({ agentId })));
 }
 
+export function setSubagentSpawnPolicy(agent, wire) {
+  return JSON.parse(agentState(agent).raw.setSubagentSpawnPolicy(JSON.stringify(wire)));
+}
+
 export async function closeSubagent(agent, agentId) {
   return JSON.parse(await agentState(agent).raw.closeSubagent(JSON.stringify({ agentId })));
 }

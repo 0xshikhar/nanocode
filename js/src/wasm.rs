@@ -1530,6 +1530,8 @@ struct WasmSubagentsConfig {
     max_concurrency: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     continuation: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    spawn_policy: Option<nanocode_subagents::SpawnPolicy>,
 }
 
 #[derive(Deserialize)]
@@ -2102,6 +2104,9 @@ impl WasmNanocodex {
         let (factory, subagents) = if let Some(settings) = &config.subagents {
             let (registry, control, updates) =
                 nanocode_subagents::channel(settings.max_concurrency);
+            if let Some(policy) = &settings.spawn_policy {
+                registry.set_spawn_policy(policy.clone());
+            }
             if config.subagent_routing {
                 registry.set_spawn_router(Arc::new(JavaScriptSpawnRouter {
                     host_definition_id: config.host_definition_id,
@@ -2227,6 +2232,14 @@ impl WasmNanocodex {
             .ok_or_else(|| js_error("this agent was not created with the subagent extension"))?
             .close_subagent(self.inner.session_id(), task)
             .await
+    }
+
+    #[wasm_bindgen(js_name = setSubagentSpawnPolicy)]
+    pub fn set_subagent_spawn_policy(&self, policy: &str) -> Result<String, JsValue> {
+        self.subagents
+            .as_ref()
+            .ok_or_else(|| js_error("this agent was not created with the subagent extension"))?
+            .set_spawn_policy(self.inner.session_id(), policy)
     }
 
     pub fn prompt(
@@ -4223,6 +4236,13 @@ impl WasmSubagents {
             .await
             .map_err(js_error)?;
         serde_json::to_string(&WasmSubagentLifecycleReport { agents }).map_err(js_error)
+    }
+    pub fn set_spawn_policy(&self, session_id: &str, policy: &str) -> Result<String, JsValue> {
+        let policy = serde_json::from_str::<nanocode_subagents::SpawnPolicy>(policy)
+            .map_err(|error| js_error(format!("invalid subagent spawn policy: {error}")))?;
+        self.parent(session_id)?;
+        self.registry.set_spawn_policy(policy);
+        serde_json::to_string(&self.registry.spawn_policy()).map_err(js_error)
     }
     pub async fn close_subagent(&self, session_id: &str, task: &str) -> Result<String, JsValue> {
         let task = serde_json::from_str::<WasmSubagentTarget>(task)

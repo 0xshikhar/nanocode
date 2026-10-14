@@ -1,4 +1,4 @@
-import type { DefaultAgent, BackendName, BackendSelection, ModelSelection, Thinking } from "../types.mjs";
+import type { DefaultAgent, BackendModels, BackendName, BackendSelection, ModelSelection, Thinking } from "../types.mjs";
 
 
 type SubagentOwner = Omit<DefaultAgent, "extend"> | import("./claude.mjs").Agent;
@@ -12,11 +12,22 @@ export type Tool = Readonly<{
 
 export type Subagents = readonly [Tool];
 
+export type PolicyModel = BackendModels[BackendName] | ModelSelection;
+export type SpawnPolicy = Readonly<{
+  models?: readonly PolicyModel[] | null | undefined;
+  modelLadder?: readonly PolicyModel[] | undefined;
+  minThinking?: Thinking | null | undefined;
+  maxThinking?: Thinking | null | undefined;
+  boundedByParentThinking?: boolean | undefined;
+}>;
+
 export interface Options {
 
   maxConcurrency?: number | undefined;
 
   continuation?: boolean | undefined;
+
+  spawnPolicy?: SpawnPolicy | undefined;
 }
 
 export type AgentId = number;
@@ -30,6 +41,8 @@ export type AgentSummary = Readonly<{
   task: string;
   parent_agent_id: AgentId | null;
   status: AgentStatus;
+  model?: BackendModels[BackendName] | Readonly<{ backend: string; model: string }>;
+  thinking?: Thinking;
   last_output?: unknown;
   completion_revision?: number;
 }>;
@@ -113,5 +126,7 @@ export function send(agent: SubagentOwner, options: SendOptions): Promise<Messag
 export function interrupt(agent: SubagentOwner, agentId: AgentId): Promise<LifecycleReport>;
 
 export function close(agent: SubagentOwner, agentId: AgentId): Promise<LifecycleReport>;
+
+export function setSpawnPolicy(agent: SubagentOwner, policy: SpawnPolicy): Promise<SpawnPolicy>;
 
 export {};

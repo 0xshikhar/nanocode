@@ -460,6 +460,9 @@ impl WasmNanocodex {
                 .ok_or_else(|| js_error("subagents require hostDefinitionId"))?;
             let (registry, control, updates) =
                 nanocode_subagents::channel(settings.max_concurrency);
+            if let Some(policy) = &settings.spawn_policy {
+                registry.set_spawn_policy(policy.clone());
+            }
             if config.subagent_routing {
                 registry.set_spawn_router(Arc::new(JavaScriptSpawnRouter {
                     host_definition_id: host,

@@ -55,7 +55,7 @@ export type Options = Readonly<{
 
   codeEvaluator?: import('../types.mjs').CodeEvaluator;
 
-  subagents?: Readonly<{ maxConcurrency?: number; continuation?: boolean }>;
+  subagents?: Readonly<{ maxConcurrency?: number; continuation?: boolean; spawnPolicy?: import("./subagents.mjs").SpawnPolicy }>;
 
   harnesses?: Readonly<{ codex?: CodexHarnessOptions }>;
   auth: Auth;

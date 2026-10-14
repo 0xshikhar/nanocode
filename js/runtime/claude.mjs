@@ -5,6 +5,7 @@ import {
 } from '../internal.mjs';
 import { agentActions } from '../actions/index.mjs';
 import { prepareHarnesses } from './harnesses.mjs';
+import { spawnPolicyWire } from './spawn-policy.mjs';
 import { createClaudeHost } from './claude-host.mjs';
 
 const OPTION_KEYS = new Set([
@@ -22,7 +23,7 @@ export function toClaudeConfig(options = {}) {
   if (options.codeEvaluator !== undefined && typeof options.codeEvaluator !== 'function') throw new TypeError('Claude codeEvaluator must be a function');
   if (options.serverTools?.length || options.clientToolSearch) throw new TypeError('Claude does not expose provider or client search tools directly');
   if (options.harness !== undefined && options.harness !== 'claude') throw new TypeError('Claude requires harness claude');
-  if (options.subagents !== undefined && (!options.subagents || typeof options.subagents !== 'object' || Array.isArray(options.subagents) || Object.keys(options.subagents).some(key => key !== 'maxConcurrency' && key !== 'continuation') || (options.subagents.continuation !== undefined && typeof options.subagents.continuation !== 'boolean') || (options.subagents.maxConcurrency !== undefined && (!Number.isSafeInteger(options.subagents.maxConcurrency) || options.subagents.maxConcurrency < 1)))) throw new TypeError('subagents maxConcurrency must be positive');
+  if (options.subagents !== undefined && (!options.subagents || typeof options.subagents !== 'object' || Array.isArray(options.subagents) || Object.keys(options.subagents).some(key => key !== 'maxConcurrency' && key !== 'continuation' && key !== 'spawnPolicy') || (options.subagents.continuation !== undefined && typeof options.subagents.continuation !== 'boolean') || (options.subagents.maxConcurrency !== undefined && (!Number.isSafeInteger(options.subagents.maxConcurrency) || options.subagents.maxConcurrency < 1)))) throw new TypeError('subagents maxConcurrency must be positive');
   if (typeof options.model !== 'string' || !options.model.trim()) throw new TypeError('Claude model must be non-empty');
   if (options.fetch !== undefined && typeof options.fetch !== 'function') throw new TypeError('Claude fetch must be a function');
   if (options.compatibilityProfile !== undefined && options.compatibilityProfile !== 'subscription') throw new TypeError('unsupported Claude compatibilityProfile');
@@ -95,6 +96,7 @@ export async function createClaude(options, load, type, harnessDefaults) {
   if (options.subagents !== undefined) config.subagents = {
     ...(options.subagents.maxConcurrency === undefined ? {} : { max_concurrency: options.subagents.maxConcurrency }),
     ...(options.subagents.continuation === undefined ? {} : { continuation: options.subagents.continuation }),
+    ...(options.subagents.spawnPolicy === undefined ? {} : { spawn_policy: spawnPolicyWire(options.subagents.spawnPolicy) }),
   };
   options = undefined;
 

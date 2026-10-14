@@ -1,7 +1,8 @@
 use nanocode_agent::{ModelSelection, Thinking};
 use std::fmt;
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct SpawnPolicy {
     pub models: Option<Vec<ModelSelection>>,
     pub model_ladder: Vec<ModelSelection>,

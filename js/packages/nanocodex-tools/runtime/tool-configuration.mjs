@@ -34,10 +34,12 @@ export function resolveTools(configuration, { defaultSubagents = true } = {}) {
       if (configuredSubagents) throw new Error("Subagents.create() may only be included once");
       configuredSubagents = true;
       subagents = extension.maxConcurrency === undefined && extension.continuation === undefined
+          && extension.spawnPolicy === undefined
         ? DEFAULT_SUBAGENTS
         : Object.freeze({
           ...(extension.maxConcurrency === undefined ? {} : { max_concurrency: extension.maxConcurrency }),
           ...(extension.continuation === undefined ? {} : { continuation: extension.continuation }),
+          ...(extension.spawnPolicy === undefined ? {} : { spawn_policy: extension.spawnPolicy }),
         });
       continue;
     }
