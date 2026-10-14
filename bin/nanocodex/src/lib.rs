@@ -20,7 +20,7 @@ use futures_util::StreamExt;
 use nanocode::{
     ModelSelection, Origin, ServiceTier, Thinking,
     agent::events::AgentEventKind,
-    tools::attachment::{RunnerConfig, RunnerEndpoint, run_runner},
+    tools::attachment::{RunnerConfig, RunnerEndpoint, run_runner, run_runner_with_tools},
 };
 
 use crate::{
@@ -333,17 +333,33 @@ async fn runner(args: RunnerArgs) -> Result<()> {
         (None, Some(url)) => RunnerEndpoint::Connect(url),
         (None, None) => return Err("pass --listen <ADDR> or --connect <WS_URL>".into()),
     };
-    eprintln!(
-        "nanocodex runner {} serving {}",
-        args.name,
-        workspace.display()
-    );
-    run_runner(RunnerConfig {
+    let config = RunnerConfig {
         endpoint,
         token: args.token,
-        workspace,
-        name: args.name,
-    })
-    .await?;
+        workspace: workspace.clone(),
+        name: args.name.clone(),
+    };
+    if args.cua {
+        let computer =
+            nanocode::ComputerTools::connect(nanocode::ComputerConfig::installed()?).await?;
+        let tools = nanocode::Tools::builder()
+            .without_defaults()
+            .tool(computer.js())
+            .tool(computer.reset())
+            .build()?;
+        eprintln!(
+            "nanocodex runner {} serving {} with computer use",
+            args.name,
+            workspace.display()
+        );
+        run_runner_with_tools(config, tools).await?;
+    } else {
+        eprintln!(
+            "nanocodex runner {} serving {}",
+            args.name,
+            workspace.display()
+        );
+        run_runner(config).await?;
+    }
     Ok(())
 }

@@ -190,6 +190,121 @@ pub struct SessionSnapshot {
 #[serde(transparent)]
 pub struct SessionSnapshotHead(SessionSnapshot);
 
+fn content_text(content: &[crate::client::ContentItem]) -> String {
+    content
+        .iter()
+        .map(|item| match item {
+            crate::client::ContentItem::InputText { text }
+            | crate::client::ContentItem::OutputText { text, .. } => text.to_string(),
+            crate::client::ContentItem::InputImage { .. }
+            | crate::client::ContentItem::InputImageFile { .. } => "[image]".to_owned(),
+            crate::client::ContentItem::InputAudio { .. } => "[audio]".to_owned(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn output_text(output: &crate::client::FunctionOutputBody) -> String {
+    match output {
+        crate::client::FunctionOutputBody::Text(text) => text.to_string(),
+        crate::client::FunctionOutputBody::Content(items) => items
+            .iter()
+            .map(|item| match item {
+                crate::client::FunctionOutputContent::InputText { text } => text.to_string(),
+                crate::client::FunctionOutputContent::InputImage { .. }
+                | crate::client::FunctionOutputContent::InputImageFile { .. } => {
+                    "[image]".to_owned()
+                }
+                crate::client::FunctionOutputContent::InputAudio { .. } => "[audio]".to_owned(),
+                crate::client::FunctionOutputContent::EncryptedContent { .. } => {
+                    "[encrypted content]".to_owned()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    }
+}
+
+fn harness_context(text: &str) -> bool {
+    let text = text.trim_start();
+    text.starts_with("<environment_context>") || text.starts_with("# AGENTS.md instructions")
+}
+
+impl SessionSnapshot {
+    pub(crate) fn transcript(&self) -> Vec<crate::input::PromptMessage> {
+        use crate::client::{MessageRole, ResponseItem};
+        let mut transcript = nanocode_agent::backend::TranscriptBuilder::default();
+        let mut tools = std::collections::HashMap::<&str, &str>::new();
+        for item in &self.history {
+            match item {
+                ResponseItem::Message { role, content, .. } => {
+                    let text = content_text(content);
+                    match role {
+                        MessageRole::User if !harness_context(&text) => transcript.user(&text),
+                        MessageRole::Assistant => transcript.assistant(&text),
+                        MessageRole::User | MessageRole::Developer => {}
+                    }
+                }
+                ResponseItem::FunctionCall {
+                    name,
+                    arguments,
+                    call_id,
+                    ..
+                } => {
+                    tools.insert(call_id, name);
+                    transcript.tool_call(name, arguments);
+                }
+                ResponseItem::CustomToolCall {
+                    name,
+                    input,
+                    call_id,
+                    ..
+                } => {
+                    tools.insert(call_id, name);
+                    transcript.tool_call(name, input);
+                }
+                ResponseItem::FunctionCallOutput {
+                    call_id, output, ..
+                }
+                | ResponseItem::CustomToolCallOutput {
+                    call_id, output, ..
+                } => transcript.tool_result(
+                    tools.get(call_id.as_ref()).copied().unwrap_or(call_id),
+                    &output_text(output),
+                ),
+                ResponseItem::LocalShellCall { action, .. } => transcript.tool_call(
+                    "local_shell",
+                    &serde_json::to_string(action).unwrap_or_default(),
+                ),
+                ResponseItem::WebSearchCall { action, .. } => transcript.tool_call(
+                    "web_search",
+                    &serde_json::to_string(action).unwrap_or_default(),
+                ),
+                ResponseItem::ImageGenerationCall { revised_prompt, .. } => {
+                    transcript.assistant(&format!(
+                        "[Generated an image: {}]",
+                        revised_prompt.as_deref().unwrap_or_default()
+                    ));
+                }
+                ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. } => {
+                    transcript.user(
+                        "[Earlier conversation was compacted by the previous model; its summary is not readable here.]",
+                    );
+                }
+                ResponseItem::AdditionalTools { .. }
+                | ResponseItem::AgentMessage { .. }
+                | ResponseItem::Reasoning { .. }
+                | ResponseItem::ToolSearchCall { .. }
+                | ResponseItem::ToolSearchOutput { .. }
+                | ResponseItem::CompactionTrigger {}
+                | ResponseItem::ConfigurationUpdate { .. }
+                | ResponseItem::Other(_) => {}
+            }
+        }
+        transcript.finish()
+    }
+}
+
 impl SessionSnapshotHead {
     #[must_use]
     pub fn with_context(

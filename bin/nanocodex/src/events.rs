@@ -33,7 +33,6 @@ fn completion_agent(text: &str) -> Option<&str> {
         .map(|(agent, _)| agent)
 }
 
-pub const HANDOFF_END: &str = "\n\n[current message from the user]\n";
 
 pub enum Accepted {
     Prompt { request_id: Option<String> },

@@ -844,6 +844,61 @@ impl Nanocodex {
         .await
     }
 
+    pub async fn switch(
+        &self,
+        agent: &Agent,
+        model: ModelSelection,
+        thinking: Option<Thinking>,
+    ) -> AgentResult {
+        model.validate()?;
+        let thinking = thinking.unwrap_or_else(|| model.default_thinking());
+        model
+            .capabilities(ModelTransport::Native)
+            .check_thinking(thinking)?;
+        self.inner.recipe(model.family())?;
+        let transcript = agent.transcript().await?;
+        let durable_state = match &self.inner.durability {
+            Some(store) => {
+                let parent = agent.session_id();
+                let (lineage, workspace) = match store.load(parent).await {
+                    Ok(stored) => (stored.summary.record.lineage, stored.summary.record.workspace),
+                    Err(crate::durability::Error::SessionNotFound { .. }) => {
+                        (crate::Lineage::root(parent), None)
+                    }
+                    Err(error) => return Err(catalog_error(error)),
+                };
+                let record = crate::durability::SessionRecord::root(
+                    uuid::Uuid::now_v7().to_string(),
+                    model.clone(),
+                    workspace,
+                )
+                .with_lineage(crate::Lineage::child_of(
+                    &lineage,
+                    parent,
+                    crate::Origin::Fork,
+                ));
+                Some(store.session(record).await.map_err(catalog_error)?)
+            }
+            None => None,
+        };
+        let (switched, events) = self
+            .construct(AgentSpec {
+                parent: None,
+                options: SpawnOptions::new()
+                    .harness_model(model.clone())
+                    .thinking(thinking),
+                model,
+                thinking,
+                settings: Settings::default(),
+                spawn_factory: self.spawn_factory(),
+                host_context: None,
+                checkpoint: None,
+                durable_state,
+            })
+            .await?;
+        Ok((switched.with_transcript(transcript)?, events))
+    }
+
     pub async fn shutdown(&self) -> Result<()> {
         self.inner.ownership.shutdown().await
     }

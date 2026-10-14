@@ -2,8 +2,79 @@ use super::{
     Cancellation, ContentBlock, CostStatus, Message, NanocodexError, ReportedTurnUsage,
     ResponseContext, Result, Role, State, TurnUsage, provider_error,
 };
-use nanocode_agent::{SideAnswer, backend::side_question_prompt};
-use std::sync::Arc;
+use crate::ToolResultContent;
+use nanocode_agent::{
+    SideAnswer,
+    backend::{TranscriptBuilder, side_question_prompt},
+    input::PromptMessage,
+};
+use serde_json::Value;
+use std::{collections::HashMap, sync::Arc};
+
+fn tool_result_text(content: &ToolResultContent) -> String {
+    match content {
+        ToolResultContent::Text(text) => text.clone(),
+        ToolResultContent::Blocks(blocks) => blocks
+            .iter()
+            .map(|block| match block.get("type").and_then(Value::as_str) {
+                Some("text") => block
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+                Some("image") => "[image]".to_owned(),
+                _ => block.to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    }
+}
+
+pub(super) fn claude_transcript(messages: &[Message]) -> Vec<PromptMessage> {
+    let mut transcript = TranscriptBuilder::default();
+    let mut tools = HashMap::new();
+    for message in messages {
+        for block in &message.content {
+            match block {
+                ContentBlock::Text { text, .. } => match message.role {
+                    Role::User => transcript.user(text),
+                    Role::Assistant => transcript.assistant(text),
+                },
+                ContentBlock::ToolUse {
+                    id, name, input, ..
+                } => {
+                    tools.insert(id.clone(), name.clone());
+                    transcript.tool_call(name, &input.to_string());
+                }
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    content,
+                    ..
+                } => transcript.tool_result(
+                    tools.get(tool_use_id).map_or(tool_use_id.as_str(), String::as_str),
+                    &tool_result_text(content),
+                ),
+                ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => {}
+                ContentBlock::Image { .. } => match message.role {
+                    Role::User => transcript.user("[image]"),
+                    Role::Assistant => transcript.assistant("[image]"),
+                },
+                ContentBlock::Document { .. } => match message.role {
+                    Role::User => transcript.user("[document]"),
+                    Role::Assistant => transcript.assistant("[document]"),
+                },
+                other => {
+                    let rendered = serde_json::to_string(other).unwrap_or_default();
+                    match message.role {
+                        Role::User => transcript.user(&rendered),
+                        Role::Assistant => transcript.assistant(&rendered),
+                    }
+                }
+            }
+        }
+    }
+    transcript.finish()
+}
 
 const RUNNING_TOOL_RESULT: &str =
     "This tool call is still running in the main conversation; its result is not available yet.";
@@ -48,6 +119,14 @@ fn side_messages(mut messages: Vec<Message>, question: &str) -> Vec<Message> {
 }
 
 impl State {
+    pub(super) async fn transcript(&self) -> Result<Vec<PromptMessage>> {
+        if self.stopped.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(NanocodexError::AgentStopped);
+        }
+        let snapshot = self.latest_boundary().await?;
+        Ok(claude_transcript(&snapshot.conversation.packed_messages()))
+    }
+
     pub(super) fn publish_side_view(&self, messages: Option<Vec<Message>>) {
         *self.side_view.write().expect("side view lock poisoned") = messages.map(Arc::new);
     }

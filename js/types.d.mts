@@ -454,6 +454,11 @@ export type TurnUsage = Readonly<{
   cost_status: CostStatus;
 }>;
 
+export type TranscriptMessage = Readonly<{
+  role: "user" | "assistant";
+  content: string;
+}>;
+
 export type SideAnswer = Readonly<{
   text: string;
   usage: TurnUsage | null;
@@ -503,6 +508,7 @@ export type AgentActions<B extends BackendName = never> = {
     compact(): Promise<void>;
     context(): Promise<AgentSessionContext>;
     sideQuestion(question: string): Promise<SideAnswer>;
+    transcript(): Promise<readonly TranscriptMessage[]>;
     fork(options?: ForkOptions): Promise<DefaultAgent<B>>;
 
     setModel(model: BackendModels[B]): Promise<void>;

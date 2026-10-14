@@ -6165,6 +6165,10 @@ impl LifecycleBackend for Driver {
         let state = self.state.clone();
         Box::pin(async move { state.side_question(question).await })
     }
+    fn transcript(&self) -> BackendFuture<Result<Vec<nanocode_agent::input::PromptMessage>>> {
+        let state = self.state.clone();
+        Box::pin(async move { state.transcript().await })
+    }
     fn spawn(&self, options: SpawnOptions) -> BackendFuture<Result<(Nanocodex, AgentEvents)>> {
         let handle = self.handle.clone();
         Box::pin(async move { handle.spawn_with(options).await })

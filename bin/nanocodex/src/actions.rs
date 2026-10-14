@@ -92,11 +92,7 @@ impl App {
             return;
         }
         let reopen = rebuild && !model_changed && self.host.config.store.is_some() && started;
-        let handoff = if reopen || !started {
-            String::new()
-        } else {
-            self.handoff()
-        };
+        let carry = !reopen && started;
         let config = self.host.config.clone();
         let old_host = self.host.clone();
         let previous_model = self.model.clone();
@@ -127,13 +123,29 @@ impl App {
                     return Ok::<_, crate::host::Error>(ready);
                 }
                 let (next, events) = host.start(&model, thinking).await?;
+                let next = if carry {
+                    let seeded = async {
+                        let transcript = agent.transcript().await?;
+                        next.clone().with_transcript(transcript)
+                    }
+                    .await;
+                    match seeded {
+                        Ok(seeded) => seeded,
+                        Err(error) => {
+                            drop(next.shutdown().await);
+                            return Err(error.into());
+                        }
+                    }
+                } else {
+                    next
+                };
                 if let Err(error) = apply_tier(&next, &model, tier).await {
                     drop(next.shutdown().await);
                     return Err(error);
                 }
                 drop(agent.flush().await);
                 drop(agent.shutdown().await);
-                let carried = if handoff.is_empty() {
+                let carried = if !carry {
                     String::new()
                 } else {
                     format!("; conversation carried over, previous session {session_id} kept")
@@ -154,7 +166,6 @@ impl App {
                     host: rebuild.then_some(host),
                     history: None,
                     reset_transcript: false,
-                    handoff: (!handoff.is_empty()).then_some(handoff),
                 })
             };
             let event = match ready.await {
@@ -168,29 +179,6 @@ impl App {
             };
             drop(tx.send(event));
         });
-    }
-
-    fn handoff(&self) -> String {
-        let mut conversation = String::new();
-        for index in 0..self.transcript.len() {
-            match self.transcript.get(index) {
-                Some(CellKind::User(text)) => {
-                    conversation.push_str("\n\n[user]\n");
-                    conversation.push_str(text);
-                }
-                Some(CellKind::Assistant(text)) => {
-                    conversation.push_str("\n\n[assistant]\n");
-                    conversation.push_str(text);
-                }
-                _ => {}
-            }
-        }
-        if conversation.is_empty() {
-            return conversation;
-        }
-        format!(
-            "[context] The user switched models mid-conversation. This is the conversation so far with the previous model (tool calls omitted); continue from it.{conversation}"
-        )
     }
 
     pub(crate) fn btw(&mut self, question: String) {
@@ -451,7 +439,6 @@ impl App {
                     host: None,
                     history: None,
                     reset_transcript: true,
-                    handoff: None,
                 })
             };
             let event = match ready.await {

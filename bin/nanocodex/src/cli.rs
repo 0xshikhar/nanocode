@@ -123,6 +123,9 @@ pub struct RunnerArgs {
 
     #[arg(long, default_value = "runner")]
     pub name: String,
+
+    #[arg(long)]
+    pub cua: bool,
 }
 
 #[derive(Clone, Debug, Args)]

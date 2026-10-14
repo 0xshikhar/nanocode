@@ -9,6 +9,7 @@ import {
   releaseAgentSession,
   reportError,
   reserveAgentSession,
+  seedTranscript,
 } from "../internal.mjs";
 import { resolveResponsesTransport } from "../runtime/responses-transport.mjs";
 import { utf8ByteLength } from "../runtime/utf8.mjs";
@@ -605,6 +606,8 @@ async function dispatch(message, state) {
   if (method === "agent.compact") return agent.session.compact();
   if (method === "agent.context") return agent.session.context();
   if (method === "agent.sideQuestion") return agent.session.sideQuestion(args[1]);
+  if (method === "agent.transcript") return agent.session.transcript();
+  if (method === "agent.seedTranscript") return seedTranscript(agent, args[1]);
   if (method === "agent.setModel") return agent.session.setModel(args[1]);
   if (method === "agent.setThinking") return agent.session.setThinking(args[1]);
   if (method === "agent.setFastMode") return agent.session.setFastMode(args[1]);
@@ -803,6 +806,8 @@ class WorkerConnection {
       compact: () => connection.rpc("agent.compact", [handleId]),
       context: async () => JSON.stringify(await connection.rpc("agent.context", [handleId])),
       sideQuestion: async (question) => JSON.stringify(await connection.rpc("agent.sideQuestion", [handleId, question])),
+      transcript: async () => JSON.stringify(await connection.rpc("agent.transcript", [handleId])),
+      seedTranscript: (messages) => connection.rpc("agent.seedTranscript", [handleId, JSON.parse(messages)]),
       setModel: (value) => connection.rpc("agent.setModel", [handleId, value]),
       setThinking: (value) => connection.rpc("agent.setThinking", [handleId, value]),
       setFastMode: (value) => connection.rpc("agent.setFastMode", [handleId, value]),

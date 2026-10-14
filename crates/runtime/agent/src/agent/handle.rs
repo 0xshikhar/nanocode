@@ -450,7 +450,8 @@ impl Nanocodex {
         let (events, event_stream) = self.events.mirrored_channel();
         let turn_id = uuid::Uuid::now_v7().to_string();
         let events = events.with_turn_id(turn_id.clone());
-        match self
+        let (prompt, seed) = self.take_seed(prompt);
+        let routed = self
             .backend
             .route(BackendPrompt {
                 key,
@@ -459,8 +460,11 @@ impl Nanocodex {
                 cancel_on_admission: false,
                 events,
             })
-            .await
-        {
+            .await;
+        if routed.is_err() {
+            self.restore_seed(seed);
+        }
+        match routed {
             Ok(BackendPromptRoute::Started(BackendTurn { request_id, result })) => {
                 let turn_id = self.canonical_turn_id(turn_id, request_id.as_deref());
                 Ok(PromptRoute::Started(Turn {

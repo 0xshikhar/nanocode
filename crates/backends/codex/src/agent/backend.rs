@@ -334,6 +334,21 @@ impl LifecycleBackend for LocalLifecycle {
         })
     }
 
+    fn transcript(&self) -> BackendFuture<Result<Vec<crate::input::PromptMessage>>> {
+        let commands = self.commands.clone();
+        let shutdown = self.shutdown.clone();
+        Box::pin(async move {
+            let state =
+                request_command(&commands, &shutdown, |result| Command::ChildSnapshot { result })
+                    .await?;
+            Ok(state
+                .conversation
+                .as_ref()
+                .map(crate::session::SessionSnapshot::transcript)
+                .unwrap_or_default())
+        })
+    }
+
     fn side_question(&self, question: String) -> BackendFuture<Result<nanocode_agent::SideAnswer>> {
         let commands = self.commands.clone();
         let shutdown = self.shutdown.clone();

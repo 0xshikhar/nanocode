@@ -6,7 +6,9 @@ import {
   createSessionId,
   observeAgentRelease,
   retainAgentForOwner,
+  seedTranscript,
   shutdownOwnedAgent,
+  transcript as agentTranscript,
 } from "../internal.mjs";
 import { createMemoryDurabilityStore } from "./durability-store.mjs";
 import { claudeTransportOptions, isClaudeTransport } from "./claude-transport.mjs";
@@ -561,6 +563,18 @@ function createRuntime(config, catalog, defaults, platform) {
       instructions: settings.instructions, resume: checkpoint });
   }
 
+  async function switchAgent(agent, options) {
+    const messages = await agentTranscript(agent);
+    const next = await spawn(options);
+    try {
+      seedTranscript(next, messages);
+    } catch (error) {
+      await shutdownOwnedAgent(next).catch(() => {});
+      throw error;
+    }
+    return next;
+  }
+
   function shutdown() {
     return closing ??= (async () => {
       await Promise.allSettled([...admissions]);
@@ -578,6 +592,7 @@ function createRuntime(config, catalog, defaults, platform) {
     spawn,
     forBackend,
     resume,
+    switch: switchAgent,
     shutdown,
   });
 }

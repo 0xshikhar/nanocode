@@ -11,6 +11,7 @@ import type {
   SessionInfo,
   SessionPersistence,
   SideAnswer,
+  TranscriptMessage,
   ServiceTier,
   Thinking,
 } from "../types.mjs";
@@ -62,6 +63,8 @@ export function compact(agent: Agent<object>): Promise<void>;
 export function context(agent: Agent<object>): Promise<AgentSessionContext>;
 
 export function sideQuestion(agent: Agent<object>, question: string): Promise<SideAnswer>;
+
+export function transcript(agent: Agent<object>): Promise<readonly TranscriptMessage[]>;
 
 
 

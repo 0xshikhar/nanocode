@@ -2353,6 +2353,21 @@ impl WasmNanocodex {
         serialize_session_context(self.inner.context().await.map_err(js_agent_error)?)
     }
 
+    pub async fn transcript(&self) -> Result<String, JsValue> {
+        serde_json::to_string(&self.inner.transcript().await.map_err(js_agent_error)?)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = seedTranscript)]
+    pub fn seed_transcript(&self, transcript: &str) -> Result<(), JsValue> {
+        let transcript = serde_json::from_str(transcript).map_err(js_error)?;
+        self.inner
+            .clone()
+            .with_transcript(transcript)
+            .map(drop)
+            .map_err(js_agent_error)
+    }
+
     #[wasm_bindgen(js_name = sideQuestion)]
     pub async fn side_question(&self, question: &str) -> Result<String, JsValue> {
         let answer = self

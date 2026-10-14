@@ -63,6 +63,7 @@ export type {
   SessionPersistence,
   ServiceTier,
   SideAnswer,
+  TranscriptMessage,
   SubscriptionCommitRequest,
   SubscriptionCommitResult,
   SubscriptionRevision,

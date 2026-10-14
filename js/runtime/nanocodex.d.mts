@@ -1,4 +1,5 @@
 import type {
+  Agent,
   BeforeCompactionRequest,
   CodeEffectJournal,
   CodeEvaluator,
@@ -112,6 +113,8 @@ export type Runtime = Readonly<{
   forBackend<B extends BackendName>(backend: B): BackendRuntime<B>;
 
   resume(checkpoint: SessionCheckpoint, options?: ResumeOptions): Promise<DefaultAgent>;
+
+  switch<B extends BackendName>(agent: Agent<object>, options: SpawnOptions<B>): Promise<DefaultAgent<B>>;
 
   shutdown(): Promise<void>;
 }>;

@@ -128,6 +128,9 @@ impl LifecycleBackend for Owned {
     fn side_question(&self, question: String) -> BackendFuture<Result<crate::SideAnswer>> {
         self.inner.side_question(question)
     }
+    fn transcript(&self) -> BackendFuture<Result<Vec<nanocode_types::PromptMessage>>> {
+        self.inner.transcript()
+    }
     fn checkpoint(&self) -> BackendFuture<Result<SessionCheckpoint>> {
         self.inner.checkpoint()
     }

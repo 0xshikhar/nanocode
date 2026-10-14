@@ -91,7 +91,6 @@ pub struct Ready {
     pub history: Option<Vec<TranscriptItem>>,
     pub notice: String,
     pub reset_transcript: bool,
-    pub handoff: Option<String>,
 }
 
 pub enum TurnState {
@@ -151,8 +150,6 @@ pub struct App {
     pub spinner: Spinner,
     pub(crate) pending_pro: Option<bool>,
     toggle_mouse: bool,
-    handoff: Option<String>,
-    inflight_handoff: Option<String>,
     awaiting_terminal: bool,
     pub(crate) session_started: bool,
     pub(crate) tx: UnboundedSender<AppEvent>,
@@ -199,8 +196,6 @@ pub async fn run(launch: Launch, mut terminal: TerminalSession) -> Result<()> {
         spinner: Spinner::new(Instant::now(), SPINNER_FRAME),
         pending_pro: None,
         toggle_mouse: false,
-        handoff: None,
-        inflight_handoff: None,
         awaiting_terminal: false,
         session_started: false,
         tx,
@@ -362,7 +357,6 @@ impl App {
                             host: None,
                             history: None,
                             reset_transcript: false,
-                            handoff: None,
                         })
                     }
                 }
@@ -395,7 +389,6 @@ impl App {
                     _ => Instant::now(),
                 };
                 self.turn = TurnState::Running { control, since };
-                self.inflight_handoff = None;
                 self.flush_pending_steers();
                 true
             }
@@ -424,9 +417,6 @@ impl App {
                     return false;
                 }
                 self.turn = TurnState::Idle;
-                if self.handoff.is_none() {
-                    self.handoff = self.inflight_handoff.take();
-                }
                 let steers = self.queue.drain_kind(QueueKind::Steer);
                 if let Some(item) = self
                     .queue
@@ -569,8 +559,6 @@ impl App {
             }
         });
         self.agent = Some(ready.agent);
-        self.handoff = ready.handoff;
-        self.inflight_handoff = None;
         self.notice(NoticeLevel::Info, ready.notice);
         self.after_turn();
     }
@@ -688,14 +676,7 @@ impl App {
         self.transcript.scroll_to_bottom();
         let generation = self.generation;
         let tx = self.tx.clone();
-        let sent = match self.handoff.take() {
-            Some(handoff) => {
-                let sent = format!("{handoff}{}{text}", crate::events::HANDOFF_END);
-                self.inflight_handoff = Some(handoff);
-                sent
-            }
-            None => text.clone(),
-        };
+        let sent = text.clone();
         tokio::spawn(async move {
             match agent
                 .prompt(PromptRequest::new(sent.as_str()).request_id(id))
@@ -1337,7 +1318,6 @@ pub async fn open_session(host: &Host, session_id: &str, tier: ServiceTier) -> R
         host: None,
         history: Some(stored.transcript),
         reset_transcript: true,
-        handoff: None,
     })
 }
 

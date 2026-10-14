@@ -359,6 +359,14 @@ export async function checkpoint(agent) {
   return freezeJson(JSON.parse(await agentState(agent).raw.checkpoint()));
 }
 
+export async function transcript(agent) {
+  return JSON.parse(await agentState(agent).raw.transcript());
+}
+
+export function seedTranscript(agent, messages) {
+  return agentState(agent).raw.seedTranscript(JSON.stringify(messages));
+}
+
 export async function sideQuestion(agent, question) {
   return JSON.parse(await agentState(agent).raw.sideQuestion(question));
 }
