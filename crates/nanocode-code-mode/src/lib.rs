@@ -1,4 +1,3 @@
-#![cfg_attr(feature = "native", doc = include_str!("../README.md"))]
 #![cfg_attr(
     all(not(feature = "native"), feature = "workspace-runtime"),
     doc = include_str!("../WORKSPACE_RUNTIME.md")

@@ -1,4 +1,3 @@
-#![cfg_attr(feature = "client", doc = include_str!("../README.md"))]
 #![cfg_attr(not(feature = "client"), doc = include_str!("../CONTRACTS.md"))]
 #![deny(missing_docs, rustdoc::broken_intra_doc_links)]
 #![cfg_attr(docsrs, feature(doc_cfg))]

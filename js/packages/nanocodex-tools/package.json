@@ -102,8 +102,7 @@
   "files": [
     "dist",
     "runtime",
-    "tools",
-    "README.md"
+    "tools"
   ],
   "publishConfig": {
     "access": "public",

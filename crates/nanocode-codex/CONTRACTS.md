@@ -7,7 +7,7 @@ This is the crate documentation produced when the default `client` feature is
 disabled. It contains no authentication, managed session, Tower service,
 network transport, telemetry, or pricing implementation. Normal applications
 should use the default features and the complete client API documented in the
-package README.
+public API documentation.
 
 [`Prompt`], [`Thinking`], [`ReasoningMode`], and [`ImageDetail`] define shared
 input policy. [`responses`] contains provider response events, items, content,

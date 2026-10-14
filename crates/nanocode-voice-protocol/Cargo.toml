@@ -1,5 +1,4 @@
 [package]
-readme = "README.md"
 name = "nanocode-voice-protocol"
 version.workspace = true
 edition.workspace = true

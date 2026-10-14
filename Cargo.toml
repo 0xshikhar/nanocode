@@ -29,7 +29,6 @@ authors = ["Nanocodex Contributors"]
 license = "MIT OR Apache-2.0"
 homepage = "https://github.com/gakonst/nanocodex"
 repository = "https://github.com/gakonst/nanocodex"
-readme = "README.md"
 keywords = ["ai", "agents", "openai", "sdk", "websocket"]
 categories = ["api-bindings", "asynchronous", "development-tools"]
 publish = true

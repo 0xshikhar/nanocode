@@ -1,5 +1,4 @@
 [package]
-readme = "README.md"
 name = "nanocode-hand"
 version.workspace = true
 edition.workspace = true

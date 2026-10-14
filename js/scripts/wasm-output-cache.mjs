@@ -95,7 +95,7 @@ async function inputFiles(repository) {
     if (skipStandaloneTests) for (const name of ["tests", "benches"]) omittedTestDirectories.add(resolve(directory, name));
     if (directory === resolve(repository, "js") && !buildScript) {
       for (const path of await walk(resolve(directory, "src"))) files.add(path);
-      for (const name of ["build.rs", "README.md"]) {
+      for (const name of ["build.rs"]) {
         try { await readFile(resolve(directory, name)); files.add(resolve(directory, name)); }
         catch (error) { if (error.code !== "ENOENT") throw error; }
       }
