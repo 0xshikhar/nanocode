@@ -262,7 +262,8 @@ mod store {
                     portable.turn_id().map(str::to_owned),
                     portable.has_conversation(),
                     portable.payload().clone(),
-                );
+                )
+                .with_service_tier(portable.service_tier());
                 rebound
                     .validate()
                     .map_err(|error| Error::InvalidState(error.to_string()))?;

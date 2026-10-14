@@ -2,7 +2,9 @@ use std::{any::Any, fmt, sync::Arc};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{HarnessFamily, ModelSelection, NanocodexError, Result, Thinking, TurnResult};
+use crate::{
+    HarnessFamily, ModelSelection, NanocodexError, Result, ServiceTier, Thinking, TurnResult,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -98,6 +100,8 @@ pub struct SessionCheckpoint {
     session_id: String,
     model: ModelSelection,
     thinking: Thinking,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    service_tier: Option<ServiceTier>,
     lineage: Lineage,
 
     conversation_id: String,
@@ -125,6 +129,7 @@ impl SessionCheckpoint {
             session_id: session_id.into(),
             model,
             thinking,
+            service_tier: None,
             lineage,
             conversation_id: conversation_id.into(),
             turn_id,
@@ -208,6 +213,11 @@ impl SessionCheckpoint {
     }
 
     #[must_use]
+    pub const fn service_tier(&self) -> Option<ServiceTier> {
+        self.service_tier
+    }
+
+    #[must_use]
     pub const fn lineage(&self) -> &Lineage {
         &self.lineage
     }
@@ -254,6 +264,13 @@ impl SessionCheckpoint {
         self
     }
 
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn with_service_tier(mut self, service_tier: Option<ServiceTier>) -> Self {
+        self.service_tier = service_tier;
+        self
+    }
+
     pub fn require_family(&self, family: HarnessFamily) -> Result<()> {
         if self.family() == family {
             Ok(())
@@ -272,6 +289,7 @@ impl fmt::Debug for SessionCheckpoint {
             .debug_struct("SessionCheckpoint")
             .field("session_id", &self.session_id)
             .field("model", &self.model)
+            .field("service_tier", &self.service_tier)
             .field("lineage", &self.lineage)
             .field("turn_id", &self.turn_id)
             .field("has_conversation", &self.has_conversation)

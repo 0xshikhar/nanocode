@@ -3265,7 +3265,10 @@ impl ClaudeBoundary {
             None,
             self.snapshot.has_conversation(),
             payload,
-        ))
+        )
+        .with_service_tier(Some(nanocode_agent::ServiceTier::from_fast_mode(
+            self.policy.fast_mode,
+        ))))
     }
 }
 

@@ -9,7 +9,7 @@ use futures_util::StreamExt;
 use nanocode::{
     AgentStatus, HarnessFamily, ModelSelection, PromptRequest, PromptRoute, Runner, RunnerEvent,
     RunnerInfo, RunnerServer, RunnerServerConfig, RunnerStatus, ScopedAgentUpdate, ServiceTier,
-    Thinking, TurnControl, TurnResult,
+    SessionCheckpoint, Thinking, TurnControl, TurnResult,
     agent::{
         Agent, AgentEvents,
         events::{AgentEvent, AgentEventKind},
@@ -584,8 +584,7 @@ impl App {
             let ready = async {
                 match resume {
                     Some(session_id) => {
-                        open_session(&host, &session_id, tier, thinking_override, tier_override)
-                            .await
+                        open_session(&host, &session_id, thinking_override, tier_override).await
                     }
                     None => {
                         let (agent, events) = host.start(&model, thinking).await?;
@@ -1981,7 +1980,6 @@ pub async fn apply_tier(agent: &Agent, model: &ModelSelection, tier: ServiceTier
 pub async fn open_session(
     host: &Host,
     session_id: &str,
-    tier: ServiceTier,
     thinking_override: Option<Thinking>,
     tier_override: Option<ServiceTier>,
 ) -> Result<Ready> {
@@ -1992,9 +1990,18 @@ pub async fn open_session(
         .ok_or("resume requires durability; remove --ephemeral")?;
     let stored = store.load(session_id).await?;
     let model = stored.summary.record.model.clone();
-    let checkpoint_thinking = stored
-        .session_checkpoint()?
-        .map(|checkpoint| checkpoint.thinking());
+    let checkpoint = stored.session_checkpoint()?;
+    let checkpoint_thinking = checkpoint.as_ref().map(SessionCheckpoint::thinking);
+    let recorded_tier = checkpoint
+        .as_ref()
+        .and_then(SessionCheckpoint::service_tier)
+        .or_else(|| {
+            stored
+                .summary
+                .record
+                .initial
+                .map(|initial| initial.service_tier)
+        });
     let opened_thinking = checkpoint_thinking.unwrap_or_else(|| model.default_thinking());
     let thinking = thinking_override
         .or(checkpoint_thinking)
@@ -2035,11 +2042,16 @@ pub async fn open_session(
     if thinking != opened_thinking {
         agent.set_thinking(thinking).await?;
     }
-    let tier = tier_override.unwrap_or(tier);
-    model
-        .capabilities(nanocode::ModelTransport::Native)
-        .check_service_tier(tier)?;
-    apply_tier(&agent, &model, tier).await?;
+    let tier = match tier_override {
+        Some(tier) => {
+            model
+                .capabilities(nanocode::ModelTransport::Native)
+                .check_service_tier(tier)?;
+            apply_tier(&agent, &model, tier).await?;
+            tier
+        }
+        None => recorded_tier.unwrap_or_default(),
+    };
     Ok(Ready {
         notice: format!("resumed session {session_id} · {model} · thinking {thinking}"),
         agent,

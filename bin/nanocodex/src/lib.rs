@@ -292,42 +292,42 @@ async fn exec(args: SessionArgs) -> Result<()> {
         .ok_or("exec requires a prompt")?;
     let prepared = prepare(&args, &mut |message| eprintln!("nanocodex: {message}")).await?;
     let host = prepared.host;
-    let (agent, mut events) = match (&args.resume, args.continue_last) {
-        (Some(id), _) if !id.is_empty() => host.open(id).await?,
-        (_, true) => host.open(&latest_session(&host).await?).await?,
-        _ => host.start(&prepared.model, prepared.thinking).await?,
+    let resume = match (&args.resume, args.continue_last) {
+        (Some(id), _) if !id.is_empty() => Some(id.clone()),
+        (_, true) => Some(latest_session(&host).await?),
+        _ => None,
     };
-    app::apply_tier(&agent, &prepared.model, prepared.tier).await?;
+    let (agent, mut events, pending) = match resume {
+        Some(id) => {
+            let ready = app::open_session(
+                &host,
+                &id,
+                args.thinking
+                    .as_deref()
+                    .map(host::parse_thinking)
+                    .transpose()?,
+                args.tier.as_deref().map(host::parse_tier).transpose()?,
+            )
+            .await?;
+            (ready.agent, ready.events, ready.pending)
+        }
+        None => {
+            let (agent, events) = host.start(&prepared.model, prepared.thinking).await?;
+            app::apply_tier(&agent, &prepared.model, prepared.tier).await?;
+            (agent, events, Vec::new())
+        }
+    };
     if let Some(reason) = host.runtime.computer_use_unavailable() {
         eprintln!("nanocodex: computer use unavailable, continuing without it: {reason}");
     }
     tokio::spawn(async move { while events.recv().await.is_some() {} });
-    if let Some(store) = &host.config.store {
-        let stored = store.load(agent.session_id()).await?;
-        for pending in stored
-            .turns
-            .iter()
-            .filter(|turn| turn.status == nanocode::durability::TurnStatus::Pending)
-        {
-            let input = pending
-                .input
-                .get("prompt")
-                .unwrap_or(&pending.input)
-                .clone();
-            let saved_prompt = serde_json::from_value::<nanocode::agent::input::Prompt>(input)
-                .map_err(|error| {
-                    format!(
-                        "pending turn {} has an unreadable prompt: {error}",
-                        pending.id
-                    )
-                })?;
-            eprintln!("nanocodex: resuming interrupted turn {}", pending.id);
-            agent
-                .prompt(nanocode::PromptRequest::new(saved_prompt).request_id(&pending.id))
-                .await?
-                .result()
-                .await?;
-        }
+    for pending in pending {
+        eprintln!("nanocodex: resuming interrupted turn {}", pending.id);
+        agent
+            .prompt(nanocode::PromptRequest::new(pending.prompt).request_id(&pending.id))
+            .await?
+            .result()
+            .await?;
     }
     let mut turn = agent.prompt(prompt.as_str()).await?;
     let mut stderr = std::io::stderr();

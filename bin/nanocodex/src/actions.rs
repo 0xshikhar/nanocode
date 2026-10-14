@@ -346,7 +346,6 @@ impl App {
         }
         let previous = self.agent.take();
         let host = self.host.clone();
-        let tier = self.tier;
         let tx = self.tx.clone();
         self.starting = true;
         self.generation += 1;
@@ -355,7 +354,7 @@ impl App {
                 drop(previous.flush().await);
                 drop(previous.shutdown().await);
             }
-            let event = match open_session(&host, &session_id, tier, None, None).await {
+            let event = match open_session(&host, &session_id, None, None).await {
                 Ok(ready) => AppEvent::AgentReady(Box::new(ready)),
                 Err(error) => AppEvent::AgentFailed(format!("resume failed: {error}")),
             };

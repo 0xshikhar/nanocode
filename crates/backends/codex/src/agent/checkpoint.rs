@@ -96,7 +96,8 @@ impl ChildState {
             None,
             has_conversation,
             payload,
-        ))
+        )
+        .with_service_tier(Some(self.service_tier)))
     }
 }
 
