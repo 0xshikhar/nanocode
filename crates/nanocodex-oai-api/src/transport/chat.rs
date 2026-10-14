@@ -2,7 +2,7 @@
 //!
 //! GLM-5.3, Kimi K3 and MiMo are reached through stateless Chat Completions
 //! gateways rather than the Responses API. The portable Workers AI and gateway
-//! adapters in `js/nanocodex/cloudflare` translate there for WebAssembly hosts;
+//! adapters in `js/cloudflare` translate there for WebAssembly hosts;
 //! this module is the native equivalent behind the standard HTTPS transport.
 //! Requests keep their Responses Lite encoding until the wire: tools move to the
 //! Chat `tools` field under stable aliases, free-form custom tools become
@@ -283,7 +283,7 @@ impl ChatGateway {
     }
 
     /// The managed gateway's OpenRouter request fields
-    /// (`js/nanocodex/cloudflare/gateway-responses.mjs`).
+    /// (`js/cloudflare/gateway-responses.mjs`).
     fn apply_provider_fields(&self, chat: &mut Map<String, Value>, model: Model) {
         match self.provider {
             Provider::OpenRouter => {

@@ -24,7 +24,7 @@ use tokio::sync::mpsc;
 use super::RuntimeEvent;
 
 const BOOTSTRAP: &str = include_str!("bootstrap.js");
-// Generated from js/nanocodex-tools/runtime/code-tools.mjs for crate packaging.
+// Generated from js/packages/nanocodex-tools/runtime/code-tools.mjs for crate packaging.
 const CODE_TOOLS: &str = include_str!("code-tools.mjs");
 const CODE_VALUES: &str = include_str!("code-values.mjs");
 

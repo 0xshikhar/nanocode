@@ -85,20 +85,8 @@ sonic-rs.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 tracing-subscriber.workspace = true
 
-[[bench]]
-name = "fork_history"
-harness = false
-required-features = ["client"]
 
-[[bench]]
-name = "tower_responses"
-harness = false
-required-features = ["client"]
 
-[[bench]]
-name = "session_lifecycle"
-harness = false
-required-features = ["client"]
 
 [[test]]
 name = "it"

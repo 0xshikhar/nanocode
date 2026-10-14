@@ -2,11 +2,17 @@
   "$schema": "https://turbo.build/schema.json",
   "tasks": {
     "build": {
-      "dependsOn": ["^build"],
-      "outputs": ["dist/**"]
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": [
+        "dist/**"
+      ]
     },
     "nanocodex#build": {
-      "dependsOn": ["^build"],
+      "dependsOn": [
+        "^build"
+      ],
       "cache": false,
       "inputs": [
         "$TURBO_DEFAULT$",
@@ -15,7 +21,7 @@
         "$TURBO_ROOT$/rust-toolchain",
         "$TURBO_ROOT$/rust-toolchain.toml",
         "$TURBO_ROOT$/.cargo/**",
-        "$TURBO_ROOT$/js/nanocodex-vite/scripts/**",
+        "$TURBO_ROOT$/js/scripts/**",
         "$TURBO_ROOT$/crates/nanocodex/**",
         "$TURBO_ROOT$/crates/nanocodex-agent/**",
         "$TURBO_ROOT$/crates/nanocodex-claude/**",
@@ -53,36 +59,40 @@
       ],
       "outputs": []
     },
-    "@nanocodex/connect-api#build": {
-      "dependsOn": ["nanocodex-connect-protocol#build"],
-      "outputs": []
-    },
     "nanocodex-tools#test": {
-      "dependsOn": ["build"],
+      "dependsOn": [
+        "build"
+      ],
       "outputs": []
     },
     "nanocodex-computer#test": {
-      "dependsOn": ["^build"],
+      "dependsOn": [
+        "^build"
+      ],
       "cache": false,
-      "passThroughEnv": ["NANOCODEX_TEST_NATIVE_APP", "NANOCODEX_TEST_BROWSER"],
+      "passThroughEnv": [
+        "NANOCODEX_TEST_NATIVE_APP",
+        "NANOCODEX_TEST_BROWSER"
+      ],
       "outputs": []
     },
-    "nanocodex-web#build": {
-      "cache": false,
-      "dependsOn": ["^build"],
-      "outputs": ["dist/**"]
-    },
     "dev": {
-      "dependsOn": ["^build"],
+      "dependsOn": [
+        "^build"
+      ],
       "cache": false,
       "persistent": true
     },
     "test": {
-      "dependsOn": ["^build"],
+      "dependsOn": [
+        "^build"
+      ],
       "outputs": []
     },
     "typecheck": {
-      "dependsOn": ["^build"],
+      "dependsOn": [
+        "^build"
+      ],
       "outputs": []
     }
   }

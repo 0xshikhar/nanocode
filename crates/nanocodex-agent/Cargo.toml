@@ -71,10 +71,6 @@ tempfile.workspace = true
 tokio-tungstenite.workspace = true
 tracing-subscriber.workspace = true
 
-[[bench]]
-name = "agent_lifecycle"
-harness = false
-required-features = ["openai"]
 
 [lints]
 workspace = true

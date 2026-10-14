@@ -30,12 +30,6 @@ pub use nanocodex_claude::Claude;
 #[cfg(feature = "durability")]
 #[cfg_attr(docsrs, doc(cfg(feature = "durability")))]
 pub use nanocodex_durability::DurableAgentExt;
-#[cfg(all(not(target_family = "wasm"), feature = "managed"))]
-#[cfg_attr(
-    docsrs,
-    doc(cfg(all(not(target_family = "wasm"), feature = "managed")))
-)]
-pub use nanocodex_managed::{Managed, ManagedApiKey};
 #[cfg(feature = "openai")]
 #[cfg_attr(docsrs, doc(cfg(feature = "openai")))]
 pub use nanocodex_oai_api::OpenAi;
@@ -138,14 +132,6 @@ pub use nanocodex_oai_tools as oai_tools;
 #[doc(inline)]
 pub use nanocodex_claude_tools as claude_tools;
 
-/// Native account-managed backend, administration client, and durable event transport.
-#[cfg(all(not(target_family = "wasm"), feature = "managed"))]
-#[cfg_attr(
-    docsrs,
-    doc(cfg(all(not(target_family = "wasm"), feature = "managed")))
-)]
-#[doc(inline)]
-pub use nanocodex_managed as managed;
 
 /// Application-owned tracing and OpenTelemetry setup.
 #[cfg(all(not(target_family = "wasm"), feature = "observability"))]
