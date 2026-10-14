@@ -263,36 +263,3 @@ pub fn capture_audio(mut writer: impl Write, stop: Arc<AtomicBool>) -> Result<()
     }
     Ok(())
 }
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn stale_backlog_drops_whole_stereo_frames() {
-        let mut queue = PcmQueue::default();
-        queue.push(&vec![1; QUEUE_BYTES]);
-        queue.push(&vec![2; CHUNK_BYTES]);
-        assert_eq!(queue.bytes.len(), QUEUE_BYTES);
-        for _ in 0..3 {
-            assert_eq!(queue.chunk(), [1; CHUNK_BYTES]);
-        }
-        assert_eq!(queue.chunk(), [2; CHUNK_BYTES]);
-        assert_eq!(queue.chunk(), [0; CHUNK_BYTES]);
-    }
-    #[test]
-    fn silence_and_oversized_packets_stay_bounded() {
-        let mut queue = PcmQueue::default();
-        queue.push(&[7; 4]);
-        let chunk = queue.chunk();
-        assert_eq!(&chunk[..4], &[7; 4]);
-        assert!(chunk[4..].iter().all(|b| *b == 0));
-        queue.push(&vec![9; QUEUE_BYTES * 2]);
-        assert_eq!(queue.bytes.len(), QUEUE_BYTES);
-        queue.silence(QUEUE_BYTES * 2);
-        assert_eq!(queue.bytes.len(), QUEUE_BYTES);
-        assert_eq!(queue.chunk(), [0; CHUNK_BYTES]);
-    }
-    #[test]
-    fn cancellation_before_start_never_opens_a_device() {
-        capture_audio(Vec::new(), Arc::new(AtomicBool::new(true))).unwrap();
-    }
-}

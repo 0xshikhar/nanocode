@@ -2,7 +2,7 @@
 //! a new model boundary publishes only new messages and changed tail pages.
 
 use crate::{EncodedPayload, Result, StoreRecord, session::DurableOwner};
-use nanocode_runtime::{
+use nanocode_backend_codex::{
     execution::ExecutionContinuation,
     session::{SessionSnapshot, SessionSnapshotHead},
 };

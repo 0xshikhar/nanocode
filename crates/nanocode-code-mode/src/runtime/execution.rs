@@ -26,29 +26,16 @@ pub struct ToolRuntimeControl {
 impl ToolRuntime {
     /// Creates a runtime with the standard workspace tools enabled.
     ///
-    /// Pass `None` for web search or image generation to omit that built-in
-    /// HTTP handler.
-    pub fn new(
-        workspace: impl Into<PathBuf>,
-        web_search: Option<WebSearchConfig>,
-        image_generation: Option<ImageGenerationConfig>,
-    ) -> Self {
-        Self::new_inner(
-            workspace,
-            web_search,
-            image_generation,
-            true,
-            Arc::new(Vec::new()),
-            None,
-        )
+    /// Backend-owned tools are supplied by the caller.
+    pub fn new(workspace: impl Into<PathBuf>, builtin_tools: Vec<Arc<dyn Tool>>) -> Self {
+        Self::new_inner(workspace, builtin_tools, true, Arc::new(Vec::new()))
     }
 
     /// Builds the runtime from one complete declarative tool selection.
     #[must_use]
     pub fn new_with_tools(
         workspace: impl Into<PathBuf>,
-        web_search: Option<WebSearchConfig>,
-        image_generation: Option<ImageGenerationConfig>,
+        builtin_tools: Vec<Arc<dyn Tool>>,
         tools: &Tools,
     ) -> Self {
         let workspace = tools
@@ -58,24 +45,20 @@ impl ToolRuntime {
             .unwrap_or_else(|| workspace.into());
         Self::new_inner(
             workspace,
-            web_search,
-            image_generation,
+            builtin_tools,
             tools.workspace_enabled(),
             tools.process_environment(),
-            tools.remote_http_client(),
         )
         .with_tools(tools)
     }
 
     fn new_inner(
         workspace: impl Into<PathBuf>,
-        web_search: Option<WebSearchConfig>,
-        image_generation: Option<ImageGenerationConfig>,
+        builtin_tools: Vec<Arc<dyn Tool>>,
         workspace_enabled: bool,
         process_environment: Arc<Vec<(OsString, OsString)>>,
-        remote_http_client: Option<reqwest::Client>,
     ) -> Self {
-        nanocode_codex::transport::install_default_rustls_crypto_provider();
+        nanocode_tls::install_default_rustls_crypto_provider();
         let workspace = workspace.into();
         let current_turn = Arc::new(AtomicU64::new(0));
         let sessions = Arc::new(ShellSessions::with_environment(process_environment));
@@ -95,21 +78,7 @@ impl ToolRuntime {
                 Arc::new(shell::WriteStdinHandler::new(Arc::clone(&sessions))),
             ]);
         }
-        let remote_http_client = remote_http_client.unwrap_or_default();
-        if let Some(web_search) = web_search {
-            handlers.push(Arc::new(web_search::WebSearchHandler::with_client(
-                web_search,
-                remote_http_client.clone(),
-            )));
-        }
-        if let Some(image_generation) = image_generation {
-            handlers.push(Arc::new(
-                image_generation::ImageGenerationHandler::with_client(
-                    image_generation,
-                    remote_http_client,
-                ),
-            ));
-        }
+        handlers.extend(builtin_tools);
         Self {
             registry: Arc::new(ToolRegistry::from_ordered(handlers)),
             exposure: None,
@@ -167,21 +136,6 @@ impl ToolRuntime {
     #[must_use]
     pub fn working_directory(&self) -> &str {
         &self.working_directory
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn has_shell_session(&self, session_id: i64) -> bool {
-        self.sessions.contains(session_id).await
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn hold_code_mode_admission(&self) -> tokio::sync::OwnedMutexGuard<()> {
-        self.code_mode.hold_admission().await
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn wait_for_code_mode_admission_attempt(&self) {
-        self.code_mode.wait_for_admission_attempt().await;
     }
 
     #[doc(hidden)]

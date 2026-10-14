@@ -37,7 +37,7 @@ use nanocode::{
         standard::StandardTool,
     },
 };
-use nanocode_runtime::{
+use nanocode_backend_codex::{
     Capabilities, ForkRequest, HarnessFamily, HarnessModel, Origin, Persistence, ServiceTier,
     SessionCheckpoint, SessionInfo,
     backend::{AgentFactory, BackendFuture},
@@ -82,7 +82,7 @@ pub fn native_spawn_contract_version() -> u32 {
 /// JS pickers and validation tables consume or are checked against this.
 #[wasm_bindgen(js_name = modelCapabilities)]
 pub fn model_capabilities() -> Result<JsValue, JsValue> {
-    use nanocode_runtime::{ClaudeModel, HarnessModel, ModelTransport};
+    use nanocode_backend_codex::{ClaudeModel, HarnessModel, ModelTransport};
     let codex = [
         Model::Astra,
         Model::Sol,
@@ -1653,12 +1653,13 @@ impl WasmHarnessFactory {
         let unavailable = || {
             NanocodexError::InvalidRequest("target harness was not explicitly configured".into())
         };
-        let (mut recipe, auth) = match family {
-            HarnessFamily::Codex => {
-                let (recipe, auth) = factory.codex.clone().ok_or_else(unavailable)?;
-                (recipe, Some(auth))
-            }
-            HarnessFamily::Claude => (factory.claude.clone().ok_or_else(unavailable)?, None),
+        let (mut recipe, auth) = if family == HarnessFamily::Codex {
+            let (recipe, auth) = factory.codex.clone().ok_or_else(unavailable)?;
+            (recipe, Some(auth))
+        } else if family == HarnessFamily::Claude {
+            (factory.claude.clone().ok_or_else(unavailable)?, None)
+        } else {
+            return Err(unavailable());
         };
         let object = recipe.as_object_mut().ok_or_else(unavailable)?;
         for key in [
@@ -1688,26 +1689,25 @@ impl WasmHarnessFactory {
             })
             .and_then(serde_json::Value::as_u64)
             .ok_or_else(unavailable)? as u32;
-        let built = match family {
-            HarnessFamily::Codex => {
-                build_codex(
-                    serde_json::from_value(recipe).map_err(|_| unavailable())?,
-                    auth.expect("Codex authentication"),
-                    Some(factory.clone()),
-                    checkpoint,
-                    host_context,
-                )
-                .await
-            }
-            HarnessFamily::Claude => {
-                claude::build_claude(
-                    serde_json::from_value(recipe).map_err(|_| unavailable())?,
-                    Some(factory.clone()),
-                    checkpoint,
-                    host_context,
-                )
-                .await
-            }
+        let built = if family == HarnessFamily::Codex {
+            build_codex(
+                serde_json::from_value(recipe).map_err(|_| unavailable())?,
+                auth.expect("Codex authentication"),
+                Some(factory.clone()),
+                checkpoint,
+                host_context,
+            )
+            .await
+        } else if family == HarnessFamily::Claude {
+            claude::build_claude(
+                serde_json::from_value(recipe).map_err(|_| unavailable())?,
+                Some(factory.clone()),
+                checkpoint,
+                host_context,
+            )
+            .await
+        } else {
+            return Err(unavailable());
         }
         .map_err(|_| NanocodexError::InvalidRequest("target harness construction failed".into()))?;
         factory
@@ -1737,7 +1737,8 @@ impl AgentFactory for WasmHarnessFactory {
                     .await;
             }
             let model = parent.harness_model();
-            let options = options.resolve(model, model.default_thinking())?;
+            let thinking = model.default_thinking();
+            let options = options.resolve(model, thinking)?;
             factory.build_native(options, host_context, None).await
         })
     }
@@ -2505,7 +2506,7 @@ struct WasmLineage<'a> {
 fn encode_session_info(session: &SessionInfo) -> Result<String, JsValue> {
     serde_json::to_string(&WasmSessionInfo {
         session_id: &session.session_id,
-        harness: session.family,
+        harness: session.family.clone(),
         lineage: WasmLineage {
             root_session_id: &session.lineage.root_session_id,
             parent_session_id: session.lineage.parent_session_id.as_deref(),
@@ -4468,8 +4469,8 @@ async fn build_codex(
 
     let model = config.model.parse::<Model>().map_err(js_error)?;
     // Explicit fastMode must be offered by the model, from the shared catalog.
-    nanocode_runtime::HarnessModel::Codex(model)
-        .capabilities(nanocode_runtime::ModelTransport::Native)
+    nanocode_backend_codex::HarnessModel::Codex(model)
+        .capabilities(nanocode_backend_codex::ModelTransport::Native)
         .check_fast_mode(config.fast_mode)
         .map_err(js_error)?;
     let host_definition_id = config.host_definition_id;

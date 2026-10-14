@@ -20,7 +20,7 @@ use super::{
     model::{AgentDescriptor, AgentId, AgentStatus},
     runtime::{ChildSession, OutputContract},
 };
-use nanocode_runtime::{HarnessModel, Lineage, SessionCheckpoint, Thinking};
+use nanocode_agent::{HarnessModel, Lineage, SessionCheckpoint, Thinking};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use std::{
@@ -63,7 +63,7 @@ pub trait SubagentStore: Send + Sync {
     /// session ID like any other session.
     ///
     /// The checkpoint carries the child's distinct identity and its
-    /// [`nanocode_runtime::Origin::Subagent`] lineage under `root_session_id`.
+    /// [`nanocode_agent::Origin::Subagent`] lineage under `root_session_id`.
     /// It is called after the journal containing the same boundary was saved,
     /// and again for every later boundary. Stores without a session catalog
     /// keep only the journal.
@@ -611,7 +611,7 @@ fn legacy_codex_checkpoint(
     };
     let mut payload = fields.clone();
     let session_id: String = legacy_field(&mut payload, "session_id")?;
-    let model: nanocode_runtime::Model = legacy_field(&mut payload, "model")?;
+    let model: nanocode_agent::Model = legacy_field(&mut payload, "model")?;
     let thinking: Thinking = legacy_field(&mut payload, "thinking")?;
     let conversation = payload
         .get("conversation")
@@ -678,7 +678,7 @@ impl PersistedNative {
 }
 
 /// Adapts a durable root handle's journal to the registry's store contract.
-pub(super) struct JournalStore(pub(super) Arc<dyn nanocode_runtime::backend::ChildJournalStore>);
+pub(super) struct JournalStore(pub(super) Arc<dyn nanocode_agent::backend::ChildJournalStore>);
 
 impl SubagentStore for JournalStore {
     fn load<'a>(
@@ -859,7 +859,7 @@ pub(super) fn journaled_lineage(
     Lineage::new(
         root_session_id,
         Some(parent_session_id),
-        nanocode_runtime::Origin::Subagent,
+        nanocode_agent::Origin::Subagent,
         u32::try_from(depth).unwrap_or(u32::MAX),
     )
 }

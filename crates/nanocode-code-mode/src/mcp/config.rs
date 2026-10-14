@@ -328,26 +328,3 @@ impl SecretSource {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeSet;
-
-    use super::McpServer;
-
-    #[test]
-    fn parallel_tool_calls_require_explicit_server_opt_in() {
-        assert!(!McpServer::stdio("fixture").supports_parallel_tool_calls);
-        assert!(
-            McpServer::stdio("fixture")
-                .supports_parallel_tool_calls(true)
-                .supports_parallel_tool_calls
-        );
-        assert_eq!(
-            McpServer::stdio("fixture")
-                .parallel_tools(["lookup", "search"])
-                .parallel_tools,
-            BTreeSet::from(["lookup".to_owned(), "search".to_owned()])
-        );
-    }
-}

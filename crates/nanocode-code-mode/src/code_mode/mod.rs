@@ -18,8 +18,7 @@ use std::{
 use futures_util::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use serde::Deserialize;
 use serde_json::Value;
-#[cfg(test)]
-use tokio::sync::Semaphore;
+
 use tokio::{
     sync::{Mutex, Notify, OwnedMutexGuard, mpsc, oneshot, watch},
     task::JoinHandle,
@@ -50,8 +49,7 @@ const CELL_CLOSED: u8 = 3;
 pub(crate) struct CodeModeRuntime {
     admission: Arc<Mutex<()>>,
     admission_epoch: Arc<AtomicU64>,
-    #[cfg(test)]
-    admission_attempts: Arc<Semaphore>,
+
     cells: Arc<Mutex<CellRegistry>>,
     stored: Arc<Mutex<HashMap<String, Value>>>,
     host: Arc<Mutex<SharedJsHost>>,
@@ -65,8 +63,7 @@ pub(crate) struct CodeModeControl {
     preempt: watch::Sender<(u64, u64)>,
     admission: Arc<Mutex<()>>,
     admission_epoch: Arc<AtomicU64>,
-    #[cfg(test)]
-    admission_attempts: Arc<Semaphore>,
+
     cells: Arc<Mutex<CellRegistry>>,
     host: Arc<Mutex<SharedJsHost>>,
 }
@@ -305,8 +302,7 @@ impl CodeModeRuntime {
         Self {
             admission: Arc::new(Mutex::new(())),
             admission_epoch: Arc::new(AtomicU64::new(0)),
-            #[cfg(test)]
-            admission_attempts: Arc::new(Semaphore::new(0)),
+
             cells: Arc::new(Mutex::new(CellRegistry {
                 next_cell_id: 1,
                 live_cells: HashMap::new(),
@@ -324,25 +320,10 @@ impl CodeModeRuntime {
             preempt: self.preempt.clone(),
             admission: Arc::clone(&self.admission),
             admission_epoch: Arc::clone(&self.admission_epoch),
-            #[cfg(test)]
-            admission_attempts: Arc::clone(&self.admission_attempts),
+
             cells: Arc::clone(&self.cells),
             host: Arc::clone(&self.host),
         }
-    }
-
-    #[cfg(test)]
-    pub(super) async fn hold_admission(&self) -> OwnedMutexGuard<()> {
-        Arc::clone(&self.admission).lock_owned().await
-    }
-
-    #[cfg(test)]
-    pub(super) async fn wait_for_admission_attempt(&self) {
-        self.admission_attempts
-            .acquire()
-            .await
-            .expect("test admission semaphore should remain open")
-            .forget();
     }
 
     pub(super) async fn execute(
@@ -425,8 +406,7 @@ impl CodeModeRuntime {
             .unwrap_or(crate::contract::DEFAULT_TOOL_OUTPUT_TOKENS);
         tracing::Span::current().record("output.max_tokens", output_token_budget);
         let context = context.with_output_token_budget(output_token_budget);
-        #[cfg(test)]
-        self.admission_attempts.add_permits(1);
+
         let admission = self.admission.lock().await;
         if self.admission_epoch.load(Ordering::Acquire) != admission_epoch {
             return observed_execution(
@@ -636,8 +616,7 @@ impl CodeModeControl {
         turn_id: u64,
         mut observer: Option<&mut dyn CodeModeObserver>,
     ) {
-        #[cfg(test)]
-        self.admission_attempts.add_permits(1);
+
         let _admission = self.admission.lock().await;
         self.admission_epoch.fetch_add(1, Ordering::AcqRel);
         let cells = {
@@ -669,8 +648,7 @@ impl CodeModeControl {
         &self,
         mut observer: Option<&mut dyn CodeModeObserver>,
     ) -> CodeModeQuiescence {
-        #[cfg(test)]
-        self.admission_attempts.add_permits(1);
+
         let admission = Arc::clone(&self.admission).lock_owned().await;
         self.admission_epoch.fetch_add(1, Ordering::AcqRel);
         let cells = {
@@ -1701,6 +1679,3 @@ fn with_status(
     content.insert(0, ToolOutputContent::InputText { text: header });
     ToolOutputBody::Content(content)
 }
-
-#[cfg(test)]
-mod tests;

@@ -2,13 +2,13 @@
 
 use std::sync::Arc;
 
-use nanocode_claude::{
+use nanocode_backend_claude::{
     ClaudeBuilder,
     execution::{
         Admission as ClaudeAdmission, ClaudeExecutionPolicy, ClaudeSteer, PolicyFuture, Step,
     },
 };
-use nanocode_runtime::Result as AgentResult;
+use nanocode_agent::Result as AgentResult;
 use serde_json::{Value, value::RawValue};
 
 use crate::{
@@ -64,7 +64,7 @@ struct LazyClaudeExecution {
     /// This policy wrote the state's first checkpoint.
     initialized: std::sync::atomic::AtomicBool,
     /// The child's own model, recorded when its state is first described.
-    model: std::sync::Mutex<Option<nanocode_runtime::HarnessModel>>,
+    model: std::sync::Mutex<Option<nanocode_agent::HarnessModel>>,
 }
 
 impl LazyClaudeExecution {
@@ -90,7 +90,7 @@ impl LazyClaudeExecution {
                 .await
                 .map_err(agent_error)?;
                 let mut record = self.record.clone();
-                if let Some(model) = self.model.lock().ok().and_then(|model| *model) {
+                if let Some(model) = self.model.lock().ok().and_then(|model| model.clone()) {
                     record.model = model;
                 }
                 let record = state.describe(record).await.map_err(agent_error)?;
@@ -112,7 +112,7 @@ impl LazyClaudeExecution {
 
 fn branch_child(
     branches: &Branches,
-    child: &nanocode_runtime::SessionInfo,
+    child: &nanocode_agent::SessionInfo,
 ) -> AgentResult<Option<Arc<dyn ClaudeExecutionPolicy>>> {
     if branches.record.is_none() {
         // Without catalog metadata there is no durable branch record; the
@@ -234,7 +234,7 @@ impl ClaudeExecutionPolicy for LazyClaudeExecution {
     fn initial_checkpoint(
         &self,
         state: Value,
-        model: nanocode_runtime::HarnessModel,
+        model: nanocode_agent::HarnessModel,
     ) -> PolicyFuture<'_, ()> {
         Box::pin(async move {
             if self.initialized.load(std::sync::atomic::Ordering::SeqCst) {
@@ -270,7 +270,7 @@ impl ClaudeExecutionPolicy for LazyClaudeExecution {
 
     fn branch(
         &self,
-        child: &nanocode_runtime::SessionInfo,
+        child: &nanocode_agent::SessionInfo,
     ) -> AgentResult<Option<Arc<dyn ClaudeExecutionPolicy>>> {
         branch_child(
             &Branches {
@@ -289,7 +289,7 @@ impl ClaudeExecutionPolicy for ClaudeExecution {
 
     fn branch(
         &self,
-        child: &nanocode_runtime::SessionInfo,
+        child: &nanocode_agent::SessionInfo,
     ) -> AgentResult<Option<Arc<dyn ClaudeExecutionPolicy>>> {
         branch_child(&self.branches, child)
     }
@@ -338,7 +338,7 @@ impl ClaudeExecutionPolicy for ClaudeExecution {
         Box::pin(async move {
             let input: Box<serde_json::value::RawValue> = serde_json::from_str(&input_json)
                 .map_err(|error| {
-                    nanocode_runtime::NanocodexError::InvalidRequest(error.to_string())
+                    nanocode_agent::NanocodexError::InvalidRequest(error.to_string())
                 })?;
             self.owner
                 .accept_steer(id, after, &input, message_id, capacity)

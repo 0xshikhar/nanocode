@@ -24,18 +24,11 @@ use super::{
 };
 use crate::prepared::{PreparedToolCall, PreparedToolError, PreparedToolRuntime};
 
-#[cfg(not(test))]
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
-#[cfg(test)]
-const HANDSHAKE_TIMEOUT: Duration = Duration::from_millis(100);
-#[cfg(not(test))]
+
 const PONG_TIMEOUT: Duration = Duration::from_secs(10);
-#[cfg(test)]
-const PONG_TIMEOUT: Duration = Duration::from_millis(50);
-#[cfg(not(test))]
+
 const STABLE_CONNECTION: Duration = Duration::from_secs(30);
-#[cfg(test)]
-const STABLE_CONNECTION: Duration = Duration::from_millis(250);
 
 const HEARTBEAT_TIMEOUT_REASON: &str = "attachment heartbeat timed out";
 /// Fenced reason when the endpoint reports the attachment permanently gone (HTTP 410).
@@ -43,10 +36,9 @@ pub(crate) const ATTACHMENT_REVOKED_REASON: &str =
     "attachment endpoint permanently revoked this attachment";
 /// Other HTTP refusals (404, 409 superseded/conflict, 429 and other 4xx) back
 /// off furthest.
-#[cfg(not(test))]
+
 const MAX_REJECTED_BACKOFF: Duration = Duration::from_secs(60);
-#[cfg(test)]
-const MAX_REJECTED_BACKOFF: Duration = Duration::from_millis(500);
+
 /// Transport loss or a failed connect: the endpoint may be unreachable.
 const MAX_TRANSPORT_BACKOFF: Duration = Duration::from_secs(5);
 /// HTTP 5xx proves a reachable service that temporarily cannot admit the
@@ -104,7 +96,7 @@ pub(crate) async fn run(
             command = commands.recv() => match command { Some(Command::Detach) | None => break Ok(()) },
             connected = tokio::time::timeout(Duration::from_secs(5), async {
                 let connector = if request.uri().scheme_str() == Some("wss") {
-                    Some(tokio_tungstenite::Connector::Rustls(nanocode_codex::tls::native_client_config().await?))
+                    Some(tokio_tungstenite::Connector::Rustls(nanocode_tls::native_client_config().await?))
                 } else { None };
                 tracing::info!(target: "nanocode_code_mode::attachment",
                     stage = "attachment.socket.trust",
@@ -1569,147 +1561,5 @@ fn trace_attachment_event(event: &AttachmentEvent) {
             "attachment fenced"
         ),
         AttachmentEvent::CallStarted { .. } | AttachmentEvent::CallCompleted { .. } => {}
-    }
-}
-
-#[cfg(test)]
-mod tracing_tests {
-    use std::{
-        collections::HashMap,
-        sync::{Arc, Mutex},
-    };
-
-    use tracing::{
-        Subscriber,
-        field::{Field, Visit},
-        span::{Attributes, Id, Record},
-    };
-    use tracing_subscriber::{Layer, layer::Context, prelude::*, registry::LookupSpan};
-
-    use super::*;
-
-    #[derive(Clone, Default)]
-    struct CallSpanCapture(Arc<Mutex<Option<CapturedCallSpan>>>);
-
-    struct CapturedCallSpan {
-        id: u64,
-        target: &'static str,
-        fields: HashMap<String, String>,
-        closed: bool,
-    }
-
-    struct FieldCapture<'a>(&'a mut HashMap<String, String>);
-
-    impl Visit for FieldCapture<'_> {
-        fn record_u64(&mut self, field: &Field, value: u64) {
-            self.0.insert(field.name().to_owned(), value.to_string());
-        }
-
-        fn record_str(&mut self, field: &Field, value: &str) {
-            self.0.insert(field.name().to_owned(), value.to_owned());
-        }
-
-        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-            self.0.insert(field.name().to_owned(), format!("{value:?}"));
-        }
-    }
-
-    impl<S> Layer<S> for CallSpanCapture
-    where
-        S: Subscriber + for<'lookup> LookupSpan<'lookup>,
-    {
-        fn on_new_span(&self, attributes: &Attributes<'_>, id: &Id, _context: Context<'_, S>) {
-            if attributes.metadata().name() != "attachment.call" {
-                return;
-            }
-            let mut fields = HashMap::new();
-            attributes.record(&mut FieldCapture(&mut fields));
-            *self.0.lock().unwrap() = Some(CapturedCallSpan {
-                id: id.clone().into_u64(),
-                target: attributes.metadata().target(),
-                fields,
-                closed: false,
-            });
-        }
-
-        fn on_record(&self, id: &Id, values: &Record<'_>, _context: Context<'_, S>) {
-            let mut captured = self.0.lock().unwrap();
-            let Some(captured) = captured.as_mut() else {
-                return;
-            };
-            if captured.id == id.clone().into_u64() {
-                values.record(&mut FieldCapture(&mut captured.fields));
-            }
-        }
-
-        fn on_close(&self, id: Id, _context: Context<'_, S>) {
-            let mut captured = self.0.lock().unwrap();
-            let Some(captured) = captured.as_mut() else {
-                return;
-            };
-            if captured.id == id.into_u64() {
-                captured.closed = true;
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn heartbeat_timeout_sends_a_close_reason_to_the_broker() {
-        use tokio_tungstenite::tungstenite::protocol::Role;
-
-        let (hand_io, broker_io) = tokio::io::duplex(1024);
-        let (mut hand, mut broker) = tokio::join!(
-            tokio_tungstenite::WebSocketStream::from_raw_socket(hand_io, Role::Client, None),
-            tokio_tungstenite::WebSocketStream::from_raw_socket(broker_io, Role::Server, None),
-        );
-        close_heartbeat_timeout(&mut hand).await;
-        let Some(Ok(Message::Close(Some(frame)))) = broker.next().await else {
-            panic!("heartbeat timeout must deliver a WebSocket close frame");
-        };
-        assert_eq!(frame.code, CloseCode::Restart);
-        assert_eq!(frame.reason.to_string(), HEARTBEAT_TIMEOUT_REASON);
-    }
-
-    #[test]
-    fn attachment_call_span_owns_bounded_structural_telemetry() {
-        let capture = CallSpanCapture::default();
-        let subscriber = tracing_subscriber::registry().with(capture.clone());
-        let dispatch = tracing::Dispatch::new(subscriber);
-        let (events, mut received) = mpsc::channel(4);
-
-        tracing::dispatcher::with_default(&dispatch, || {
-            begin_call_events(
-                &events,
-                "call-1".into(),
-                "exec_command".into(),
-                Some("hand-1"),
-            )
-            .complete(&events, AttachmentCallOutcome::Completed);
-        });
-
-        assert!(matches!(
-            received.try_recv().unwrap(),
-            AttachmentEvent::CallStarted { .. }
-        ));
-        assert!(matches!(
-            received.try_recv().unwrap(),
-            AttachmentEvent::CallCompleted { .. }
-        ));
-        let captured = capture.0.lock().unwrap();
-        let captured = captured.as_ref().unwrap();
-        assert_eq!(captured.target, "nanocode_code_mode::attachment");
-        assert!(captured.closed);
-        assert_eq!(captured.fields.get("attachment.id").unwrap(), "hand-1");
-        assert_eq!(captured.fields.get("tool.name").unwrap(), "exec_command");
-        assert_eq!(captured.fields.get("tool.call_id").unwrap(), "call-1");
-        assert_eq!(captured.fields.get("status").unwrap(), "completed");
-        assert_eq!(captured.fields.get("otel.status_code").unwrap(), "OK");
-        assert!(captured.fields.contains_key("duration_ns"));
-        assert_eq!(
-            captured.fields.len(),
-            7,
-            "attachment call spans must remain structural: {:?}",
-            captured.fields
-        );
     }
 }

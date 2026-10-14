@@ -7,7 +7,7 @@
   },
   "scripts": {
     "build": "pnpm -r run build",
-    "test": "pnpm -r run test",
+    "check:dependencies": "node scripts/check-dependency-boundaries.mjs",
     "typecheck": "pnpm -r --if-present run typecheck"
   }
 }

@@ -396,7 +396,8 @@ impl Tools {
     }
 
     #[cfg(all(not(target_family = "wasm"), feature = "code-mode"))]
-    pub(super) fn remote_http_client(&self) -> Option<reqwest::Client> {
+    /// Returns the host-provided client for backend-owned HTTP tools.
+    pub fn remote_http_client(&self) -> Option<reqwest::Client> {
         self.remote_http_client.clone()
     }
 
@@ -448,58 +449,7 @@ pub struct ToolsBuilder {
     duplicate_workspace: bool,
 }
 
-/// Invalid declarative tool selection.
-#[derive(Debug, thiserror::Error)]
-pub enum ToolsBuildError {
-    /// A host capability could not be bound to its owning session.
-    #[error("host tool initialization failed: {0}")]
-    HostInitialization(String),
-
-    /// A custom definition has an empty registry name.
-    #[error("tool name must not be empty")]
-    EmptyName,
-
-    /// The model-visible working-directory override is empty.
-    #[error("working directory override must not be empty")]
-    EmptyWorkingDirectory,
-
-    /// The model-visible shell override is empty.
-    #[error("default shell override must not be empty")]
-    EmptyDefaultShell,
-
-    /// Two custom tools use the same definition name.
-    #[error("tool name `{0}` is registered more than once")]
-    DuplicateName(Box<str>),
-
-    /// A singleton tool source was added more than once.
-    #[error("tool source `{0}` is configured more than once")]
-    DuplicateSource(&'static str),
-
-    /// A custom tool collides with an enabled built-in tool.
-    #[error("tool name `{0}` conflicts with an enabled built-in tool")]
-    BuiltInName(Box<str>),
-
-    /// A custom tool collides with a host-owned routing tool.
-    #[error("tool name `{0}` is reserved by the Code Mode host")]
-    ReservedName(Box<str>),
-
-    /// A model-visible name does not match the Responses tool-name grammar.
-    #[error(
-        "invalid public tool name `{0}`; expected 1-128 ASCII bytes beginning with an alphanumeric and containing only alphanumerics, `.`, `_`, `:`, or `-`"
-    )]
-    InvalidPublicName(Box<str>),
-
-    /// Two Code Mode tools map to the same JavaScript identifier.
-    #[error("tool names `{first}` and `{second}` both normalize to Code Mode name `{normalized}`")]
-    NormalizedNameCollision {
-        /// First public tool name using the normalized identifier.
-        first: Box<str>,
-        /// Later public tool name using the normalized identifier.
-        second: Box<str>,
-        /// Conflicting JavaScript identifier.
-        normalized: Box<str>,
-    },
-}
+pub use nanocode_tools::ToolsBuildError;
 
 impl ToolsBuilder {
     /// Adds one capability source to this recipe.

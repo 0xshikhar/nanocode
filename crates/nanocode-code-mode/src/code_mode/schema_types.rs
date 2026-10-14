@@ -533,7 +533,3 @@ fn json_literal_serialization_upper_bound(value: &JsonValue) -> usize {
         }),
     }
 }
-
-#[cfg(test)]
-#[path = "schema_types_tests.rs"]
-mod tests;

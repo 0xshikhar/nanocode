@@ -1,4 +1,6 @@
 [package]
+autotests = false
+autobenches = false
 name = "nanocode-durability"
 version.workspace = true
 edition.workspace = true
@@ -18,13 +20,14 @@ rustdoc-args = ["-D", "warnings"]
 
 [features]
 default = []
-claude = ["dep:nanocode-claude"]
+claude = ["dep:nanocode-backend-claude"]
 sqlite = ["dep:rusqlite"]
 postgres = ["dep:tokio-postgres"]
 
 [dependencies]
-nanocode-claude = { workspace = true, optional = true }
-nanocode-runtime.workspace = true
+nanocode-agent.workspace = true
+nanocode-backend-codex.workspace = true
+nanocode-backend-claude = { workspace = true, optional = true }
 sha2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -39,22 +42,10 @@ wasm-bindgen-futures.workspace = true
 rusqlite = { workspace = true, optional = true }
 tokio-postgres = { workspace = true, optional = true }
 
-[dev-dependencies]
-nanocode-subagents = { workspace = true, features = ["claude"] }
-base64.workspace = true
-image.workspace = true
-nanocode-claude-tools.workspace = true
-futures-util.workspace = true
-nanocode-claude = { workspace = true, features = ["tools"] }
-axum.workspace = true
-reqwest.workspace = true
-rustls.workspace = true
-eyre.workspace = true
-nanocode-codex.workspace = true
-nanocode-code-mode = { workspace = true, features = ["code-mode"] }
-tempfile.workspace = true
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net"] }
-tower.workspace = true
-
 [lints]
 workspace = true
+
+[lib]
+test = false
+doctest = false
+bench = false

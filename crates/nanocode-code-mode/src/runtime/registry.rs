@@ -360,10 +360,6 @@ impl ToolRegistry {
         first_normalized_definitions(definitions)
     }
 
-    #[cfg(test)]
-    pub(super) fn entries(&self) -> impl Iterator<Item = (&Arc<dyn Tool>, &ToolDefinition)> {
-        self.ordered.iter().zip(&self.definitions)
-    }
 }
 
 fn first_normalized_definitions(

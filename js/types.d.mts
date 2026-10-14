@@ -3,7 +3,7 @@ export type Thinking = "none" | "low" | "medium" | "high" | "xhigh" | "max";
 export type ReasoningMode = "standard" | "pro";
 export type Model = "gpt-6.1-sol" | "gpt-6-luna" | "gpt-6-astra" | "@cf/zai-org/glm-5.3" | "kimi-k3" | "mimo-v2.6-pro";
 /** Native agent-loop family that owns a session's conversation. */
-export type HarnessFamily = "codex" | "claude";
+export type HarnessFamily = "codex" | "claude" | (string & {});
 /** Cataloged models of the native Claude Messages harness. */
 export type ClaudeModel =
   | "claude-opus-5-5"
@@ -14,7 +14,7 @@ export type ClaudeModel =
   | "claude-sonnet-4-6"
   | "claude-haiku-4-5";
 /** A cataloged model id of either harness family. */
-export type HarnessModel = Model | ClaudeModel;
+export type HarnessModel = Model | ClaudeModel | (string & {});
 
 /** How a session was created. */
 export type SessionOrigin = "root" | "fork" | "side_conversation" | "subagent" | "branch";

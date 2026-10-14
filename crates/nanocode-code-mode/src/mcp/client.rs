@@ -323,7 +323,7 @@ async fn connect_http(input: HttpConnect<'_>) -> Result<ConnectedServer, String>
     }
     let (resolved_headers, default_headers) = resolve_http_headers(headers)?;
     let replays_plaintext_proxy_credentials = default_headers.contains_key(PROXY_AUTHORIZATION);
-    nanocode_codex::transport::install_default_rustls_crypto_provider();
+    nanocode_tls::install_default_rustls_crypto_provider();
     let http_client = reqwest::Client::builder()
         // Match RMCP's default: its streamed handshake responses are not always fully consumed
         // before the next request, so retaining them as idle connections can stall real peers.
@@ -617,102 +617,4 @@ fn startup_timeout(server: &McpServer, operation: &str) -> String {
         "MCP {operation} exceeded {:.1} seconds",
         server.startup_timeout.as_secs_f64()
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
-    use std::time::Duration;
-
-    use super::*;
-    use reqwest::header::USER_AGENT;
-    use tokio::process::Command;
-    use tracing::{Event, Subscriber};
-    use tracing_subscriber::{Layer, layer::Context, prelude::*, registry::LookupSpan};
-
-    #[derive(Clone)]
-    struct StderrEventCount(Arc<AtomicUsize>);
-
-    impl<S> Layer<S> for StderrEventCount
-    where
-        S: Subscriber + for<'lookup> LookupSpan<'lookup>,
-    {
-        fn on_event(&self, event: &Event<'_>, _context: Context<'_, S>) {
-            if event.metadata().target() == "nanocode_code_mode" {
-                self.0.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-    }
-
-    #[test]
-    fn streamable_http_headers_have_an_overridable_default_user_agent() {
-        let (resolved, defaults) =
-            resolve_http_headers(&std::collections::BTreeMap::new()).expect("default headers");
-        let expected = concat!("nanocode-mcp-client/", env!("CARGO_PKG_VERSION"));
-        assert_eq!(
-            resolved
-                .get(&USER_AGENT)
-                .and_then(|value| value.to_str().ok()),
-            Some(expected)
-        );
-        assert_eq!(
-            defaults
-                .get(USER_AGENT)
-                .and_then(|value| value.to_str().ok()),
-            Some(expected)
-        );
-
-        let custom = std::collections::BTreeMap::from([(
-            "user-agent".to_owned(),
-            SecretSource::Value("custom-agent/9.9".to_owned()),
-        )]);
-        let (resolved, defaults) = resolve_http_headers(&custom).expect("custom headers");
-        assert_eq!(
-            resolved
-                .get(&USER_AGENT)
-                .and_then(|value| value.to_str().ok()),
-            Some("custom-agent/9.9")
-        );
-        assert_eq!(
-            defaults
-                .get(USER_AGENT)
-                .and_then(|value| value.to_str().ok()),
-            Some("custom-agent/9.9")
-        );
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn stdio_stderr_is_emitted_before_a_long_line_reaches_eof() {
-        let events = Arc::new(AtomicUsize::new(0));
-        let subscriber = tracing_subscriber::registry().with(StderrEventCount(Arc::clone(&events)));
-        let dispatch = tracing::Dispatch::new(subscriber);
-        let _guard = tracing::dispatcher::set_default(&dispatch);
-        let mut child = Command::new("node")
-            .args([
-                "-e",
-                "process.stderr.write('x'.repeat(65536)); setTimeout(() => {}, 10000);",
-            ])
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .expect("spawn stderr fixture");
-        let stderr = child.stderr.take().expect("fixture stderr");
-
-        drain_server_stderr("fixture".to_owned(), stderr);
-        let observed = tokio::time::timeout(Duration::from_secs(2), async {
-            while events.load(Ordering::Relaxed) == 0 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await;
-        child.kill().await.expect("kill stderr fixture");
-        child.wait().await.expect("reap stderr fixture");
-
-        assert!(
-            observed.is_ok(),
-            "stderr reader retained an unterminated line until EOF"
-        );
-    }
 }

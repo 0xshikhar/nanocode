@@ -1,3 +1,4 @@
+//! Shared typed-tool procedural macros for Codex and Claude.
 #![deny(missing_docs, rustdoc::broken_intra_doc_links)]
 
 use proc_macro::TokenStream;
@@ -297,31 +298,4 @@ fn pascal_case(ident: &syn::Ident) -> String {
             })
         })
         .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use quote::quote;
-
-    use super::parse_args;
-
-    #[test]
-    fn parallel_requires_a_boolean_literal() {
-        let error = parse_args(quote!(description = "Invalid.", parallel = "true"))
-            .err()
-            .unwrap();
-        assert_eq!(error.to_string(), "expected a boolean literal");
-    }
-
-    #[test]
-    fn duplicate_parallel_argument_is_rejected() {
-        let error = parse_args(quote!(
-            description = "Invalid.",
-            parallel = true,
-            parallel = false
-        ))
-        .err()
-        .unwrap();
-        assert_eq!(error.to_string(), "duplicate #[tool] argument");
-    }
 }

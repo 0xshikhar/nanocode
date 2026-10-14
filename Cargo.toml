@@ -1,15 +1,18 @@
 [workspace]
 members = [
+    "crates/nanocode-rollout",
+    "crates/nanocode-backend-codex",
+    "crates/nanocode-agent",
+    "crates/nanocode-media",
+    "crates/nanocode-tls",
+    "crates/nanocode-types",
     "crates/nanocode",
     "crates/nanocode-tools",
-    "crates/nanocode-codex-tools",
-    "crates/nanocode-runtime",
-    "crates/nanocode-claude",
-    "crates/nanocode-claude-tools",
+    "crates/nanocode-backend-claude",
+    "crates/nanocode-backend-claude/tools",
     "crates/nanocode-durability",
     "crates/nanocode-hand",
     "crates/nanocode-home",
-    "crates/nanocode-codex",
     "crates/nanocode-code-mode",
     "crates/nanocode-observability",
     "crates/nanocode-subagents",
@@ -34,9 +37,14 @@ categories = ["api-bindings", "asynchronous", "development-tools"]
 publish = true
 
 [workspace.dependencies]
+nanocode-rollout = { version = "0.6.7", path = "crates/nanocode-rollout" }
+nanocode-backend-codex = { version = "0.6.7", path = "crates/nanocode-backend-codex" }
+nanocode-agent = { version = "0.6.7", path = "crates/nanocode-agent" }
+nanocode-media = { version = "0.6.7", path = "crates/nanocode-media" }
+nanocode-tls = { version = "0.6.7", path = "crates/nanocode-tls" }
+nanocode-types = { version = "0.6.7", path = "crates/nanocode-types" }
 nanocode-cua = { version = "0.6.7", path = "crates/nanocode-cua" }
 nanocode-tools = { version = "0.6.7", path = "crates/nanocode-tools" }
-nanocode-codex-tools = { version = "0.6.7", path = "crates/nanocode-codex-tools", default-features = false }
 libc = "0.2"
 base64 = "0.22.1"
 async-trait = "=0.1.89"
@@ -44,7 +52,6 @@ axum = { version = "0.8.9", default-features = false, features = ["form", "http1
 bm25 = { version = "2.3.2", default-features = false }
 chrono = { version = "0.4.43", default-features = false, features = ["clock", "std", "wasmbind"] }
 clap = { version = "4.5.54", features = ["derive", "env"] }
-criterion = { version = "0.7.0", default-features = false, features = ["async_tokio", "cargo_bench_support"] }
 eyre = "0.6.12"
 fs2 = "0.4"
 futures-util = { version = "0.3.31", default-features = false, features = ["async-await", "sink", "std"] }
@@ -55,13 +62,11 @@ httpdate = "1.0.3"
 ignore = "0.4.31"
 jsonschema = { version = "0.48.5", default-features = false }
 nanocode = { version = "0.6.7", path = "crates/nanocode" }
-nanocode-runtime = { version = "0.6.7", path = "crates/nanocode-runtime" }
-nanocode-claude = { version = "0.6.7", path = "crates/nanocode-claude" }
-nanocode-claude-tools = { version = "0.6.7", path = "crates/nanocode-claude-tools", default-features = false }
+nanocode-backend-claude = { version = "0.6.7", path = "crates/nanocode-backend-claude" }
+nanocode-claude-tools = { version = "0.6.7", path = "crates/nanocode-backend-claude/tools", default-features = false }
 nanocode-home = { version = "0.6.7", path = "crates/nanocode-home" }
 nanocode-durability = { version = "0.6.7", path = "crates/nanocode-durability" }
 nanocode-voice-protocol = { version = "0.6.7", path = "crates/nanocode-voice-protocol" }
-nanocode-codex = { version = "0.6.7", path = "crates/nanocode-codex" }
 nanocode-observability = { version = "0.6.7", path = "crates/nanocode-observability" }
 nanocode-subagents = { version = "0.6.7", path = "crates/nanocode-subagents" }
 nanocode-code-mode = { version = "0.6.7", path = "crates/nanocode-code-mode", default-features = false }
@@ -143,44 +148,6 @@ debug = false
 # SIMD wrappers. Optimize the small hashing dependency; workspace code stays
 # unoptimized with normal incremental compilation and useful backtraces.
 [profile.dev.package."sha2:0.11.0"]
-opt-level = 3
-
-# Display math runs during interactive debug builds. Keep the small native
-# parser/layout/raster stack optimized so a cold formula is ready in one frame.
-[profile.dev.package.ratatex]
-opt-level = 1
-
-[profile.dev.package.ratex-font]
-opt-level = 3
-
-[profile.dev.package.ratex-font-loader]
-opt-level = 3
-
-[profile.dev.package.ratex-katex-fonts]
-opt-level = 3
-
-[profile.dev.package.ratex-layout]
-opt-level = 3
-
-[profile.dev.package.ratex-lexer]
-opt-level = 3
-
-[profile.dev.package.ratex-parser]
-opt-level = 3
-
-[profile.dev.package.ratex-render]
-opt-level = 3
-
-[profile.dev.package.ratex-types]
-opt-level = 3
-
-[profile.dev.package.ratex-unicode-font]
-opt-level = 3
-
-[profile.dev.package.tiny-skia]
-opt-level = 3
-
-[profile.dev.package.tiny-skia-path]
 opt-level = 3
 
 [profile.release]

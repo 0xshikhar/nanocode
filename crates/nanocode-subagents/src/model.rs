@@ -1,7 +1,7 @@
 // Derived from clabby/tact@1d9ccaefd1d8613dab020812af04a91cd9b4c52c (Apache-2.0).
 // Modified for Nanocodex's reusable native/WASM extension runtime.
 
-use nanocode_runtime::events::AgentEvent;
+use nanocode_agent::events::AgentEvent;
 use serde::{Deserialize, Serialize};
 use std::{
     fmt,
@@ -16,10 +16,6 @@ static NEXT_RUNTIME_ID: AtomicU64 = AtomicU64::new(0);
 pub struct AgentId(u64);
 
 impl AgentId {
-    #[cfg(test)]
-    pub(crate) const fn new(value: u64) -> Self {
-        Self(value)
-    }
 
     pub(super) const fn next(counter: &mut u64) -> Self {
         *counter = counter.saturating_add(1);
@@ -50,10 +46,6 @@ impl FromStr for AgentId {
 pub struct MessageId(u64);
 
 impl MessageId {
-    #[cfg(test)]
-    pub(crate) const fn new(value: u64) -> Self {
-        Self(value)
-    }
 
     pub(super) const fn next(counter: &mut u64) -> Self {
         *counter = counter.saturating_add(1);

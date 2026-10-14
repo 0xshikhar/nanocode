@@ -1,5 +1,5 @@
 //! Audio handling ported from openai/codex 1427825c40 `code-mode-runtime/src/runtime/audio.rs`.
-//! Output budgets use the shared estimator in `nanocode_codex::audio`.
+//! Output budgets use the shared estimator in `nanocode_types::audio`.
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -62,4 +62,4 @@ pub(super) fn wav_duration_seconds(audio_url: &str) -> Option<f64> {
     None
 }
 
-pub(super) use nanocode_codex::audio::estimate_audio_token_count;
+pub(super) use nanocode_media::audio::estimate_audio_token_count;

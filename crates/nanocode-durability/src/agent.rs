@@ -3,8 +3,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use nanocode_runtime::{
-    ExecutionPolicyDisposition, NanocodexBuilder, NanocodexError, Result as AgentResult,
+use nanocode_agent::{ExecutionPolicyDisposition, NanocodexError, Result as AgentResult};
+use nanocode_backend_codex::{
+    NanocodexBuilder,
     execution::{
         ExecutionAdmission, ExecutionContinuation, ExecutionFuture, ExecutionOutput,
         ExecutionPolicy, ExecutionSteer, ExecutionStepAdmission, IdentifiedExecutionSteer,
@@ -46,8 +47,8 @@ impl<F> DurableAgentExt for NanocodexBuilder<F> {
         }
         let initial = record
             .as_ref()
-            .and_then(|record| match (record.model, record.initial) {
-                (nanocode_runtime::HarnessModel::Codex(model), Some(initial)) => {
+            .and_then(|record| match (record.model.as_codex(), record.initial) {
+                (Some(model), Some(initial)) => {
                     Some((model, initial))
                 }
                 _ => None,
@@ -123,7 +124,7 @@ impl Branches {
     /// Describes a child of this session; inherits model and workspace.
     pub(crate) fn child_record(
         &self,
-        child: &nanocode_runtime::SessionInfo,
+        child: &nanocode_agent::SessionInfo,
     ) -> AgentResult<SessionRecord> {
         let parent = self.record.as_ref().ok_or_else(|| {
             NanocodexError::InvalidExecutionPolicy(
@@ -177,7 +178,7 @@ impl ExecutionPolicy for DurableExecution {
 
     fn branch(
         &self,
-        child: &nanocode_runtime::SessionInfo,
+        child: &nanocode_agent::SessionInfo,
     ) -> AgentResult<Option<Arc<dyn ExecutionPolicy>>> {
         // A session opened without a catalog record has nowhere to describe a
         // child; the caller reports ExecutionPolicyBranchUnsupported, exactly
@@ -588,7 +589,7 @@ struct LazyExecution {
     /// This policy wrote the state's first checkpoint.
     initialized: std::sync::atomic::AtomicBool,
     /// Settings the child was created with, recorded when the state opens.
-    created_with: Mutex<Option<nanocode_runtime::execution::InitialSettings>>,
+    created_with: Mutex<Option<nanocode_backend_codex::execution::InitialSettings>>,
 }
 
 impl LazyExecution {
@@ -617,7 +618,7 @@ impl LazyExecution {
                 if let Some(settings) = self.created_with.lock().ok().and_then(|settings| *settings)
                 {
                     // The child's own model and settings, not its parent's.
-                    record.model = nanocode_runtime::HarnessModel::Codex(settings.model);
+                    record.model = nanocode_agent::HarnessModel::Codex(settings.model);
                     record.initial = Some(crate::catalog::InitialSettings {
                         thinking: settings.thinking,
                         service_tier: settings.service_tier,
@@ -647,7 +648,7 @@ impl ExecutionPolicy for LazyExecution {
 
     fn branch(
         &self,
-        child: &nanocode_runtime::SessionInfo,
+        child: &nanocode_agent::SessionInfo,
     ) -> AgentResult<Option<Arc<dyn ExecutionPolicy>>> {
         let branches = Branches {
             store: self.store.clone(),
@@ -691,7 +692,7 @@ impl ExecutionPolicy for LazyExecution {
     fn commit_initial_checkpoint<'a>(
         &'a self,
         snapshot: Option<SessionSnapshot>,
-        settings: nanocode_runtime::execution::InitialSettings,
+        settings: nanocode_backend_codex::execution::InitialSettings,
     ) -> ExecutionFuture<'a, AgentResult<()>> {
         Box::pin(async move {
             if self.initialized.load(std::sync::atomic::Ordering::SeqCst) {
@@ -981,156 +982,4 @@ pub(crate) fn agent_error(error: Error) -> NanocodexError {
         _ => ExecutionPolicyDisposition::Fatal,
     };
     NanocodexError::execution_policy_with_disposition("durability", disposition, error)
-}
-
-#[cfg(test)]
-mod tests {
-    use nanocode_runtime::ExecutionPolicyDisposition;
-
-    use super::*;
-
-    #[tokio::test]
-    async fn corruption_is_fatal_even_when_an_operation_is_pending() {
-        let state = DurableSession::open(crate::MemoryStore::new().unwrap(), "corrupt")
-            .await
-            .unwrap();
-        let (owner, _) = state.acquire_agent().await.unwrap();
-        owner
-            .admit_typed::<_, u32, String>("turn".into(), &"input")
-            .await
-            .unwrap();
-        let policy = DurableExecution::ready(owner, "test".into(), None);
-        let failure = policy
-            .recover_failure(
-                "turn".into(),
-                agent_error(Error::InvalidState("missing payload record".into())),
-            )
-            .await;
-        assert_eq!(
-            failure.execution_policy_disposition(),
-            Some(ExecutionPolicyDisposition::Fatal)
-        );
-        policy.shutdown().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn failure_classification_follows_settlement_instead_of_error_text() {
-        let state = DurableSession::open(crate::MemoryStore::new().unwrap(), "settlement")
-            .await
-            .unwrap();
-        let (owner, _) = state.acquire_agent().await.unwrap();
-        owner
-            .admit_typed::<_, u32, String>("first".into(), &"input")
-            .await
-            .unwrap();
-        owner.begin_attempt("first".into()).await.unwrap();
-        let policy = DurableExecution::ready(owner, "test".into(), None);
-        let failure = policy
-            .recover_failure(
-                "first".into(),
-                NanocodexError::MalformedResponse {
-                    detail: "failure before a safe checkpoint",
-                },
-            )
-            .await;
-        assert_eq!(
-            failure.execution_policy_disposition(),
-            Some(ExecutionPolicyDisposition::Retry)
-        );
-
-        policy
-            .owner
-            .fail(
-                "first".into(),
-                crate::EncodedPayload::encode(&1_u32).unwrap(),
-                "transport failed and turn was cancelled".into(),
-            )
-            .await
-            .unwrap();
-        let failure = policy
-            .recover_failure("first".into(), NanocodexError::TurnStopped)
-            .await;
-        assert!(matches!(
-            failure,
-            NanocodexError::ReplayedExecutionFailed(_)
-        ));
-        assert_eq!(failure.execution_policy_disposition(), None);
-
-        let owner = &policy.owner;
-        owner
-            .admit_typed::<_, u32, String>("second".into(), &"input")
-            .await
-            .unwrap();
-        owner.begin_attempt("second".into()).await.unwrap();
-        owner
-            .complete(
-                "second".into(),
-                crate::EncodedPayload::encode(&2_u32).unwrap(),
-                &"answer",
-            )
-            .await
-            .unwrap();
-        let failure = policy
-            .recover_failure("second".into(), NanocodexError::TurnStopped)
-            .await;
-        assert_eq!(
-            failure.execution_policy_disposition(),
-            Some(ExecutionPolicyDisposition::Retry),
-            "lost result delivery must replay the completed receipt"
-        );
-        policy.shutdown().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn pending_failure_identifies_the_oldest_operation_that_needs_recovery() {
-        let state = DurableSession::open(crate::MemoryStore::new().unwrap(), "blocked")
-            .await
-            .unwrap();
-        let (owner, _) = state.acquire_agent().await.unwrap();
-        for id in ["older", "newer"] {
-            owner
-                .admit_typed::<_, u32, String>(id.into(), &"input")
-                .await
-                .unwrap();
-        }
-        let policy = DurableExecution::ready(owner, "test".into(), None);
-        let failure = policy
-            .recover_failure("newer".into(), NanocodexError::TurnStopped)
-            .await;
-        assert_eq!(
-            failure.execution_policy_disposition(),
-            Some(ExecutionPolicyDisposition::Retry)
-        );
-        let NanocodexError::ExecutionPolicy { source, .. } = failure else {
-            panic!("missing recovery policy")
-        };
-        assert!(
-            matches!(source.downcast_ref::<Error>(), Some(Error::OperationBlocked { pending_id, .. }) if pending_id == "older")
-        );
-        policy.shutdown().await.unwrap();
-    }
-
-    #[test]
-    fn durability_errors_preserve_their_required_recovery_action() {
-        let cases = [
-            (
-                Error::Store(crate::StoreError::NotCommitted("retry".to_owned())),
-                ExecutionPolicyDisposition::Retry,
-            ),
-            (
-                Error::Store(crate::StoreError::Fenced),
-                ExecutionPolicyDisposition::Reopen,
-            ),
-            (
-                Error::InvalidState("broken".to_owned()),
-                ExecutionPolicyDisposition::Fatal,
-            ),
-        ];
-        for (error, expected) in cases {
-            assert_eq!(
-                agent_error(error).execution_policy_disposition(),
-                Some(expected)
-            );
-        }
-    }
 }

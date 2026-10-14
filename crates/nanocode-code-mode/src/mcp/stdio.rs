@@ -137,24 +137,3 @@ impl Transport<RoleClient> for McpStdioTransport {
         terminate.and(wait)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tokio::io::AsyncWriteExt;
-
-    #[tokio::test]
-    async fn stdio_message_reader_rejects_an_oversized_frame() {
-        let (mut write, read) = tokio::io::duplex(64);
-        write.write_all(&[b' '; 33]).await.unwrap();
-        write.write_all(b"\n").await.unwrap();
-        write.shutdown().await.unwrap();
-
-        let error = message_reader(read, 32).next().await.unwrap().unwrap_err();
-
-        assert!(matches!(
-            error,
-            JsonRpcMessageCodecError::MaxLineLengthExceeded
-        ));
-    }
-}

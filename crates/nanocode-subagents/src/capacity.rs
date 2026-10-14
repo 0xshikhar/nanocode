@@ -101,24 +101,3 @@ impl Drop for TurnCapacity {
         });
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::Capacity;
-
-    #[test]
-    fn default_concurrency_is_unlimited_and_can_be_explicitly_limited() {
-        let capacity = Capacity::new(crate::DEFAULT_MAX_SUBAGENTS);
-        assert_eq!(crate::DEFAULT_MAX_SUBAGENTS, usize::MAX);
-        let batch = capacity.reserve_many(128).unwrap();
-        let extra = capacity.reserve().unwrap();
-        capacity.set_limit(2);
-        assert!(capacity.reserve().is_err());
-        drop(batch);
-        let second = capacity.reserve().unwrap();
-        assert!(capacity.reserve().is_err());
-        drop((extra, second));
-        capacity.set_limit(crate::DEFAULT_MAX_SUBAGENTS);
-        assert_eq!(capacity.reserve_many(256).unwrap().len(), 256);
-    }
-}

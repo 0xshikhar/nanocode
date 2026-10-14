@@ -11,7 +11,7 @@ use nanocode_code_mode::{
     contract::{ToolOutputBody, ToolOutputContent},
     runtime::ToolRuntime,
 };
-use nanocode_runtime::{AgentHandle, Result};
+use nanocode_agent::{AgentHandle, Result};
 use serde_json::{Value, json};
 
 /// Builds this agent's Claude catalog from its materialized tools.
@@ -24,7 +24,7 @@ pub(super) fn install(
     handle: &AgentHandle,
 ) -> Result<ClaudeTools> {
     let tools = tools.clone().for_session(&handle.session_environment());
-    let runtime = Arc::new(ToolRuntime::new_with_tools(workspace, None, None, &tools));
+    let runtime = Arc::new(ToolRuntime::new_with_tools(workspace, Vec::new(), &tools));
     // Claude awaits adapter cleanup after every admitted turn: cells the turn
     // left running end with it, like a cancelled Codex turn, and the next
     // turn's cells are distinguished. Shell sessions end with the agent.

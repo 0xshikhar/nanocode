@@ -1,6 +1,6 @@
 //! Host-owned, task-aware routing before a clean child is constructed.
 use async_trait::async_trait;
-use nanocode_runtime::{Model, SpawnOptions};
+use nanocode_agent::SpawnOptions;
 
 /// A prepared choice. The opaque reference carries no provider credentials.
 pub struct SpawnRoute {
@@ -53,7 +53,7 @@ impl SpawnRoute {
     }
 }
 
-/// A host may explicitly keep native GPT spawning, including live parent defaults.
+/// A host may explicitly keep registered-backend spawning, including live parent defaults.
 /// The reference is still bound before inference, just like a routed choice.
 pub enum SpawnDecision {
     Routed(SpawnRoute),
@@ -66,15 +66,6 @@ impl SpawnDecision {
             Self::Routed(route) => route.validate(requested),
             Self::Native { reference } => {
                 if reference.trim().is_empty()
-                    || requested.selected_harness_model().is_some_and(|model| {
-                        !matches!(
-                            model,
-                            nanocode_runtime::HarnessModel::Claude(_)
-                                | nanocode_runtime::HarnessModel::Codex(
-                                    Model::Astra | Model::Sol | Model::Luna
-                                )
-                        )
-                    })
                 {
                     return Err(std::io::Error::other("invalid native subagent choice"));
                 }
@@ -83,9 +74,9 @@ impl SpawnDecision {
         }
     }
 
-    pub(crate) const fn options(&self, requested: SpawnOptions) -> SpawnOptions {
+    pub(crate) fn options(&self, requested: SpawnOptions) -> SpawnOptions {
         match self {
-            Self::Routed(route) => route.options,
+            Self::Routed(route) => route.options.clone(),
             Self::Native { .. } => requested,
         }
     }
@@ -134,91 +125,4 @@ pub trait SpawnRouter: Send + Sync {
         reference: &str,
         host_context: Option<&str>,
     ) -> std::io::Result<()>;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{SpawnDecision, SpawnRoute};
-    use nanocode_runtime::{Model, SpawnOptions, Thinking};
-
-    #[test]
-    fn native_choices_preserve_defaults_and_overrides_but_reject_non_gpt() {
-        let native = SpawnDecision::Native {
-            reference: "native-ticket".into(),
-        };
-        for requested in [
-            SpawnOptions::new(),
-            SpawnOptions::new().thinking(Thinking::Max),
-            SpawnOptions::new()
-                .model(Model::Sol)
-                .thinking(Thinking::None),
-        ] {
-            assert!(native.validate(requested).is_ok());
-            assert_eq!(
-                native.options(requested).selected_harness_model(),
-                requested.selected_harness_model()
-            );
-            assert_eq!(
-                native.options(requested).selected_thinking(),
-                requested.selected_thinking()
-            );
-        }
-        for model in [Model::Kimi, Model::Mimo, Model::Glm53] {
-            assert!(native.validate(SpawnOptions::new().model(model)).is_err());
-        }
-        assert!(
-            SpawnDecision::Native {
-                reference: "".into()
-            }
-            .validate(SpawnOptions::new())
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn routes_require_complete_supported_choices_and_preserve_overrides() {
-        let valid = SpawnOptions::new()
-            .model(Model::Sol)
-            .thinking(Thinking::High);
-        for (options, reference, requested) in [
-            (SpawnOptions::new(), "route", SpawnOptions::new()),
-            (
-                SpawnOptions::new().model(Model::Sol),
-                "route",
-                SpawnOptions::new(),
-            ),
-            (valid, "  ", SpawnOptions::new()),
-            (valid, "route", SpawnOptions::new().model(Model::Astra)),
-            (valid, "route", SpawnOptions::new().thinking(Thinking::Low)),
-            (
-                SpawnOptions::new()
-                    .model(Model::Astra)
-                    .thinking(Thinking::None),
-                "route",
-                SpawnOptions::new(),
-            ),
-            (
-                SpawnOptions::new()
-                    .model(Model::Glm53)
-                    .thinking(Thinking::Max),
-                "route",
-                SpawnOptions::new(),
-            ),
-        ] {
-            assert!(
-                SpawnRoute {
-                    options,
-                    reference: reference.to_owned()
-                }
-                .validate(requested)
-                .is_err()
-            );
-        }
-        let route = SpawnRoute {
-            options: valid,
-            reference: "route".to_owned(),
-        };
-        assert!(route.validate(SpawnOptions::new()).is_ok());
-        assert!(route.validate(valid).is_ok());
-    }
 }

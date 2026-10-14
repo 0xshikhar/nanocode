@@ -1,9 +1,9 @@
 //! Shared invocation traits and macro support for Codex and Claude tools.
 use async_trait::async_trait;
-use nanocode_codex::ResponseItem;
-pub use nanocode_codex::tools::*;
 /// Defines a typed tool implementing the shared [`Tool`] contract.
 pub use nanocode_tools_macros::tool;
+use nanocode_types::responses::ResponseItem;
+pub use nanocode_types::tools::*;
 use serde::de::DeserializeOwned;
 use serde_json::value::RawValue;
 mod schema;
@@ -189,7 +189,7 @@ pub enum ToolInputError {
 ///
 /// ```
 /// use async_trait::async_trait;
-/// use nanocode_codex::responses::JsonSchema;
+/// use nanocode_types::responses::JsonSchema;
 /// use nanocode_tools::{Tool, ToolContext, ToolDefinition, ToolInput, ToolOutput, ToolResult};
 /// use serde_json::json;
 ///
@@ -245,4 +245,66 @@ pub trait Tool: Send + Sync + 'static {
 
     /// Executes one invocation.
     async fn execute(&self, input: ToolInput, context: ToolContext<'_>) -> ToolResult;
+}
+
+/// Backend-independent registration of shared tool implementations.
+pub trait ToolCollection: Sized {
+    /// Error returned when a tool cannot be registered.
+    type Error;
+
+    /// Adds a shared tool while retaining the collection's execution policy.
+    fn add_shared_tool(self, tool: std::sync::Arc<dyn Tool>) -> Result<Self, Self::Error>;
+}
+
+/// Invalid declarative tool selection.
+#[derive(Debug, thiserror::Error)]
+pub enum ToolsBuildError {
+    /// A host capability could not be bound to its owning session.
+    #[error("host tool initialization failed: {0}")]
+    HostInitialization(String),
+
+    /// A custom definition has an empty registry name.
+    #[error("tool name must not be empty")]
+    EmptyName,
+
+    /// The model-visible working-directory override is empty.
+    #[error("working directory override must not be empty")]
+    EmptyWorkingDirectory,
+
+    /// The model-visible shell override is empty.
+    #[error("default shell override must not be empty")]
+    EmptyDefaultShell,
+
+    /// Two custom tools use the same definition name.
+    #[error("tool name `{0}` is registered more than once")]
+    DuplicateName(Box<str>),
+
+    /// A singleton tool source was added more than once.
+    #[error("tool source `{0}` is configured more than once")]
+    DuplicateSource(&'static str),
+
+    /// A custom tool collides with an enabled built-in tool.
+    #[error("tool name `{0}` conflicts with an enabled built-in tool")]
+    BuiltInName(Box<str>),
+
+    /// A custom tool collides with a host-owned routing tool.
+    #[error("tool name `{0}` is reserved by the Code Mode host")]
+    ReservedName(Box<str>),
+
+    /// A model-visible name does not match the Responses tool-name grammar.
+    #[error(
+        "invalid public tool name `{0}`; expected 1-128 ASCII bytes beginning with an alphanumeric and containing only alphanumerics, `.`, `_`, `:`, or `-`"
+    )]
+    InvalidPublicName(Box<str>),
+
+    /// Two Code Mode tools map to the same JavaScript identifier.
+    #[error("tool names `{first}` and `{second}` both normalize to Code Mode name `{normalized}`")]
+    NormalizedNameCollision {
+        /// First public tool name using the normalized identifier.
+        first: Box<str>,
+        /// Later public tool name using the normalized identifier.
+        second: Box<str>,
+        /// Conflicting JavaScript identifier.
+        normalized: Box<str>,
+    },
 }

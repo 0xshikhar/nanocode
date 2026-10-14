@@ -1,3 +1,4 @@
+//! Portable durable execution state and stores for Nanocodex.
 #![deny(missing_docs, rustdoc::broken_intra_doc_links)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
@@ -161,3 +162,6 @@ pub enum Error {
     InvalidPayload(#[from] serde_json::Error),
 }
 pub use agent::DurableAgentExt;
+
+mod registration;
+pub use registration::DurableBackendRegistration;

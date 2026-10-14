@@ -1,7 +1,7 @@
 //! Stable identities and reusable implementations for standard workspace tools.
 
-use nanocode_codex::responses::CustomToolFormat;
 use nanocode_tools::ToolDefinition;
+use nanocode_types::responses::CustomToolFormat;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 

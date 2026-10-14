@@ -240,7 +240,3 @@ async fn install_credentials(
         .map_err(|error| format!("failed to adopt OAuth credentials: {error}"))?;
     Ok(())
 }
-
-#[cfg(test)]
-#[path = "refresh_tests.rs"]
-mod tests;

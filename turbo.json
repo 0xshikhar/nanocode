@@ -23,18 +23,21 @@
         "$TURBO_ROOT$/.cargo/**",
         "$TURBO_ROOT$/js/scripts/**",
         "$TURBO_ROOT$/crates/nanocode/**",
-        "$TURBO_ROOT$/crates/nanocode-runtime/**",
-        "$TURBO_ROOT$/crates/nanocode-claude/**",
-        "$TURBO_ROOT$/crates/nanocode-claude-tools/**",
+        "$TURBO_ROOT$/crates/nanocode-agent/**",
+        "$TURBO_ROOT$/crates/nanocode-backend-claude/**",
         "$TURBO_ROOT$/crates/nanocode-durability/**",
         "$TURBO_ROOT$/crates/nanocode-home/**",
-        "$TURBO_ROOT$/crates/nanocode-codex/**",
+        "$TURBO_ROOT$/crates/nanocode-backend-codex/**",
         "$TURBO_ROOT$/crates/nanocode-subagents/**",
         "$TURBO_ROOT$/crates/nanocode-code-mode/**",
         "$TURBO_ROOT$/crates/nanocode-voice-protocol/**",
         "$TURBO_ROOT$/crates/nanocode-tools/**",
         "$TURBO_ROOT$/crates/nanocode-tools-macros/**",
-        "$TURBO_ROOT$/crates/nanocode-codex-tools/**"
+        "$TURBO_ROOT$/crates/nanocode-types/**",
+        "$TURBO_ROOT$/crates/nanocode-media/**",
+        "$TURBO_ROOT$/crates/nanocode-tls/**",
+        "$TURBO_ROOT$/crates/nanocode-rollout/**",
+        "$TURBO_ROOT$/crates/nanocode-cua/**"
       ],
       "env": [
         "RUSTFLAGS",
@@ -62,24 +65,12 @@
       ],
       "outputs": []
     },
-    "nanocodex-tools#test": {
-      "dependsOn": [
-        "build"
-      ],
-      "outputs": []
-    },
     "dev": {
       "dependsOn": [
         "^build"
       ],
       "cache": false,
       "persistent": true
-    },
-    "test": {
-      "dependsOn": [
-        "^build"
-      ],
-      "outputs": []
     },
     "typecheck": {
       "dependsOn": [

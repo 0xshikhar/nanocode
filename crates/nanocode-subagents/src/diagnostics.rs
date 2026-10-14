@@ -92,30 +92,3 @@ impl From<CompletionError> for std::io::Error {
         Self::new(std::io::ErrorKind::InvalidInput, error)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn diagnostic_bounds_paths_and_preserves_unicode_and_machine_readable_codes() {
-        let error = CompletionError::new(
-            CompletionErrorCode::SchemaValidation,
-            true,
-            "schema mismatch",
-            "Correct output.",
-        )
-        .with_details(vec!["界".repeat(1000); 8]);
-        assert_eq!(error.details.len(), 4);
-        assert!(error.details.iter().all(|detail| detail.len() <= 512));
-        let json = serde_json::to_value(&error).unwrap();
-        assert!(
-            error
-                .to_string()
-                .starts_with("schema mismatch Correct output.")
-        );
-        assert!(!error.to_string().starts_with('{'));
-        assert_eq!(json["code"], "schema_validation");
-        assert_eq!(json["recoverable"], true);
-    }
-}

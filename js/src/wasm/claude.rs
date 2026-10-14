@@ -25,7 +25,7 @@ use super::{
     JsFuture, JsValue, Mutex, RustNanocodex, SessionCheckpoint, WasmHarnessFactory, WasmNanocodex,
     WasmSubagents, WasmSubagentsConfig, host_cancel_code_turn, js_agent_error, js_error,
 };
-use nanocode_claude::{
+use nanocode_backend_claude::{
     Claude, ClaudeAuthFuture, ClaudeAuthProvider, ClaudeAuthUnavailable, ClaudeClient,
     ClaudeNestedToolUpdate, ClaudeToolInvocation, ClaudeToolProgress, ClaudeToolReply, ClaudeTools,
     ServerToolDefinition, ToolDefinition, ToolResultContent,
@@ -123,7 +123,7 @@ pub(super) struct ClaudeConfig {
     endpoint: Option<String>,
     #[serde(default)]
     subscription_compatibility: bool,
-    subscription_identity: Option<nanocode_claude::SubscriptionIdentity>,
+    subscription_identity: Option<nanocode_backend_claude::SubscriptionIdentity>,
     host_definition_id: Option<u32>,
     #[serde(default)]
     tools: Vec<ToolDefinition>,
@@ -550,9 +550,9 @@ pub(super) async fn build_claude(
     let direct = config.is_direct();
     let endpoint = config.endpoint.unwrap_or_else(|| {
         if config.subscription_compatibility {
-            nanocode_claude::ANTHROPIC_SUBSCRIPTION_MESSAGES_URL.to_owned()
+            nanocode_backend_claude::ANTHROPIC_SUBSCRIPTION_MESSAGES_URL.to_owned()
         } else {
-            nanocode_claude::ANTHROPIC_MESSAGES_URL.to_owned()
+            nanocode_backend_claude::ANTHROPIC_MESSAGES_URL.to_owned()
         }
     });
     let http = reqwest::Client::new();
@@ -596,7 +596,7 @@ pub(super) async fn build_claude(
     }
     if let Some(effort) = config.thinking {
         if builder_model
-            .parse::<nanocode_runtime::HarnessModel>()
+            .parse::<nanocode_backend_codex::HarnessModel>()
             .is_ok()
         {
             builder = builder.thinking(effort).map_err(js_error)?;

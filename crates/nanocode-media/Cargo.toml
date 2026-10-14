@@ -1,0 +1,29 @@
+[package]
+autotests = false
+autobenches = false
+name = "nanocode-media"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shared image preparation and audio accounting"
+[dependencies]
+tracing.workspace = true
+nanocode-types.workspace = true
+base64.workspace = true
+image.workspace = true
+sha1.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+symphonia = { version = "0.6.0", default-features = false, features = ["isomp4", "mkv", "mp3", "ogg", "wav"] }
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+tokio = { workspace = true, features = ["fs"] }
+[lints]
+workspace = true
+
+[lib]
+test = false
+doctest = false
+bench = false

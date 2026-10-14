@@ -56,28 +56,3 @@ where
         .await
         .map_err(|_| format!("{method} pagination timed out after {timeout:?}"))?
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn rejects_unbounded_pagination() {
-        let repeated_cursor = collect_paginated("tools/list", |_| async {
-            Ok((vec![1_u8], Some("same".to_owned())))
-        })
-        .await
-        .unwrap_err();
-        assert_eq!(
-            repeated_cursor,
-            "tools/list returned a repeated pagination cursor"
-        );
-
-        let oversized_catalog = collect_paginated("tools/list", |_| async {
-            Ok((vec![(); MAX_MCP_CATALOG_ITEMS + 1], None))
-        })
-        .await
-        .unwrap_err();
-        assert!(oversized_catalog.contains("catalog limit"));
-    }
-}

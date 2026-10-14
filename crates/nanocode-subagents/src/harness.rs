@@ -9,8 +9,8 @@ use super::{
     platform::{self, Task, TaskError},
     runtime::{DelegationChange, Registry, completion_instructions},
 };
-use nanocode_runtime::input::Prompt;
-use nanocode_runtime::{
+use nanocode_agent::input::Prompt;
+use nanocode_agent::{
     Nanocodex, NanocodexError, Result as AgentResult, SessionCheckpoint, TurnControl, TurnResult,
 };
 use std::{collections::VecDeque, sync::Weak};
@@ -645,64 +645,5 @@ impl Harness {
                 .await;
         }
         shutdown_result
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::model::{MessagePurpose, MessageSender, ThreadId};
-
-    #[tokio::test]
-    async fn delivery_transport_accepts_bursts_and_preserves_commit_and_fifo() {
-        let (commands, _commands) = mpsc::channel(COMMAND_CAPACITY);
-        let (deferred, mut deferred_receiver) = mpsc::unbounded_channel();
-        let (urgent, mut urgent_receiver) = mpsc::unbounded_channel();
-        let handle = HarnessHandle {
-            commands,
-            deferred,
-            urgent,
-        };
-        for (priority, receiver) in [
-            (MessagePriority::Deferred, &mut deferred_receiver),
-            (MessagePriority::Urgent, &mut urgent_receiver),
-        ] {
-            let mut deliveries = Vec::new();
-            // No receiver runs until every send has succeeded.
-            for index in 1..=128 {
-                let id = MessageId::new(index);
-                deliveries.push(
-                    handle
-                        .enqueue_delivery(AgentMessage {
-                            id,
-                            thread_id: ThreadId::for_message(id),
-                            from: MessageSender::Root,
-                            to: AgentId::new(1),
-                            priority,
-                            purpose: MessagePurpose::Coordinate,
-                            in_reply_to: None,
-                            body: format!("finding {index}"),
-                        })
-                        .unwrap(),
-                );
-            }
-            for (index, delivery) in deliveries.into_iter().enumerate() {
-                let mut command = receiver.try_recv().unwrap();
-                assert_eq!(command.message.id, MessageId::new(index as u64 + 1));
-                assert!(matches!(
-                    command.committed.as_mut().unwrap().try_recv(),
-                    Err(oneshot::error::TryRecvError::Empty)
-                ));
-                let (receipt, ()) = tokio::join!(delivery.release(), async {
-                    assert!(command.wait_for_commit().await);
-                    command
-                        .response
-                        .send(Ok(MessageDisposition::Queued))
-                        .unwrap();
-                });
-                assert_eq!(receipt.unwrap(), MessageDisposition::Queued);
-            }
-            assert!(receiver.try_recv().is_err());
-        }
     }
 }

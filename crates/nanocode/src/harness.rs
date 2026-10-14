@@ -3,12 +3,12 @@
 use std::{collections::HashMap, future::Future, sync::Arc};
 
 use crate::{Agent, AgentEvents, HarnessFamily, HarnessModel, NanocodexError, Thinking};
-use nanocode_runtime::{
+use nanocode_agent::{
     AgentHandle, ForkRequest, SessionCheckpoint, SpawnOptions,
     backend::{AgentFactory, BackendFuture},
 };
 
-pub(crate) type AgentResult = nanocode_runtime::Result<(Agent, AgentEvents)>;
+pub(crate) type AgentResult = nanocode_agent::Result<(Agent, AgentEvents)>;
 type Recipe = Arc<dyn Fn(HarnessRequest) -> BackendFuture<AgentResult> + Send + Sync>;
 
 /// Validated construction input passed to a concrete provider recipe.
@@ -53,6 +53,7 @@ pub struct Harness {
 #[derive(Default)]
 pub struct HarnessBuilder {
     recipes: HashMap<HarnessFamily, Recipe>,
+    defaults: HashMap<HarnessFamily, HarnessModel>,
 }
 
 impl HarnessBuilder {
@@ -63,6 +64,7 @@ impl HarnessBuilder {
         F: Fn(HarnessRequest) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = AgentResult> + Send + 'static,
     {
+        self.defaults.insert(family.clone(), family.default_model());
         self.recipes
             .insert(family, Arc::new(move |request| Box::pin(recipe(request))));
         self
@@ -75,8 +77,15 @@ impl HarnessBuilder {
         F: Fn(HarnessRequest) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = AgentResult> + 'static,
     {
+        self.defaults.insert(family.clone(), family.default_model());
         self.recipes
             .insert(family, Arc::new(move |request| Box::pin(recipe(request))));
+        self
+    }
+
+    /// Sets the model used when routing into a registered backend without a model override.
+    pub fn default_model(mut self, model: HarnessModel) -> Self {
+        self.defaults.insert(model.family(), model);
         self
     }
 
@@ -85,6 +94,7 @@ impl HarnessBuilder {
         Harness {
             inner: Arc::new(Router {
                 recipes: self.recipes,
+                defaults: self.defaults,
                 #[cfg(not(target_family = "wasm"))]
                 children: None,
             }),
@@ -101,6 +111,7 @@ impl HarnessBuilder {
         Harness {
             inner: Arc::new(Router {
                 recipes: self.recipes,
+                defaults: self.defaults,
                 children: Some(children),
             }),
         }
@@ -108,6 +119,9 @@ impl HarnessBuilder {
 }
 
 impl Harness {
+    pub(crate) fn resolve_options(&self, options: SpawnOptions, parent: HarnessModel, thinking: Thinking) -> nanocode_agent::Result<SpawnOptions> {
+        self.inner.resolve(options, parent, thinking)
+    }
     /// Starts configuring this host's native harness recipes.
     pub fn builder() -> HarnessBuilder {
         HarnessBuilder::default()
@@ -131,8 +145,8 @@ impl Harness {
             .unwrap_or_else(|| self.inner.default_family());
         let model = options
             .selected_harness_model()
-            .unwrap_or_else(|| family.default_model());
-        let options = options.resolve(model, model.default_thinking())?;
+            .unwrap_or_else(|| self.inner.default_model(&family));
+        let options = options.resolve(model.clone(), model.default_thinking())?;
         self.inner
             .clone()
             .construct(None, options, None, Reopen::default())
@@ -274,26 +288,40 @@ impl Reopen {
 
 struct Router {
     recipes: HashMap<HarnessFamily, Recipe>,
+    defaults: HashMap<HarnessFamily, HarnessModel>,
     /// Runtime admission and tracking for children routed through this
     /// registry; absent for a host-composed [`Harness`].
     #[cfg(not(target_family = "wasm"))]
     children: Option<std::sync::Weak<crate::runtime::Ownership>>,
 }
 impl Router {
+    fn default_model(&self, family: &HarnessFamily) -> HarnessModel {
+        self.defaults.get(family).cloned().unwrap_or_else(|| family.default_model())
+    }
+
+    fn resolve(&self, options: SpawnOptions, parent: HarnessModel, thinking: Thinking) -> nanocode_agent::Result<SpawnOptions> {
+        let family = options.selected_family().unwrap_or_else(|| parent.family());
+        let options = if family != parent.family() && options.selected_harness_model().is_none() {
+            options.harness_model(self.default_model(&family))
+        } else {
+            options
+        };
+        options.resolve(parent, thinking)
+    }
     /// Codex when registered, otherwise the sole registered family.
     fn default_family(&self) -> HarnessFamily {
         if self.recipes.contains_key(&HarnessFamily::Codex) || self.recipes.len() != 1 {
             HarnessFamily::Codex
         } else {
-            *self.recipes.keys().next().expect("one registered family")
+            self.recipes.keys().next().expect("one registered family").clone()
         }
     }
 
     /// Runs one routed child construction under the owning runtime's
     /// admission gate and tracks its result for runtime shutdown.
-    async fn tracked<F>(&self, construct: F) -> nanocode_runtime::Result<Vec<(Agent, AgentEvents)>>
+    async fn tracked<F>(&self, construct: F) -> nanocode_agent::Result<Vec<(Agent, AgentEvents)>>
     where
-        F: Future<Output = nanocode_runtime::Result<Vec<(Agent, AgentEvents)>>>,
+        F: Future<Output = nanocode_agent::Result<Vec<(Agent, AgentEvents)>>>,
     {
         #[cfg(not(target_family = "wasm"))]
         if let Some(owner) = self.children.as_ref().and_then(std::sync::Weak::upgrade) {
@@ -355,14 +383,14 @@ struct RoutedFactory {
     inner: Arc<Router>,
 }
 impl AgentFactory for RoutedFactory {
-    fn ensure_available(&self, parent: AgentHandle) -> BackendFuture<nanocode_runtime::Result<()>> {
+    fn ensure_available(&self, parent: AgentHandle) -> BackendFuture<nanocode_agent::Result<()>> {
         Box::pin(async move { parent.ensure_available().await })
     }
 
     fn settings(
         &self,
         parent: AgentHandle,
-    ) -> BackendFuture<nanocode_runtime::Result<(HarnessModel, Thinking)>> {
+    ) -> BackendFuture<nanocode_agent::Result<(HarnessModel, Thinking)>> {
         Box::pin(async move { parent.settings().await })
     }
 
@@ -392,7 +420,7 @@ impl AgentFactory for RoutedFactory {
                     // A family switch takes destination defaults. The native parent's
                     // model may be outside the shared catalog and is never inherited.
                     let parent_model = parent.harness_model();
-                    let options = options.resolve(parent_model, parent_model.default_thinking())?;
+                    let options = inner.resolve(options, parent_model.clone(), parent_model.default_thinking())?;
                     inner
                         .construct(Some(parent), options, host_context, Reopen::default())
                         .await
@@ -410,7 +438,7 @@ impl AgentFactory for RoutedFactory {
         count: usize,
         observer: Arc<dyn Fn(&str) + Send + Sync>,
         host_context: Option<Arc<str>>,
-    ) -> BackendFuture<nanocode_runtime::Result<Vec<(Agent, AgentEvents)>>> {
+    ) -> BackendFuture<nanocode_agent::Result<Vec<(Agent, AgentEvents)>>> {
         let inner = Arc::clone(&self.inner);
         Box::pin(async move {
             inner

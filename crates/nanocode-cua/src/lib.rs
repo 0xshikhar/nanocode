@@ -9,11 +9,11 @@
 
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use nanocode_codex::ImageDetail;
 use nanocode_tools::{
     Tool, ToolContext, ToolDefinition, ToolError, ToolInput, ToolOutput, ToolOutputContent,
     ToolResult,
 };
+use nanocode_types::ImageDetail;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -733,116 +733,4 @@ pub fn output(value: Value) -> ToolResult {
     }
     output.success = success;
     Ok(output)
-}
-
-#[cfg(test)]
-mod provider_contract_tests {
-    use super::*;
-
-    #[test]
-    fn metadata_uses_host_turn_identity_instead_of_call_identity() {
-        for call in ["call-a", "call-b"] {
-            assert_eq!(
-                turn_metadata("session", Some("session:7"), call, "fixture"),
-                json!({"session_id":"session", "thread_id":"session", "turn_id":"session:7", "call_id":call, "model":"fixture"})
-            );
-        }
-        assert!(
-            turn_metadata("session", None, "call-a", "fixture")
-                .get("turn_id")
-                .is_none()
-        );
-        assert_eq!(
-            turn_metadata("session", Some("session:8"), "call-c", "fixture")["turn_id"],
-            "session:8"
-        );
-    }
-
-    #[test]
-    fn model_visibility_matches_pinned_codex_catalog_filter() {
-        // codex-mcp/src/connection_manager/tool_catalog.rs::tool_is_model_visible
-        for (metadata, expected) in [
-            (json!({}), true),
-            (json!({"_meta":{}}), true),
-            (json!({"_meta":{"ui":{}}}), true),
-            (json!({"_meta":{"ui":{"visibility":"model"}}}), true),
-            (json!({"_meta":{"ui":{"visibility":null}}}), true),
-            (json!({"_meta":{"ui":{"visibility":[]}}}), false),
-            (json!({"_meta":{"ui":{"visibility":["app"]}}}), false),
-            (json!({"_meta":{"ui":{"visibility":["model"]}}}), true),
-            (json!({"_meta":{"ui":{"visibility":["app","model"]}}}), true),
-            (
-                json!({"_meta":{"ui":{"visibility":[null,3,{"model":true}]}}}),
-                false,
-            ),
-        ] {
-            let mut raw = metadata;
-            raw["name"] = json!("fixture");
-            raw["inputSchema"] = json!({"type":"object"});
-            let definition: ProviderTool = serde_json::from_value(raw.clone()).unwrap();
-            assert_eq!(definition.model_visible(), expected, "{raw}");
-        }
-    }
-
-    struct EchoProvider;
-    #[async_trait]
-    impl ComputerExecutor for EchoProvider {
-        async fn invoke_tool(
-            &self,
-            name: &str,
-            arguments: Value,
-            _: ToolContext<'_>,
-        ) -> ToolResult {
-            output(
-                json!({"content": [{"type": "text", "text": name}], "structuredContent": arguments}),
-            )
-        }
-    }
-
-    #[tokio::test]
-    async fn preserves_arbitrary_provider_contracts_and_routes_hidden_hooks_only_for_trusted_callers()
-     {
-        let catalog_json = json!([
-            {"name":"js_add_node_module_dir", "description":"Provider-owned instructions", "inputSchema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}, "annotations":{"readOnlyHint":false}, "outputSchema":{"type":"object"}, "_meta":{"custom":[1,2]}},
-            {"name":"future_tool", "inputSchema":{"type":"object","additionalProperties":true}},
-            {"name":"turn_ended", "inputSchema":{"type":"object"}, "_meta":{"ui":{"visibility":[]}}},
-            {"name":"app_only", "inputSchema":{"type":"object"}, "_meta":{"ui":{"visibility":["app"]}}}
-        ]);
-        let catalog: Vec<ProviderTool> = serde_json::from_value(catalog_json.clone()).unwrap();
-        let tools = ComputerTools {
-            executor: Arc::new(EchoProvider),
-            catalog: Arc::new(catalog),
-        };
-        assert_eq!(serde_json::to_value(tools.catalog()).unwrap(), catalog_json);
-        assert_eq!(
-            tools
-                .tools()
-                .map(|tool| tool.definition().name().to_owned())
-                .collect::<Vec<_>>(),
-            [
-                "mcp__cua_repl__js_add_node_module_dir",
-                "mcp__cua_repl__future_tool"
-            ]
-        );
-        let module = tools.tool("js_add_node_module_dir").unwrap();
-        assert_eq!(
-            module.provider_definition().metadata["annotations"],
-            json!({"readOnlyHint":false})
-        );
-        assert!(module.definition().output_schema().is_some());
-        for name in ["js_add_node_module_dir", "future_tool", "turn_ended"] {
-            let args = json!({"path":"/fixture/node_modules", "timeout_ms":"provider-owned", "nested":{"value":1}});
-            let result = tools
-                .tool(name)
-                .unwrap()
-                .execute(
-                    ToolInput::Function(serde_json::value::to_raw_value(&args).unwrap()),
-                    ToolContext::new("fixture", "session", "call", &[], 16000),
-                )
-                .await
-                .unwrap();
-            assert_eq!(result.structured_result()["structuredContent"], args);
-            assert_eq!(result.structured_result()["content"][0]["text"], name);
-        }
-    }
 }

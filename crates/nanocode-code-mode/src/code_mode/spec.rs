@@ -1,5 +1,5 @@
-use nanocode_codex::responses::CustomToolFormat;
 use nanocode_tools::ToolDefinition;
+use nanocode_types::responses::CustomToolFormat;
 use serde_json::json;
 
 use crate::code_mode_description as description;

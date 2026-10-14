@@ -1,4 +1,6 @@
 [package]
+autotests = false
+autobenches = false
 name = "nanocode-code-mode"
 version.workspace = true
 edition.workspace = true
@@ -19,7 +21,6 @@ rustdoc-args = ["-D", "warnings"]
 [features]
 default = ["native"]
 attachment = [
-    "nanocode-codex/native-tls",
     "dep:async-trait",
     "dep:futures-util",
     "dep:http",
@@ -52,7 +53,6 @@ code-mode = [
     "attachment",
     "image-processing",
     "workspace-runtime",
-    "nanocode-codex/client",
     "dep:futures-util",
     "dep:http",
     "dep:nanocode-tools-macros",
@@ -63,11 +63,11 @@ code-mode = [
 mcp = ["code-mode", "dep:bm25", "dep:oauth2", "dep:rmcp", "dep:tokio-util"]
 
 [dependencies]
-nanocode-codex-tools = { workspace = true, features = ["native"] }
+nanocode-types.workspace = true
+nanocode-media.workspace = true
 nanocode-tools.workspace = true
 base64 = { workspace = true, optional = true }
 image = { workspace = true, optional = true }
-nanocode-codex = { path = "../nanocode-codex", version = "0.6.7", default-features = false }
 nanocode-home.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -101,22 +101,13 @@ uuid = { workspace = true, optional = true }
 nix = { workspace = true, optional = true }
 rustix = { workspace = true, features = ["process"], optional = true }
 
-[dev-dependencies]
-criterion.workspace = true
-eyre.workspace = true
-futures-util.workspace = true
-httpdate.workspace = true
-tempfile.workspace = true
-tracing-subscriber.workspace = true
-tokio = { workspace = true, features = ["macros", "rt"] }
-
-
-
-[[test]]
-name = "it"
-path = "tests/it/main.rs"
-required-features = ["native"]
-
-
 [lints]
 workspace = true
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies.nanocode-tls]
+workspace = true
+
+[lib]
+test = false
+doctest = false
+bench = false

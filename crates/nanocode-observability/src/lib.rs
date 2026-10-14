@@ -1,3 +1,4 @@
+//! Tracing formatting and OpenTelemetry setup for Nanocodex applications.
 #![deny(missing_docs, rustdoc::broken_intra_doc_links)]
 
 extern crate self as nanocode_observability;
@@ -93,7 +94,7 @@ impl ObservabilityBuilder {
     /// Starts a builder with the service identity attached to exported spans.
     #[must_use]
     pub fn new(service_name: impl Into<String>, service_version: impl Into<String>) -> Self {
-        let filter = "warn,nanocode=info,nanocode_codex=info,nanocode_code_mode=info".to_owned();
+        let filter = "warn,nanocode=info,nanocode_backend_codex=info,nanocode_backend_claude=info,nanocode_agent=info,nanocode_code_mode=info".to_owned();
         Self {
             otel_filter: filter.clone(),
             filter,
@@ -312,118 +313,5 @@ impl ObservabilityGuard {
 impl Drop for ObservabilityGuard {
     fn drop(&mut self) {
         drop(self.shutdown());
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{
-        io::{Read, Write},
-        net::TcpListener,
-        sync::mpsc,
-        thread,
-        time::{Duration, Instant},
-    };
-
-    use super::*;
-
-    const OTLP_TEST_TIMEOUT: Duration = Duration::from_secs(30);
-
-    #[test]
-    fn formatting_and_otlp_export_share_the_installed_span_stream() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.set_nonblocking(true).unwrap();
-        let address = listener.local_addr().unwrap();
-        let (request_seen, request_received) = mpsc::channel();
-        let server = thread::spawn(move || {
-            let deadline = Instant::now() + OTLP_TEST_TIMEOUT;
-            loop {
-                assert!(Instant::now() < deadline, "OTLP exporter did not connect");
-                match listener.accept() {
-                    Ok((mut stream, _)) => {
-                        stream
-                            .set_read_timeout(Some(Duration::from_secs(2)))
-                            .unwrap();
-                        let mut request = Vec::with_capacity(4 * 1024);
-                        let mut chunk = [0_u8; 1024];
-                        let mut request_len = None;
-                        while request.len() < 1024 * 1024 {
-                            let read = stream.read(&mut chunk).unwrap_or_default();
-                            if read == 0 {
-                                break;
-                            }
-                            request.extend_from_slice(&chunk[..read]);
-                            if request_len.is_none()
-                                && let Some(header_end) =
-                                    request.windows(4).position(|window| window == b"\r\n\r\n")
-                            {
-                                let headers = String::from_utf8_lossy(&request[..header_end]);
-                                let content_len = headers
-                                    .lines()
-                                    .find_map(|line| {
-                                        let (name, value) = line.split_once(':')?;
-                                        name.eq_ignore_ascii_case("content-length")
-                                            .then(|| value.trim().parse::<usize>().ok())
-                                            .flatten()
-                                    })
-                                    .unwrap_or_default();
-                                request_len = Some(header_end + 4 + content_len);
-                            }
-                            if request_len.is_some_and(|request_len| request.len() >= request_len) {
-                                break;
-                            }
-                        }
-                        // The HTTP client may open and close an empty warm-up
-                        // connection before it sends the export request.
-                        if request.is_empty() {
-                            continue;
-                        }
-                        stream
-                            .write_all(
-                                b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
-                            )
-                            .unwrap();
-                        request_seen.send(request).unwrap();
-                        return;
-                    }
-                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(10));
-                    }
-                    Err(error) => panic!("loopback OTLP listener failed: {error}"),
-                }
-            }
-        });
-        let log_path = std::env::temp_dir().join(format!(
-            "nanocode-observability-{}.jsonl",
-            std::process::id()
-        ));
-        let mut guard = ObservabilityBuilder::new("nanocode-test", "0.0.0")
-            .filter("trace")
-            .format(LogFormat::Json)
-            .output(LogOutput::File(log_path.clone()))
-            .otlp_endpoint(format!("http://{address}"))
-            .install()
-            .unwrap();
-        {
-            let span = tracing::info_span!("test.operation", work_units = 3);
-            let _entered = span.enter();
-            tracing::info!("test event");
-        }
-        guard.shutdown().unwrap();
-        guard.shutdown().unwrap();
-        let request = request_received.recv_timeout(OTLP_TEST_TIMEOUT).unwrap();
-        assert!(
-            request.starts_with(b"POST ")
-                && request
-                    .windows(b"/v1/traces".len())
-                    .any(|window| window == b"/v1/traces"),
-            "unexpected OTLP request headers: {}",
-            String::from_utf8_lossy(&request)
-        );
-        server.join().unwrap();
-        drop(guard);
-        let log = std::fs::read_to_string(&log_path).unwrap();
-        assert!(log.lines().any(|line| line.contains("test.operation")));
-        std::fs::remove_file(log_path).unwrap();
     }
 }

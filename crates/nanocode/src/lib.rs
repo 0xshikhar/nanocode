@@ -1,3 +1,4 @@
+//! Alloy-style facade for the Nanocodex agents SDK.
 #![deny(missing_docs, rustdoc::broken_intra_doc_links)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
@@ -7,12 +8,13 @@
 /// Build one directly with `Agent::builder(OpenAi)` or
 /// `Agent::builder(Claude)`, or construct many from a reusable
 /// [`Nanocodex`] runtime.
-pub use nanocode_runtime::Nanocodex as Agent;
+pub use nanocode_agent::Nanocodex as Agent;
+pub use nanocode_agent::{BackendId, BackendRegistration as Backend, BackendRequest, ModelSelection};
 /// The single-backend Codex builder returned by `Agent::builder(openai)`.
 #[cfg(feature = "openai")]
 #[cfg_attr(docsrs, doc(cfg(feature = "openai")))]
-pub use nanocode_runtime::NanocodexBuilder as CodexBuilder;
-pub use nanocode_runtime::{
+pub use nanocode_backend_codex::NanocodexBuilder as CodexBuilder;
+pub use nanocode_agent::{
     AgentEvents, AgentSessionContext, Capabilities, ClaudeModel, CostStatus, EstimatedUsdCost,
     ExecutionPolicyDisposition, ForkPoint, ForkRequest, HarnessFamily, HarnessModel, Lineage,
     ModelCapabilities, ModelTransport, Mutability, NanocodexError, Origin, Persistence,
@@ -23,7 +25,7 @@ mod harness;
 pub use harness::{Harness, HarnessBuilder, HarnessRequest};
 #[cfg(not(target_family = "wasm"))]
 mod runtime;
-pub use nanocode_claude::{Claude, ClaudeClient};
+pub use nanocode_backend_claude::{Claude, ClaudeClient};
 pub use nanocode_code_mode::Tool;
 #[cfg(any(feature = "openai", not(target_family = "wasm")))]
 #[cfg_attr(docsrs, doc(cfg(any(feature = "openai", not(target_family = "wasm")))))]
@@ -33,8 +35,8 @@ pub use nanocode_code_mode::Tools;
 pub use nanocode_code_mode::tool;
 #[cfg(feature = "openai")]
 #[cfg_attr(docsrs, doc(cfg(feature = "openai")))]
-pub use nanocode_codex::OpenAi;
-pub use nanocode_codex::{Model, ReasoningMode, Thinking};
+pub use nanocode_backend_codex::client::OpenAi;
+pub use nanocode_agent::{Model, ReasoningMode, Thinking};
 #[cfg(feature = "durability")]
 #[cfg_attr(docsrs, doc(cfg(feature = "durability")))]
 pub use nanocode_durability::DurableAgentExt;
@@ -56,28 +58,28 @@ pub mod agent {
     #[cfg(feature = "durability")]
     #[cfg_attr(docsrs, doc(cfg(feature = "durability")))]
     pub use crate::durability;
-    pub use nanocode_runtime::Nanocodex as Agent;
+    pub use nanocode_agent::Nanocodex as Agent;
     #[cfg(all(feature = "openai", not(target_family = "wasm")))]
     #[cfg_attr(docsrs, doc(cfg(all(feature = "openai", not(target_family = "wasm")))))]
-    pub use nanocode_runtime::rollout;
-    pub use nanocode_runtime::{
+    pub use nanocode_backend_codex::rollout;
+    pub use nanocode_agent::{
         AgentEvents, AgentSessionContext, BuilderBackend, CostStatus, EstimatedUsdCost,
         ExecutionPolicyDisposition, NanocodexError, PromptRequest, PromptRoute, ReportedTurnUsage,
         Result, ServiceTier, SpawnOptions, Turn, TurnControl, TurnResult, TurnUsage, UsdAmount,
         WeakAgent, events, input, session, usage,
     };
-    pub use nanocode_runtime::{
+    pub use nanocode_agent::{
         AgentHandle, Capabilities, ForkPoint, ForkRequest, Lineage, Mutability, Origin,
         Persistence, SessionCheckpoint, SessionInfo,
     };
     #[cfg(feature = "openai")]
     #[cfg_attr(docsrs, doc(cfg(feature = "openai")))]
-    pub use nanocode_runtime::{ExecutionEnvironment, NanocodexBuilder as CodexBuilder, execution};
+    pub use nanocode_backend_codex::{ExecutionEnvironment, NanocodexBuilder as CodexBuilder, execution};
 }
 
 /// Anthropic Messages client, provider-native builder, protocol, and authentication.
 #[doc(inline)]
-pub use nanocode_claude as claude;
+pub use nanocode_backend_claude as claude;
 
 /// Portable durable execution policy and host-store contracts.
 #[cfg(feature = "durability")]
@@ -87,10 +89,10 @@ pub use nanocode_durability as durability;
 
 /// Tower-native OpenAI Responses client, sessions, protocol, and transport.
 #[doc(inline)]
-pub use nanocode_codex as oai;
+pub use nanocode_backend_codex::client as oai;
 
 /// Codex Responses client, authentication, protocol and transport.
-pub use nanocode_codex as codex;
+pub use nanocode_backend_codex::client as codex;
 
 /// OpenAI Responses tool registry, built-ins, MCP, tool search, and Code Mode.
 ///
@@ -163,6 +165,6 @@ pub mod __private {
 /// Shared Code Mode and tool execution runtime.
 pub use nanocode_code_mode as code_mode;
 /// Codex-specific web and image tools.
-pub use nanocode_codex_tools as codex_tools;
+pub use nanocode_backend_codex::builtin_tools as codex_tools;
 /// Shared tool contracts and typed macros for all harnesses.
 pub use nanocode_tools as tool_contract;

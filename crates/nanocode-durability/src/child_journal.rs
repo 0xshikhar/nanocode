@@ -6,7 +6,7 @@
 
 use std::{collections::HashSet, sync::Arc};
 
-use nanocode_runtime::backend::{BackendFuture, ChildJournal, ChildJournalStore};
+use nanocode_agent::backend::{BackendFuture, ChildJournal, ChildJournalStore};
 
 use crate::{
     StateStore,

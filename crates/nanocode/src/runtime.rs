@@ -8,8 +8,8 @@ use crate::{
 };
 #[cfg(feature = "openai")]
 use crate::{CodexBuilder, OpenAi};
-use nanocode_runtime::AgentHandle;
-use nanocode_runtime::{
+use nanocode_agent::AgentHandle;
+use nanocode_agent::{
     ModelTransport, SpawnOptions, WeakAgent,
     backend::{AgentFactory, AgentOwner, BackendFuture, adopt},
 };
@@ -24,7 +24,7 @@ mod claude_bash;
 mod claude_files;
 mod claude_tools;
 
-type Result<T> = nanocode_runtime::Result<T>;
+type Result<T> = nanocode_agent::Result<T>;
 type Recipe = Arc<dyn Fn(AgentSpec) -> BackendFuture<AgentResult> + Send + Sync>;
 #[cfg(feature = "openai")]
 type CodexHook = Arc<dyn Fn(CodexBuilder) -> Result<CodexBuilder> + Send + Sync>;
@@ -207,6 +207,7 @@ impl From<ClaudeClient> for ClaudeHarness {
 /// Configures a reusable [`Nanocodex`] runtime.
 #[derive(Clone, Default)]
 pub struct NanocodexBuilder {
+    backends: Vec<Arc<dyn crate::Backend>>,
     #[cfg(feature = "openai")]
     codex: Option<CodexHarness>,
     claude: Option<ClaudeHarness>,
@@ -220,6 +221,12 @@ pub struct NanocodexBuilder {
 }
 
 impl NanocodexBuilder {
+    /// Registers a backend with its own configured defaults and tool policy.
+    #[must_use]
+    pub fn backend(mut self, backend: impl crate::Backend + 'static) -> Self {
+        self.backends.push(Arc::new(backend));
+        self
+    }
     /// Configures the Codex harness from a client or a [`CodexHarness`].
     #[cfg(feature = "openai")]
     #[cfg_attr(docsrs, doc(cfg(feature = "openai")))]
@@ -256,7 +263,7 @@ impl NanocodexBuilder {
 
     /// Selects the default family of spawned agents.
     #[must_use]
-    pub const fn harness(mut self, family: HarnessFamily) -> Self {
+    pub fn harness(mut self, family: HarnessFamily) -> Self {
         self.harness = Some(family);
         self
     }
@@ -309,13 +316,24 @@ impl NanocodexBuilder {
         if self.claude.is_some() {
             configured.push(HarnessFamily::Claude);
         }
-        let Some(&fallback) = configured.first() else {
+        for backend in &self.backends {
+            let family: HarnessFamily = backend.id().as_str().parse().map_err(|error| {
+                NanocodexError::InvalidRequest(format!("invalid backend identity: {error}"))
+            })?;
+            if configured.contains(&family) {
+                return Err(NanocodexError::InvalidRequest(format!(
+                    "backend {family} is configured more than once"
+                )));
+            }
+            configured.push(family);
+        }
+        let Some(fallback) = configured.first().cloned() else {
             return Err(NanocodexError::InvalidRequest(
                 "a Nanocodex runtime requires at least one harness backend".into(),
             ));
         };
-        if let (Some(family), Some(model)) = (self.harness, self.model)
-            && family != model.family()
+        if let (Some(family), Some(model)) = (self.harness.as_ref(), self.model.as_ref())
+            && *family != model.family()
         {
             return Err(NanocodexError::InvalidRequest(
                 "model does not belong to selected harness".into(),
@@ -323,9 +341,14 @@ impl NanocodexBuilder {
         }
         let family = self
             .harness
-            .or_else(|| self.model.map(HarnessModel::family))
+            .or_else(|| self.model.as_ref().map(HarnessModel::family))
             .unwrap_or(fallback);
-        let model = self.model.unwrap_or_else(|| family.default_model());
+        let model = self.model.unwrap_or_else(|| {
+            self.backends.iter().find(|backend| backend.id().as_str() == family.as_str())
+                .map_or_else(|| family.default_model(), |backend| {
+                    HarnessModel::new(family.clone(), backend.default_model())
+                })
+        });
         let thinking = self.thinking.unwrap_or_else(|| model.default_thinking());
         model
             .capabilities(ModelTransport::Native)
@@ -337,6 +360,9 @@ impl NanocodexBuilder {
 
         let cua = (!self.cua_disabled).then(|| Arc::new(tokio::sync::OnceCell::new_with(self.cua)));
         let ownership = Arc::new(Ownership::default());
+        let backend_defaults: Vec<_> = self.backends.iter().map(|backend| {
+            HarnessModel::new(backend.id(), backend.default_model())
+        }).collect();
         let mut recipes: Vec<(HarnessFamily, Recipe)> = Vec::new();
         #[cfg(feature = "openai")]
         if let Some(codex) = self.codex {
@@ -351,12 +377,21 @@ impl NanocodexBuilder {
                 claude_recipe(claude, &self.settings, &workspace, cua.clone()),
             ));
         }
+        for backend in self.backends {
+            let family = backend.id().as_str().parse().map_err(|error| {
+                NanocodexError::InvalidRequest(format!("invalid backend identity: {error}"))
+            })?;
+            recipes.push((family, registered_recipe(backend, &self.settings, &workspace)));
+        }
         let mut router = Harness::builder();
         for (family, recipe) in &recipes {
             let recipe = Arc::clone(recipe);
-            router = router.register(*family, move |request: HarnessRequest| {
+            router = router.register(family.clone(), move |request: HarnessRequest| {
                 recipe(AgentSpec::routed(request))
             });
+        }
+        for model in backend_defaults {
+            router = router.default_model(model);
         }
         Ok(Nanocodex {
             inner: Arc::new(Runtime {
@@ -368,6 +403,39 @@ impl NanocodexBuilder {
             }),
         })
     }
+}
+
+fn registered_recipe(
+    backend: Arc<dyn crate::Backend>,
+    runtime: &Settings,
+    workspace: &Arc<Path>,
+) -> Recipe {
+    let workspace = Arc::clone(workspace);
+    let defaults = runtime.clone();
+    Arc::new(move |spec| {
+        let backend = Arc::clone(&backend);
+        let workspace = Arc::clone(&workspace);
+        let settings = spec.settings.or(&defaults);
+        Box::pin(async move {
+            backend.validate_model(spec.model.as_str())?;
+            #[cfg(feature = "durability")]
+            if spec.durable_state.is_some() {
+                return Err(NanocodexError::UnsupportedCapability {
+                    capability: "registered backend durable store attachment",
+                });
+            }
+            backend.build(crate::BackendRequest {
+                model: crate::ModelSelection::new(backend.id(), spec.model.as_str()),
+                thinking: Some(spec.thinking),
+                options: SpawnOptions::new().harness_model(spec.model).thinking(spec.thinking),
+                workspace: workspace.to_path_buf(),
+                instructions: settings.instructions.map(|instructions| instructions.to_string()),
+                spawn_factory: spec.spawn_factory,
+                host_context: spec.host_context,
+                checkpoint: spec.checkpoint,
+            }).await
+        })
+    })
 }
 
 /// A reusable configured runtime that constructs isolated agents from shared
@@ -433,7 +501,7 @@ impl Nanocodex {
     /// Default model of spawned agents.
     #[must_use]
     pub fn model(&self) -> HarnessModel {
-        self.inner.model
+        self.inner.model.clone()
     }
 
     /// Default thinking level of spawned agents.
@@ -562,7 +630,7 @@ pub struct SpawnBuilder<'a> {
 impl SpawnBuilder<'_> {
     /// Selects this agent's family. Selecting another family than the
     /// runtime default uses that family's default model.
-    pub const fn harness(mut self, family: HarnessFamily) -> Self {
+    pub fn harness(mut self, family: HarnessFamily) -> Self {
         self.options = self.options.harness(family);
         self
     }
@@ -596,8 +664,8 @@ impl SpawnBuilder<'_> {
     /// shutdown; or the recipe's construction error.
     pub async fn build(self) -> AgentResult {
         let runtime = &self.runtime.inner;
-        let resolved = self.options.resolve(runtime.model, runtime.thinking)?;
-        let model = resolved.selected_harness_model().unwrap_or(runtime.model);
+        let resolved = runtime.harness.resolve_options(self.options, runtime.model.clone(), runtime.thinking)?;
+        let model = resolved.selected_harness_model().unwrap_or_else(|| runtime.model.clone());
         let thinking = resolved.selected_thinking().unwrap_or(runtime.thinking);
         self.runtime
             .construct(AgentSpec {
@@ -692,7 +760,7 @@ fn codex_recipe(
             } else {
                 None
             };
-            let HarnessModel::Codex(model) = spec.model else {
+            let Some(model) = spec.model.as_codex() else {
                 return Err(NanocodexError::InvalidRequest(
                     "the Codex harness requires a Codex model".into(),
                 ));

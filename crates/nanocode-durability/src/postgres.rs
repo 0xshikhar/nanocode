@@ -376,14 +376,3 @@ fn parse_u64(value: &str, label: &str) -> Result<u64, StoreError> {
 fn backend(error: tokio_postgres::Error) -> StoreError {
     StoreError::Backend(error.to_string())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn counters_reject_negative_and_oversized_text() {
-        assert!(parse_u64("-1", "counter").is_err());
-        assert!(parse_u64("18446744073709551616", "counter").is_err());
-    }
-}

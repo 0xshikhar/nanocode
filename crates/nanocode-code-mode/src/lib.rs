@@ -1,3 +1,4 @@
+//! Shared tool registry, Code Mode and execution runtime for Codex and Claude.
 #![cfg_attr(
     all(not(feature = "native"), feature = "workspace-runtime"),
     doc = include_str!("../WORKSPACE_RUNTIME.md")
@@ -32,9 +33,7 @@ pub mod embedded;
 #[cfg(all(not(target_family = "wasm"), feature = "code-mode"))]
 pub mod extensions;
 #[cfg(feature = "image-processing")]
-pub use nanocode_codex_tools::image;
-#[cfg(all(not(target_family = "wasm"), feature = "code-mode"))]
-use nanocode_codex_tools::image_generation;
+pub use nanocode_media::image;
 #[cfg(all(not(target_family = "wasm"), feature = "mcp"))]
 #[cfg_attr(docsrs, doc(cfg(all(not(target_family = "wasm"), feature = "mcp"))))]
 pub mod mcp;
@@ -45,10 +44,6 @@ mod prepared;
 #[cfg(all(not(target_family = "wasm"), feature = "code-mode"))]
 #[cfg_attr(docsrs, doc(cfg(not(target_family = "wasm"))))]
 pub mod runtime;
-#[cfg(feature = "code-mode")]
-mod runtime_config {
-    pub use nanocode_codex_tools::{ImageGenerationConfig, WebSearchConfig};
-}
 #[cfg(any(
     feature = "code-mode",
     all(not(target_family = "wasm"), feature = "attachment")
@@ -62,8 +57,6 @@ mod shell;
 pub mod standard;
 #[cfg(all(not(target_family = "wasm"), feature = "workspace-runtime"))]
 mod view_image;
-#[cfg(all(not(target_family = "wasm"), feature = "code-mode"))]
-use nanocode_codex_tools::web_search;
 #[cfg(all(not(target_family = "wasm"), feature = "workspace-runtime"))]
 #[cfg_attr(docsrs, doc(cfg(not(target_family = "wasm"))))]
 pub mod workspace_runtime;
@@ -102,29 +95,23 @@ pub mod runtime {
             EmbeddedToolMode, EmbeddedToolRuntime as ToolRuntime,
             EmbeddedToolRuntimeControl as ToolRuntimeControl, OwnedToolContext,
         },
-        runtime_config::{ImageGenerationConfig, WebSearchConfig},
         selection::{ToolExposure, ToolSource, Tools, ToolsBuildError, ToolsBuilder},
     };
 }
 
-#[cfg(all(
-    not(target_family = "wasm"),
-    any(feature = "code-mode", all(test, feature = "workspace-runtime"))
-))]
+#[cfg(all(not(target_family = "wasm"), feature = "code-mode"))]
 pub(crate) use contract::ToolOutputBody;
 #[cfg(all(not(target_family = "wasm"), feature = "workspace-runtime"))]
 pub(crate) use contract::ToolOutputContent;
 pub use contract::{Tool, ToolContext, ToolDefinition, ToolInput, ToolOutput, ToolResult};
-#[cfg(all(not(target_family = "wasm"), feature = "workspace-runtime"))]
-pub(crate) use nanocode_codex::ImageDetail;
 pub use nanocode_home::SessionEnvironment;
 #[cfg(all(not(target_family = "wasm"), feature = "code-mode"))]
 #[cfg_attr(docsrs, doc(cfg(not(target_family = "wasm"))))]
 pub use nanocode_tools_macros::tool;
+#[cfg(all(not(target_family = "wasm"), feature = "workspace-runtime"))]
+pub(crate) use nanocode_types::ImageDetail;
 #[cfg(all(not(target_family = "wasm"), feature = "mcp"))]
 pub(crate) use runtime::DynamicToolProvider;
-#[cfg(all(not(target_family = "wasm"), feature = "code-mode"))]
-pub(crate) use runtime::{ImageGenerationConfig, WebSearchConfig};
 #[cfg(any(
     feature = "code-mode",
     all(not(target_family = "wasm"), feature = "attachment")

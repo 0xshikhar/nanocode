@@ -1,7 +1,7 @@
 use std::{collections::BTreeSet, fmt::Write as _};
 
-use nanocode_codex::responses::JsonSchema;
 use nanocode_tools::ToolDefinition;
+use nanocode_types::responses::JsonSchema;
 use serde_json::Value;
 
 mod schema_types;

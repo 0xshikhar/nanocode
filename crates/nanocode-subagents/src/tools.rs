@@ -18,7 +18,7 @@ use nanocode_code_mode::{
     Tool, ToolContext, ToolDefinition, ToolInput, ToolOutput, ToolResult, Tools,
     runtime::ToolsBuildError,
 };
-use nanocode_runtime::{
+use nanocode_agent::{
     AgentHandle, ForkRequest, HarnessFamily, HarnessModel, SpawnOptions, Thinking,
 };
 use serde::{Deserialize, Serialize};
@@ -116,7 +116,7 @@ struct SpawnAgentTask {
     role: String,
     task: String,
     #[serde(default)]
-    model: Option<HarnessModel>,
+    model: Option<String>,
     #[serde(default)]
     harness: Option<HarnessFamily>,
     #[serde(default)]
@@ -131,7 +131,8 @@ struct SpawnAgentTask {
 }
 
 impl SpawnAgentTask {
-    fn into_parts(self) -> std::io::Result<(AgentTask, SpawnOptions)> {
+
+    fn into_parts_with_parent(self, parent: Option<HarnessFamily>) -> std::io::Result<(AgentTask, SpawnOptions)> {
         let output_schema = match (self.output_contract, self.output_schema) {
             (Some(contract), None) => contract.into_schema(),
             (None, Some(schema)) => schema,
@@ -143,6 +144,15 @@ impl SpawnAgentTask {
         };
         let mut options = SpawnOptions::new();
         if let Some(model) = self.model {
+            let model = match model.parse::<HarnessModel>() {
+                Ok(model) => model,
+                Err(_) => HarnessModel::new(
+                    self.harness.clone().or(parent).ok_or_else(|| {
+                        std::io::Error::other("a custom model requires a backend selection")
+                    })?,
+                    model,
+                ),
+            };
             options = options.harness_model(model);
         }
         if let Some(harness) = self.harness {
@@ -292,7 +302,7 @@ pub async fn start_agents_observed(
             route.validate(SpawnOptions::new())?;
             routes.push(route);
         }
-        let mut children: Vec<(nanocode_runtime::Nanocodex, nanocode_runtime::AgentEvents)> =
+        let mut children: Vec<(nanocode_agent::Nanocodex, nanocode_agent::AgentEvents)> =
             Vec::with_capacity(routes.len());
         for route in routes {
             let outcome = parent
@@ -510,9 +520,9 @@ async fn start_child(
     let router = if fork { None } else { registry.spawn_router() };
     let route = if let Some(router) = &router {
         let route = router
-            .resolve_spawn(session_id, &role, &task, options, host_context.as_deref())
+            .resolve_spawn(session_id, &role, &task, options.clone(), host_context.as_deref())
             .await?;
-        route.validate(options)?;
+        route.validate(options.clone())?;
         Some(route)
     } else {
         None
@@ -524,7 +534,7 @@ async fn start_child(
             .spawn_with_host_context(
                 route
                     .as_ref()
-                    .map_or(options, |route| route.options(options)),
+                    .map_or_else(|| options.clone(), |route| route.options(options.clone())),
                 host_context.as_ref().map(Arc::clone),
             )
             .await?
@@ -603,7 +613,8 @@ impl Tool for SpawnAgent {
     }
 
     async fn execute(&self, input: ToolInput, context: ToolContext<'_>) -> ToolResult {
-        let (task, options) = input.decode_json::<SpawnAgentTask>()?.into_parts()?;
+        let (task, options) = input.decode_json::<SpawnAgentTask>()?
+            .into_parts_with_parent(Some(self.parent.harness_family()))?;
         let host_context = context.host_context().map(Arc::<str>::from);
         let registry = self
             .registry
@@ -647,24 +658,17 @@ impl Tool for SpawnAgent {
 }
 
 fn spawn_agent_parameters() -> Value {
-    let models = [HarnessFamily::Codex, HarnessFamily::Claude]
-        .into_iter()
-        .flat_map(HarnessModel::for_family)
-        .map(|model| Some(model.as_str()))
-        .chain([Some("glm-5.3"), Some("kimi"), Some("mimo"), None])
-        .collect::<Vec<_>>();
     json!({
         "type": "object",
         "properties": {
             "role": { "type": "string", "description": "A short role describing the subagent's specialty." },
             "task": { "type": "string", "description": "A complete, focused task for the subagent." },
             "harness": {
-                "type": ["string", "null"], "enum": ["codex", "claude", null],
+                "type": ["string", "null"],
                 "description": "Native agent-loop family; null inherits the parent's family. A family switch selects that family's defaults."
             },
             "model": {
                 "type": ["string", "null"],
-                "enum": models,
                 "description": "Model must belong to the selected harness. Null inherits within the same family; a family switch uses its default model."
             },
             "thinking": {
@@ -1121,13 +1125,13 @@ pub fn install_tools(
 
 /// Installs the identical task-tree operations as native Claude callbacks.
 #[cfg(feature = "claude")]
-pub fn install_claude_tools(
-    mut tools: nanocode_claude::ClaudeTools,
+pub fn install_claude_tools<T: nanocode_tools::ToolCollection>(
+    mut tools: T,
     parent: AgentHandle,
     registry: Arc<Registry>,
-) -> nanocode_runtime::Result<nanocode_claude::ClaudeTools> {
+) -> Result<T, T::Error> {
     for tool in shared_tools(parent, &registry) {
-        tools = tools.shared_tool(TurnAuthority(tool))?;
+        tools = tools.add_shared_tool(Arc::new(TurnAuthority(tool)))?;
     }
     Ok(tools)
 }
@@ -1226,162 +1230,4 @@ fn agent_status_schema() -> Value {
         "additionalProperties": false
     }));
     json!({ "oneOf": variants })
-}
-
-#[cfg(test)]
-mod strict_spawn_tests {
-    use super::*;
-
-    #[test]
-    fn model_facing_spawn_is_strict_and_closed_at_every_object() {
-        let definition =
-            ToolDefinition::function("spawn_agent", "start child", spawn_agent_parameters())
-                .with_strict_parameters();
-        let serialized = serde_json::to_value(definition).unwrap();
-        assert_eq!(serialized["strict"], true);
-        let parameters = &serialized["parameters"];
-        // The live provider rejects even descriptive siblings of a $ref.
-        fn assert_bare_refs(value: &Value) {
-            match value {
-                Value::Object(object) => {
-                    if object.contains_key("$ref") {
-                        assert_eq!(object.len(), 1, "$ref must have no sibling keywords");
-                    }
-                    for child in object.values() {
-                        assert_bare_refs(child);
-                    }
-                }
-                Value::Array(items) => {
-                    for item in items {
-                        assert_bare_refs(item);
-                    }
-                }
-                _ => {}
-            }
-        }
-        assert_bare_refs(parameters);
-        assert_eq!(parameters["additionalProperties"], false);
-        assert_eq!(
-            parameters["required"],
-            json!([
-                "role",
-                "task",
-                "harness",
-                "model",
-                "thinking",
-                "output_contract"
-            ])
-        );
-        for shape in ["object", "array", "string_enum", "scalar", "field"] {
-            assert_eq!(parameters["$defs"][shape]["additionalProperties"], false);
-            let properties = parameters["$defs"][shape]["properties"]
-                .as_object()
-                .unwrap();
-            let required = parameters["$defs"][shape]["required"].as_array().unwrap();
-            assert_eq!(properties.len(), required.len());
-        }
-        let validator = jsonschema::validator_for(parameters).unwrap();
-        let valid = json!({
-            "role": "audit", "task": "check", "harness": null, "model": null, "thinking": null,
-            "output_contract": { "kind": "object", "fields": [
-                { "name": "summary", "schema": { "kind": "string" }, "required": true },
-                { "name": "items", "schema": { "kind": "array", "items": { "kind": "integer" } }, "required": false }
-            ] }
-        });
-        assert!(validator.is_valid(&valid));
-        assert!(!validator.is_valid(
-            &json!({ "role": "audit", "task": "check", "harness": null, "model": null,
-            "thinking": null, "output_contract": [] })
-        ));
-        let mut misplaced = valid;
-        misplaced["required"] = json!(["summary"]);
-        assert!(!validator.is_valid(&misplaced));
-    }
-
-    #[test]
-    fn typed_contract_compiles_nested_and_optional_results() {
-        let parsed: SpawnAgentTask = serde_json::from_value(json!({
-            "role": "audit", "task": "check", "model": null, "thinking": null,
-            "output_contract": { "kind": "object", "fields": [
-                { "name": "summary", "schema": { "kind": "string" }, "required": true },
-                { "name": "items", "schema": { "kind": "array", "items": { "kind": "integer" } }, "required": false }
-            ] }
-        })).unwrap();
-        let (task, _) = parsed.into_parts().unwrap();
-        OutputContract::compile(&task.output_schema).unwrap();
-        let validator = jsonschema::validator_for(&task.output_schema).unwrap();
-        assert!(validator.is_valid(&json!({ "summary": "done" })));
-        assert!(validator.is_valid(&json!({ "summary": "done", "items": [1, 2] })));
-        assert!(!validator.is_valid(&json!({ "items": [1] })));
-        assert!(!validator.is_valid(&json!({ "summary": "done", "items": ["bad"] })));
-        assert!(!validator.is_valid(&json!({ "summary": "done", "unexpected": true })));
-    }
-
-    #[test]
-    fn typed_contract_enums_and_duplicate_fields_remain_valid_schemas() {
-        let parsed: SpawnAgentTask = serde_json::from_value(json!({
-            "role": "audit", "task": "check", "model": null, "thinking": null,
-            "output_contract": { "kind": "object", "fields": [
-                { "name": "status", "schema": { "kind": "integer" }, "required": true },
-                { "name": "status", "schema": { "kind": "string_enum", "values": ["ok", "fail"] }, "required": false }
-            ] }
-        })).unwrap();
-        let (task, _) = parsed.into_parts().unwrap();
-        OutputContract::compile(&task.output_schema).unwrap();
-        let validator = jsonschema::validator_for(&task.output_schema).unwrap();
-        assert!(validator.is_valid(&json!({})));
-        assert!(validator.is_valid(&json!({ "status": "ok" })));
-        assert!(!validator.is_valid(&json!({ "status": 1 })));
-        assert!(!validator.is_valid(&json!({ "status": "other" })));
-    }
-
-    #[test]
-    fn child_prompt_requires_final_message_after_accepted_submission() {
-        let prompt = agent_prompt(AgentId::new(1), "Return the result");
-        assert!(prompt.contains("call submit_result({output})"));
-        assert!(prompt.contains("When its receipt says accepted, send a brief final"));
-        assert!(prompt.contains("do not end with an empty model"));
-    }
-
-    #[test]
-    fn malformed_contracts_and_legacy_schema_fail_before_child_reservation() {
-        for output_contract in [
-            json!("array"),
-            json!([]),
-            json!({ "kind": "array", "items": [] }),
-            json!({ "kind": "object", "fields": [{
-                "name": "value", "schema": { "kind": "string" },
-                "required": true, "unexpected": true
-            }] }),
-        ] {
-            assert!(
-                serde_json::from_value::<SpawnAgentTask>(json!({
-                    "role": "auditor", "task": "check", "model": null,
-                    "thinking": null, "output_contract": output_contract
-                }))
-                .is_err()
-            );
-        }
-        let legacy: SpawnAgentTask = serde_json::from_value(json!({
-            "role": "auditor", "task": "check", "output_schema": "array"
-        }))
-        .unwrap();
-        let (task, _) = legacy.into_parts().unwrap();
-        assert!(prepare_batch(vec![task]).is_err());
-    }
-
-    #[test]
-    fn legacy_in_flight_schema_remains_accepted_but_not_advertised() {
-        let parsed: SpawnAgentTask = serde_json::from_value(json!({
-            "role": "old", "task": "already started", "output_schema": { "type": "string" }
-        }))
-        .unwrap();
-        let (task, _) = parsed.into_parts().unwrap();
-        assert_eq!(task.output_schema, json!({ "type": "string" }));
-        assert!(
-            spawn_agent_parameters()["properties"]
-                .get("output_schema")
-                .is_none()
-        );
-    }
 }

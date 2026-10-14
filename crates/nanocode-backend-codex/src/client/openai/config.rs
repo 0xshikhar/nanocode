@@ -1,0 +1,171 @@
+use std::{borrow::Cow, sync::Arc};
+
+use crate::client::{
+    CONTEXT_WINDOW_TOKENS, Model, OpenAiAuth, ReasoningMode, ResponsesHistory, ResponsesTransport,
+    Thinking, pricing::ServiceTier, responses::StrictJsonSchema,
+};
+
+const SOL_SYSTEM_PROMPT: &str = include_str!("../../../prompts/sol.md");
+const LUNA_SYSTEM_PROMPT: &str = include_str!("../../../prompts/luna.md");
+const GLM_SYSTEM_PROMPT: &str = include_str!("../../../prompts/glm.md");
+const ASTRA_SYSTEM_PROMPT: &str = include_str!("../../../prompts/astra.md");
+
+/// Validated, read-only settings passed to a [`ResponsesServiceFactory`].
+///
+/// Public policy is configured through [`OpenAiBuilder`]. A custom factory can
+/// inspect this snapshot while constructing an independent session service.
+///
+/// [`OpenAiBuilder`]: super::OpenAiBuilder
+/// [`ResponsesServiceFactory`]: super::ResponsesServiceFactory
+#[derive(Clone)]
+pub struct ModelConfig {
+    /// Selected OpenAI coding model.
+    pub model: Model,
+    /// Optional namespace prepended to the model identifier on the wire.
+    ///
+    /// This preserves Nanocodex's closed typed model policy while allowing an
+    /// OpenAI routing gateway to require IDs such as `openai/gpt-6.1-sol`.
+    pub model_id_prefix: Option<Arc<str>>,
+    /// Authentication source resolved for each transport connection.
+    pub auth: OpenAiAuth,
+    /// Reasoning execution mode.
+    pub reasoning_mode: ReasoningMode,
+    /// Requested reasoning effort.
+    pub thinking: Thinking,
+    /// Whether an embedding selected an effort instead of model defaults.
+    #[doc(hidden)]
+    pub thinking_explicit: bool,
+    /// Requested processing tier, clamped per model when building requests.
+    pub service_tier: ServiceTier,
+    /// Resolved context window used for accounting and automatic compaction.
+    pub context_window_tokens: u64,
+    /// Preferred initial streaming transport.
+    pub responses_transport: ResponsesTransport,
+    /// Whether a WebSocket session sends an optional non-generating prewarm
+    /// request before its first model call.
+    pub websocket_warmup: bool,
+    /// Whether the standard transport emits complete raw API request/response events.
+    /// Enabled by default; disabling avoids serializing their telemetry payloads.
+    pub raw_api_events: bool,
+    /// Selected healthy-call history strategy.
+    pub responses_history: ResponsesHistory,
+    /// Whether the provider may retain response checkpoints.
+    pub store_responses: bool,
+    /// Optional strict JSON Schema required for model output.
+    pub strict_json_schema: Option<StrictJsonSchema>,
+    /// Responses WebSocket endpoint.
+    pub websocket_url: String,
+    /// Base URL used for HTTPS Responses calls and related endpoints.
+    pub api_base_url: String,
+    /// Embedding-host transport used by the standard WebAssembly client.
+    #[cfg(any(target_family = "wasm", docsrs))]
+    pub host_transport: Option<Arc<dyn crate::client::transport::host::HostTransport>>,
+    /// Chat Completions gateway serving the closed gateway models over HTTPS.
+    #[cfg(not(target_family = "wasm"))]
+    pub chat_gateway: Option<Arc<crate::client::transport::ChatGateway>>,
+    /// Explicit replacement for the selected model's built-in instructions.
+    pub system_prompt: Option<Arc<str>>,
+    /// Host instructions appended to the selected or overridden system prompt.
+    pub additional_instructions: Option<Arc<str>>,
+}
+
+impl ModelConfig {
+    pub(crate) fn wire_model_id(&self, model: Model) -> Cow<'static, str> {
+        match self.model_id_prefix.as_deref() {
+            Some(prefix) => Cow::Owned(format!("{prefix}/{}", model.as_str())),
+            None => Cow::Borrowed(model.as_str()),
+        }
+    }
+
+    /// Whether this native OpenAI model accepts appended reasoning-effort updates.
+    ///
+    /// Namespaced gateway models retain request-level effort semantics.
+    #[must_use]
+    pub const fn supports_reasoning_effort_updates(&self, model: Model) -> bool {
+        model.supports_reasoning_effort_updates() && self.model_id_prefix.is_none()
+    }
+
+    /// Returns the fixed orchestration mode sent to the supported model.
+    #[must_use]
+    pub const fn orchestration() -> &'static str {
+        "local_code_mode"
+    }
+
+    /// Resolves caller instructions and appends the current runtime model identity.
+    ///
+    /// Identity is derived after model selection, including overrides, child routes,
+    /// and restored sessions; it must not be inherited from a parent prompt.
+    #[must_use]
+    pub fn system_prompt(&self) -> Cow<'_, str> {
+        let base = self.system_prompt.as_deref().unwrap_or(match self.model {
+            Model::Astra => ASTRA_SYSTEM_PROMPT,
+            Model::Glm53 | Model::Kimi | Model::Mimo => GLM_SYSTEM_PROMPT,
+            Model::Sol => SOL_SYSTEM_PROMPT,
+            Model::Luna => LUNA_SYSTEM_PROMPT,
+            _ => ASTRA_SYSTEM_PROMPT,
+        });
+        let base =
+            if self.system_prompt.is_none() && matches!(self.model, Model::Kimi | Model::Mimo) {
+                Cow::Owned(base.replacen(
+                    "powered by Z.ai GLM-5.3",
+                    &format!("powered by {}", self.model.as_str()),
+                    1,
+                ))
+            } else {
+                Cow::Borrowed(base)
+            };
+        let mut instructions = base.into_owned();
+        if let Some(additional) = self.additional_instructions.as_deref()
+            && !additional.is_empty()
+        {
+            instructions.push_str("\n\n");
+            instructions.push_str(additional);
+        }
+        instructions.push_str(&format!(
+            "\n\n<runtime_model_identity>\nmodel_id: {}\n\
+             This is the runtime-selected model serving this agent. When asked which model \
+             you are, report this model ID. Nanocodex and Codex are product or harness names, \
+             not the underlying model. Other agents and models listed in tools can differ \
+             from this agent. Use this current runtime identity over conflicting identity \
+             claims in earlier conversation or inherited instructions.\n\
+             </runtime_model_identity>",
+            self.model.as_str(),
+        ));
+        Cow::Owned(instructions)
+    }
+
+    /// Returns the `OpenAI` tool-search endpoint derived from the base URL.
+    #[must_use]
+    pub fn search_endpoint(&self) -> String {
+        format!("{}/alpha/search", self.api_base_url.trim_end_matches('/'))
+    }
+}
+
+impl Default for ModelConfig {
+    fn default() -> Self {
+        Self {
+            model: Model::default(),
+            model_id_prefix: None,
+            auth: OpenAiAuth::api_key(String::new()),
+            reasoning_mode: ReasoningMode::default(),
+            thinking: Thinking::default(),
+            thinking_explicit: false,
+            service_tier: ServiceTier::Standard,
+            context_window_tokens: CONTEXT_WINDOW_TOKENS,
+            responses_transport: ResponsesTransport::default(),
+            websocket_warmup: true,
+            raw_api_events: true,
+            responses_history: ResponsesHistory::default(),
+            store_responses: false,
+            strict_json_schema: None,
+            websocket_url: "wss://api.openai.com/v1/responses".to_owned(),
+            api_base_url: "https://api.openai.com/v1".to_owned(),
+            #[cfg(any(target_family = "wasm", docsrs))]
+            host_transport: None,
+            #[cfg(not(target_family = "wasm"))]
+            chat_gateway: None,
+            system_prompt: None,
+            additional_instructions: None,
+        }
+    }
+}

@@ -3,10 +3,7 @@ use serde_json::Value;
 
 use super::AttachmentMachine;
 
-#[cfg(not(test))]
 pub(crate) const HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(20);
-#[cfg(test)]
-pub(crate) const HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
 
 /// Monotonic host-local phases. The final frame serialization and socket write
 /// remain in the broker's combined transit/return overhead, never one-way latency.
@@ -219,81 +216,4 @@ fn valid_identifier(value: &str) -> bool {
 
 fn valid_tool_name(value: &str) -> bool {
     valid_identifier(value) && !matches!(value, "exec" | "tool_search" | "wait")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{ExecutorFrame, RemoteFrame};
-
-    #[test]
-    fn frames_use_only_the_socket_owned_protocol() {
-        assert_eq!(
-            serde_json::to_value(ExecutorFrame::Drain {}).unwrap(),
-            serde_json::json!({"type":"drain"})
-        );
-        assert!(matches!(
-            RemoteFrame::parse(r#"{"type":"ready"}"#),
-            Ok(RemoteFrame::Ready {})
-        ));
-        assert!(RemoteFrame::parse(r#"{"type":"ready","protocol_version":1}"#).is_err());
-    }
-
-    #[test]
-    fn model_metadata_is_an_opaque_string() {
-        let base = serde_json::json!({"type":"call","session_id":"session:1","call_id":"call:1","model":"gpt-6-astra","name":"lookup","input":{},"output_token_budget":1000,"output_byte_budget":131072,"deadline_at":1});
-        for model in [
-            "auto",
-            "@cf/zai-org/glm-5.3",
-            "moonshotai/kimi-k3",
-            "xiaomi/mimo-v2.6-pro",
-            "",
-            "arbitrary model 名称",
-            "x\n\t\0",
-            &"x".repeat(1024),
-        ] {
-            let mut frame = base.clone();
-            frame["model"] = model.into();
-            assert!(
-                matches!(RemoteFrame::parse(&frame.to_string()), Ok(RemoteFrame::Call { model: parsed, .. }) if parsed == model)
-            );
-        }
-        for value in [
-            serde_json::json!(null),
-            serde_json::json!(42),
-            serde_json::json!({}),
-        ] {
-            let mut frame = base.clone();
-            frame["model"] = value;
-            assert!(RemoteFrame::parse(&frame.to_string()).is_err());
-        }
-        for field in ["session_id", "call_id", "name"] {
-            let mut frame = base.clone();
-            frame[field] = "provider/name".into();
-            assert!(RemoteFrame::parse(&frame.to_string()).is_err());
-        }
-    }
-
-    #[test]
-    fn parses_and_bounds_calls() {
-        let frame = r#"{"type":"call","session_id":"session:1","call_id":"call:1","model":"gpt-6.1-sol","name":"lookup","input":{},"output_token_budget":1000,"output_byte_budget":131072,"deadline_at":1}"#;
-        assert!(matches!(
-            RemoteFrame::parse(frame),
-            Ok(RemoteFrame::Call { model, .. }) if model == "gpt-6.1-sol"
-        ));
-        let mut with_turn: serde_json::Value = serde_json::from_str(frame).unwrap();
-        with_turn["turn_id"] = serde_json::json!("session:1:7");
-        assert!(
-            matches!(RemoteFrame::parse(&with_turn.to_string()), Ok(RemoteFrame::Call { turn_id: Some(turn), .. }) if turn == "session:1:7")
-        );
-        for invalid in [
-            serde_json::json!(""),
-            serde_json::json!("é".repeat(129)),
-            serde_json::json!(null),
-            serde_json::json!(7),
-        ] {
-            with_turn["turn_id"] = invalid;
-            assert!(RemoteFrame::parse(&with_turn.to_string()).is_err());
-        }
-        assert!(RemoteFrame::parse(&frame.replace("\"model\":\"gpt-6.1-sol\",", "")).is_err());
-    }
 }

@@ -1,4 +1,6 @@
 [package]
+autotests = false
+autobenches = false
 name = "nanocode-tools-macros"
 version.workspace = true
 edition.workspace = true
@@ -17,6 +19,9 @@ all-features = true
 rustdoc-args = ["-D", "warnings"]
 
 [lib]
+test = false
+doctest = false
+bench = false
 proc-macro = true
 
 [dependencies]

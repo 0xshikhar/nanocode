@@ -9,7 +9,7 @@ use nanocode_code_mode::{
     Tools, ToolsBuildError,
     contract::{ToolOutputContent, async_trait},
 };
-use nanocode_codex::ImageDetail;
+use nanocode_agent::input::ImageDetail;
 use serde_json::Value;
 
 /// One agent's canonical file tools and workspace Bash capability.

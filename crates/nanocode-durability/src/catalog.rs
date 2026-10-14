@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use nanocode_runtime::{HarnessFamily, HarnessModel, Lineage};
+use nanocode_agent::{HarnessFamily, HarnessModel, Lineage};
 use serde::{Deserialize, Serialize};
 
 /// Family-neutral metadata recorded inside a durable session's state head.
@@ -55,8 +55,8 @@ pub struct SessionRecord {
 /// Settings a session was created with, before any checkpoint records them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct InitialSettings {
-    pub(crate) thinking: nanocode_runtime::Thinking,
-    pub(crate) service_tier: nanocode_runtime::ServiceTier,
+    pub(crate) thinking: nanocode_agent::Thinking,
+    pub(crate) service_tier: nanocode_agent::ServiceTier,
 }
 
 /// The source turns a branch kept, pinned when the branch was created so
@@ -98,7 +98,7 @@ impl SessionRecord {
 
     /// Native agent-loop family that owns the session.
     #[must_use]
-    pub const fn family(&self) -> HarnessFamily {
+    pub fn family(&self) -> HarnessFamily {
         self.model.family()
     }
 
@@ -118,13 +118,13 @@ impl SessionRecord {
 
     /// Describes a session derived from this one, such as a fork or branch.
     #[must_use]
-    pub fn derive(&self, session_id: impl Into<String>, origin: nanocode_runtime::Origin) -> Self {
+    pub fn derive(&self, session_id: impl Into<String>, origin: nanocode_agent::Origin) -> Self {
         let session_id = session_id.into();
         let now = now_ms();
         Self {
             lineage: Lineage::child_of(&self.lineage, self.session_id.clone(), origin),
             session_id,
-            model: self.model,
+            model: self.model.clone(),
             workspace: self.workspace.clone(),
             title: self.title.clone(),
             created_at_ms: now,
@@ -195,7 +195,8 @@ pub use native::*;
 mod native {
     use std::{collections::HashSet, path::PathBuf};
 
-    use nanocode_runtime::{HarnessFamily, HarnessModel, Lineage, Origin};
+    use nanocode_agent::{HarnessFamily, HarnessModel, Lineage, Origin};
+    use nanocode_backend_codex::CodexCheckpointExt as _;
     use serde::Serialize;
     use serde_json::Value;
 
@@ -206,7 +207,7 @@ mod native {
     };
 
     /// One visible conversation entry, shared by every harness.
-    pub use nanocode_runtime::session::TranscriptItem;
+    pub use nanocode_agent::session::TranscriptItem;
 
     /// Maximum sessions returned by [`SessionStore::list`], most recently
     /// updated first.
@@ -263,7 +264,7 @@ mod native {
     }
 
     impl StoredSession {
-        /// The latest checkpoint as a portable [`nanocode_runtime::SessionCheckpoint`]
+        /// The latest checkpoint as a portable [`nanocode_agent::SessionCheckpoint`]
         /// for the owning family, keeping this session's identity and lineage.
         ///
         /// Durable sessions normally resume through
@@ -275,17 +276,17 @@ mod native {
         /// Returns [`Error::InvalidState`] when the checkpoint cannot be
         /// decoded, or for a Claude session when this crate is built without
         /// its `claude` feature.
-        pub fn session_checkpoint(&self) -> Result<Option<nanocode_runtime::SessionCheckpoint>> {
+        pub fn session_checkpoint(&self) -> Result<Option<nanocode_agent::SessionCheckpoint>> {
             let Some(checkpoint) = &self.checkpoint else {
                 return Ok(None);
             };
             let record = &self.summary.record;
             match record.family() {
-                HarnessFamily::Codex => {
-                    let snapshot: nanocode_runtime::session::SessionSnapshot =
+                family if family == HarnessFamily::Codex => {
+                    let snapshot: nanocode_backend_codex::session::SessionSnapshot =
                         serde_json::from_value(checkpoint.clone())
                             .map_err(Error::InvalidPayload)?;
-                    nanocode_runtime::SessionCheckpoint::codex(
+                    nanocode_agent::SessionCheckpoint::codex(
                         record.session_id.clone(),
                         record.lineage.clone(),
                         record.model.default_thinking(),
@@ -295,7 +296,7 @@ mod native {
                     .map_err(|error| Error::InvalidState(error.to_string()))
                 }
                 #[cfg(feature = "claude")]
-                HarnessFamily::Claude => nanocode_claude::session_checkpoint(
+                family if family == HarnessFamily::Claude => nanocode_backend_claude::session_checkpoint(
                     &record.session_id,
                     record.lineage.clone(),
                     checkpoint.clone(),
@@ -303,10 +304,13 @@ mod native {
                 .map(Some)
                 .map_err(|error| Error::InvalidState(error.to_string())),
                 #[cfg(not(feature = "claude"))]
-                HarnessFamily::Claude => Err(Error::InvalidState(
+                family if family == HarnessFamily::Claude => Err(Error::InvalidState(
                     "portable Claude checkpoints require the claude feature of nanocode-durability"
                         .into(),
                 )),
+                family => Err(Error::InvalidState(format!(
+                    "portable checkpoints for {family} require the owning backend adapter"
+                ))),
             }
         }
     }
@@ -637,7 +641,7 @@ mod native {
             let boundary = self.boundary(id, &state, &at).await?;
             let branch_id = uuid::Uuid::now_v7().to_string();
             let selected = match selected {
-                Some((holder, payload)) => Some(self.hydrate(&holder, &payload).await?),
+                Some((holder, payload)) => Some(self.hydrate(&holder, &payload, Some(record.family())).await?),
                 None => None,
             };
             let latest = self.native_checkpoint(id, &state).await?;
@@ -784,9 +788,11 @@ mod native {
 
         /// Loads the provider-native JSON of a stored checkpoint, hydrating
         /// Codex context pages into one complete session snapshot.
-        async fn hydrate(&self, id: &str, payload: &EncodedPayload) -> Result<Value> {
+        async fn hydrate(
+            &self, id: &str, payload: &EncodedPayload, family: Option<HarnessFamily>,
+        ) -> Result<Value> {
             let value: Value = self.load_payload(id, payload).await?.decode()?;
-            if is_claude(&value) {
+            if family.is_some_and(|family| family != HarnessFamily::Codex) || is_claude(&value) {
                 return Ok(value);
             }
             let saved: crate::context::Snapshot =
@@ -801,7 +807,7 @@ mod native {
 
         async fn native_checkpoint(&self, id: &str, state: &DurableState) -> Result<Option<Value>> {
             match state.latest_checkpoint() {
-                Some(payload) => self.hydrate(id, payload).await.map(Some),
+                Some(payload) => self.hydrate(id, payload, state.session().map(SessionRecord::family)).await.map(Some),
                 None => Ok(None),
             }
         }
@@ -867,12 +873,13 @@ mod native {
     /// Re-encodes a hydrated native checkpoint for a new state of `family`.
     fn encode_native(family: HarnessFamily, value: Value) -> Result<EncodedPayload> {
         match family {
-            HarnessFamily::Claude => EncodedPayload::encode(&value),
-            HarnessFamily::Codex => {
-                let snapshot: nanocode_runtime::session::SessionSnapshot =
+            family if family == HarnessFamily::Claude => EncodedPayload::encode(&value),
+            family if family == HarnessFamily::Codex => {
+                let snapshot: nanocode_backend_codex::session::SessionSnapshot =
                     serde_json::from_value(value).map_err(Error::InvalidPayload)?;
                 Ok(crate::context::prepare_snapshot(snapshot, &HashSet::new())?.payload)
             }
+            _ => EncodedPayload::encode(&value),
         }
     }
 
@@ -1135,7 +1142,7 @@ mod native {
     }
 
     fn claude_transcript(checkpoint: &Value, prompts: &[AdmittedPrompt]) -> Vec<TranscriptItem> {
-        use nanocode_runtime::session::ToolOutcome;
+        use nanocode_backend_codex::session::ToolOutcome;
         let mut items = Vec::new();
         let conversation = &checkpoint["conversation"];
         if let Some(summary) = conversation["summary"]
