@@ -181,12 +181,8 @@ pub trait ExecutionPolicy: Send + Sync {
         _message_id: String,
         accepted_after_model_call_index: u32,
         input_json: String,
-        capacity_available: bool,
     ) -> ExecutionFuture<'a, Result<Option<u32>>> {
         Box::pin(async move {
-            if !capacity_available {
-                return Err(NanocodexError::SteerQueueFull);
-            }
             self.accept_steer(operation_id, accepted_after_model_call_index, input_json)
                 .await
                 .map(Some)
@@ -379,12 +375,8 @@ pub trait ExecutionPolicy: Send + Sync {
         _message_id: String,
         accepted_after_model_call_index: u32,
         input_json: String,
-        capacity_available: bool,
     ) -> ExecutionFuture<'a, Result<Option<u32>>> {
         Box::pin(async move {
-            if !capacity_available {
-                return Err(NanocodexError::SteerQueueFull);
-            }
             self.accept_steer(operation_id, accepted_after_model_call_index, input_json)
                 .await
                 .map(Some)
@@ -1122,7 +1114,6 @@ impl ExecutionTurn {
         prompt: crate::client::Prompt,
         message_id: Option<String>,
         accepted_after_model_call_index: u32,
-        capacity_available: bool,
     ) -> Result<Option<QueuedSteer>> {
         let durable_index = match (&self.policy, &self.operation_id) {
             (Some(policy), Some(operation_id)) if message_id.is_some() => {
@@ -1132,7 +1123,6 @@ impl ExecutionTurn {
                         message_id.clone().unwrap(),
                         accepted_after_model_call_index,
                         encode(&prompt)?,
-                        capacity_available,
                     )
                     .await?;
                 let Some(index) = index else {

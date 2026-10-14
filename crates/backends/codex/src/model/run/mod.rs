@@ -461,7 +461,10 @@ impl<S> ModelRun<S> {
         Ok(session)
     }
 
-    pub(crate) fn side_checkpoint(&self, requested_workspace: Option<&str>) -> Result<ModelCheckpoint> {
+    pub(crate) fn side_checkpoint(
+        &self,
+        requested_workspace: Option<&str>,
+    ) -> Result<ModelCheckpoint> {
         let fresh;
         let session = match &self.session {
             Some(session) => session,

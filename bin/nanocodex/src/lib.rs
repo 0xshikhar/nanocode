@@ -18,7 +18,7 @@ use std::{
 use clap::Parser;
 use futures_util::StreamExt;
 use nanocode::{
-    ModelSelection, Origin, ServiceTier, Thinking,
+    ModelSelection, ServiceTier, Thinking,
     agent::events::AgentEventKind,
     tools::attachment::{RunnerConfig, RunnerEndpoint, run_runner, run_runner_with_tools},
 };
@@ -225,7 +225,7 @@ async fn latest_session(host: &Host) -> Result<String> {
         .await?
         .into_iter()
         .find(|session| {
-            session.record.lineage.origin == Origin::Root
+            sessions::user_facing(session.record.lineage.origin)
                 && session.record.workspace.as_deref() == Some(host.config.workspace.as_path())
         })
         .map(|session| session.record.session_id)
@@ -284,7 +284,7 @@ async fn list_sessions(args: SessionsArgs) -> Result<()> {
     let workspace = std::env::current_dir()?;
     for session in store.list().await? {
         let record = &session.record;
-        if record.lineage.origin != Origin::Root {
+        if !sessions::user_facing(record.lineage.origin) {
             continue;
         }
         if !args.all && record.workspace.as_deref() != Some(workspace.as_path()) {

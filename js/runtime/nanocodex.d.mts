@@ -54,7 +54,7 @@ export type ClaudeBackend = Readonly<{
   parallelTools?: boolean | undefined;
   contextWindowTokens?: number | undefined;
   autoCompactWindowTokens?: number | undefined;
-  subagents?: Readonly<{ maxConcurrency?: number | undefined }> | undefined;
+  subagents?: Readonly<{ maxConcurrency?: number | undefined; continuation?: boolean | undefined }> | undefined;
 }>;
 
 export type Options<Transport> = Readonly<{

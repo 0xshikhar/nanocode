@@ -484,6 +484,7 @@ impl WasmNanocodex {
                 updates,
                 parents,
                 factory.hosts.clone(),
+                settings.continuation != Some(false),
             );
             (Some(factory), Some(subagents))
         } else {

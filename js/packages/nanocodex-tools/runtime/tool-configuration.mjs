@@ -33,9 +33,12 @@ export function resolveTools(configuration, { defaultSubagents = true } = {}) {
     if (extension) {
       if (configuredSubagents) throw new Error("Subagents.create() may only be included once");
       configuredSubagents = true;
-      subagents = extension.maxConcurrency === undefined
+      subagents = extension.maxConcurrency === undefined && extension.continuation === undefined
         ? DEFAULT_SUBAGENTS
-        : Object.freeze({ max_concurrency: extension.maxConcurrency });
+        : Object.freeze({
+          ...(extension.maxConcurrency === undefined ? {} : { max_concurrency: extension.maxConcurrency }),
+          ...(extension.continuation === undefined ? {} : { continuation: extension.continuation }),
+        });
       continue;
     }
     if (!entry || typeof entry !== "object" || Array.isArray(entry)

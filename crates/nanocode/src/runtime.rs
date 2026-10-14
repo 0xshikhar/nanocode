@@ -827,21 +827,31 @@ impl Nanocodex {
                 |checkpoint| checkpoint.thinking(),
             );
         self.inner.recipe(model.family())?;
+        let inherited = stored
+            .turns
+            .is_empty()
+            .then(|| stored.summary.record.inherited_transcript.clone())
+            .filter(|transcript| !transcript.is_empty());
         let durable_state = configured.resume(session_id).await.map_err(catalog_error)?;
-        self.construct(AgentSpec {
-            parent: None,
-            options: SpawnOptions::new()
-                .harness_model(model.clone())
-                .thinking(thinking),
-            model,
-            thinking,
-            settings: Settings::default(),
-            spawn_factory: self.spawn_factory(),
-            host_context: None,
-            checkpoint: None,
-            durable_state: Some(durable_state),
-        })
-        .await
+        let (agent, events) = self
+            .construct(AgentSpec {
+                parent: None,
+                options: SpawnOptions::new()
+                    .harness_model(model.clone())
+                    .thinking(thinking),
+                model,
+                thinking,
+                settings: Settings::default(),
+                spawn_factory: self.spawn_factory(),
+                host_context: None,
+                checkpoint: None,
+                durable_state: Some(durable_state),
+            })
+            .await?;
+        match inherited {
+            Some(transcript) => Ok((agent.with_transcript(transcript)?, events)),
+            None => Ok((agent, events)),
+        }
     }
 
     pub async fn switch(
@@ -861,7 +871,10 @@ impl Nanocodex {
             Some(store) => {
                 let parent = agent.session_id();
                 let (lineage, workspace) = match store.load(parent).await {
-                    Ok(stored) => (stored.summary.record.lineage, stored.summary.record.workspace),
+                    Ok(stored) => (
+                        stored.summary.record.lineage,
+                        stored.summary.record.workspace,
+                    ),
                     Err(crate::durability::Error::SessionNotFound { .. }) => {
                         (crate::Lineage::root(parent), None)
                     }
@@ -876,7 +889,8 @@ impl Nanocodex {
                     &lineage,
                     parent,
                     crate::Origin::Fork,
-                ));
+                ))
+                .with_inherited_transcript(transcript.clone());
                 Some(store.session(record).await.map_err(catalog_error)?)
             }
             None => None,

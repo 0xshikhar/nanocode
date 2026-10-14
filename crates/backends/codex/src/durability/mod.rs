@@ -326,7 +326,6 @@ impl ExecutionPolicy for DurableExecution {
                     accepted_after_model_call_index,
                     &input,
                     None,
-                    true,
                 )
                 .await
                 .map(|index| index.expect("unidentified steer is new"))
@@ -344,7 +343,6 @@ impl ExecutionPolicy for DurableExecution {
         message_id: String,
         accepted_after_model_call_index: u32,
         input_json: String,
-        capacity_available: bool,
     ) -> ExecutionFuture<'a, AgentResult<Option<u32>>> {
         Box::pin(async move {
             let input = raw(input_json)?;
@@ -354,7 +352,6 @@ impl ExecutionPolicy for DurableExecution {
                     accepted_after_model_call_index,
                     &input,
                     Some(message_id),
-                    capacity_available,
                 )
                 .await
                 .map_err(agent_error)
@@ -778,7 +775,6 @@ impl ExecutionPolicy for LazyExecution {
         message_id: String,
         accepted_after_model_call_index: u32,
         input_json: String,
-        capacity_available: bool,
     ) -> ExecutionFuture<'a, AgentResult<Option<u32>>> {
         Box::pin(async move {
             self.get()
@@ -788,7 +784,6 @@ impl ExecutionPolicy for LazyExecution {
                     message_id,
                     accepted_after_model_call_index,
                     input_json,
-                    capacity_available,
                 )
                 .await
         })

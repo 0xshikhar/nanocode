@@ -51,9 +51,6 @@ impl Branches {
 
 #[must_use]
 pub fn agent_error(error: Error) -> NanocodexError {
-    if matches!(error, Error::SteerQueueFull) {
-        return NanocodexError::SteerQueueFull;
-    }
     if matches!(
         error,
         Error::SteerConflict { .. } | Error::SteerWithdrawn { .. }

@@ -1,7 +1,7 @@
 use futures_util::StreamExt;
 use nanocode::{
-    AgentUpdate, ForkRequest, ModelSelection, Mutability, Origin, ScopedAgentUpdate, ServiceTier,
-    Thinking, agent::events::AgentEventKind,
+    AgentUpdate, ForkRequest, ModelSelection, Mutability, ScopedAgentUpdate, ServiceTier, Thinking,
+    agent::events::AgentEventKind,
 };
 use nanocode_tui::{
     transcript::{CellKind, NoticeLevel},
@@ -122,22 +122,12 @@ impl App {
                     );
                     return Ok::<_, crate::host::Error>(ready);
                 }
-                let (next, events) = host.start(&model, thinking).await?;
-                let next = if carry {
-                    let seeded = async {
-                        let transcript = agent.transcript().await?;
-                        next.clone().with_transcript(transcript)
-                    }
-                    .await;
-                    match seeded {
-                        Ok(seeded) => seeded,
-                        Err(error) => {
-                            drop(next.shutdown().await);
-                            return Err(error.into());
-                        }
-                    }
+                let (next, events) = if carry {
+                    host.runtime
+                        .switch(&agent, model.clone(), Some(thinking))
+                        .await?
                 } else {
-                    next
+                    host.start(&model, thinking).await?
                 };
                 if let Err(error) = apply_tier(&next, &model, tier).await {
                     drop(next.shutdown().await);
@@ -266,7 +256,6 @@ impl App {
     }
 
     pub(crate) fn subagent(&mut self, scoped: ScopedAgentUpdate) {
-        let current = self.session_id();
         match scoped.update {
             AgentUpdate::Added(descriptor) => {
                 self.tree.upsert(TreeNode {
@@ -294,24 +283,12 @@ impl App {
             AgentUpdate::Completion { id, status, .. } => {
                 let (node_status, detail) = subagent_status(&status);
                 let key = id.to_string();
-                let mut direct = false;
                 self.tree.update(&key, |node| {
                     node.status = node_status;
-                    direct = node.parent.is_none();
                     if !detail.is_empty() {
                         node.detail = detail;
                     }
                 });
-                let owned = current.as_deref() == Some(scoped.root_session_id.as_str());
-                if direct
-                    && owned
-                    && !scoped.detach
-                    && matches!(self.turn, TurnState::Idle)
-                    && !self.starting
-                    && self.queue.is_empty()
-                {
-                    self.start_turn(crate::events::completion_prompt(&key));
-                }
             }
             AgentUpdate::Event { id, event } => {
                 let payload = serde_json::from_str::<serde_json::Value>(event.payload.get()).ok();
@@ -371,7 +348,7 @@ impl App {
                     sessions
                         .into_iter()
                         .filter(|session| {
-                            session.record.lineage.origin == Origin::Root
+                            crate::sessions::user_facing(session.record.lineage.origin)
                                 && session.record.workspace.as_deref() == Some(workspace.as_path())
                         })
                         .collect()

@@ -38,9 +38,6 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("steering queue is full")]
-    SteerQueueFull,
-
     #[error("steering message `{message_id}` already has different input")]
     SteerConflict { message_id: String },
 

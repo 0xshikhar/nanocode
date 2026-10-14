@@ -34,6 +34,9 @@ pub struct SessionRecord {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial: Option<InitialSettings>,
+
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inherited_transcript: Vec<nanocode_agent::input::PromptMessage>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,7 +74,17 @@ impl SessionRecord {
             branch: None,
             start_checkpoint: None,
             initial: None,
+            inherited_transcript: Vec::new(),
         }
+    }
+
+    #[must_use]
+    pub fn with_inherited_transcript(
+        mut self,
+        transcript: Vec<nanocode_agent::input::PromptMessage>,
+    ) -> Self {
+        self.inherited_transcript = transcript;
+        self
     }
 
     #[must_use]
@@ -107,6 +120,7 @@ impl SessionRecord {
             branch: None,
             start_checkpoint: None,
             initial: None,
+            inherited_transcript: Vec::new(),
         }
     }
 
@@ -142,6 +156,11 @@ impl SessionRecord {
                 .start_checkpoint
                 .or_else(|| self.start_checkpoint.clone()),
             initial: next.initial.or(self.initial),
+            inherited_transcript: if next.inherited_transcript.is_empty() {
+                self.inherited_transcript.clone()
+            } else {
+                next.inherited_transcript
+            },
         }
     }
 }
@@ -729,6 +748,7 @@ mod store {
                 branch: None,
                 start_checkpoint: None,
                 initial: None,
+                inherited_transcript: Vec::new(),
             })
         }
 

@@ -58,7 +58,6 @@ pub trait ClaudeExecutionPolicy: Send + Sync {
         _message_id: Option<String>,
         _after: u32,
         _input_json: String,
-        _capacity: bool,
     ) -> PolicyFuture<'_, Option<u32>> {
         Box::pin(async {
             Err(NanocodexError::InvalidRequest(

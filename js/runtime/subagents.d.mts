@@ -15,6 +15,8 @@ export type Subagents = readonly [Tool];
 export interface Options {
 
   maxConcurrency?: number | undefined;
+
+  continuation?: boolean | undefined;
 }
 
 export type AgentId = number;

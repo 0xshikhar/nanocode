@@ -10,9 +10,12 @@ pub enum TierOption {
 }
 
 pub fn catalog() -> Vec<(HarnessFamily, Vec<ModelSelection>)> {
-    [HarnessFamily::Codex, HarnessFamily::Claude]
+    HarnessFamily::builtin()
         .into_iter()
-        .map(|family| (family.clone(), ModelSelection::for_family(family).collect()))
+        .map(|family| {
+            let models = family.models().collect();
+            (family, models)
+        })
         .collect()
 }
 
@@ -51,7 +54,7 @@ pub fn model_picker(current: &ModelSelection) -> Picker {
                 .collect::<Vec<_>>()
                 .join("/");
             let mut item = PickerItem::choice(model.to_string())
-                .detail(format!("thinking {thinking}"))
+                .detail(format!("{} · thinking {thinking}", model.display_name()))
                 .current(model == *current);
             let features = features(&model);
             if !features.is_empty() {

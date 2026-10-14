@@ -6,9 +6,12 @@ use std::{
 
 use futures_util::StreamExt;
 use nanocode::{
-    AgentStatus, HarnessFamily, ModelSelection, PromptRequest, ScopedAgentUpdate, ServiceTier,
-    Thinking, TurnControl, TurnResult,
-    agent::{Agent, AgentEvents, events::AgentEvent},
+    AgentStatus, HarnessFamily, ModelSelection, PromptRequest, PromptRoute, ScopedAgentUpdate,
+    ServiceTier, Thinking, TurnControl, TurnResult,
+    agent::{
+        Agent, AgentEvents,
+        events::{AgentEvent, AgentEventKind},
+    },
     durability::{SessionSummary, TranscriptItem},
 };
 use nanocode_tui::{
@@ -47,6 +50,11 @@ pub enum AppEvent {
     },
     TurnStarted {
         generation: u64,
+        control: TurnControl,
+    },
+    RoutedTurn {
+        generation: u64,
+        id: String,
         control: TurnControl,
     },
     TurnFinished {
@@ -96,6 +104,7 @@ pub struct Ready {
 pub enum TurnState {
     Idle,
     Starting(Instant),
+    External(Instant),
     Running {
         control: TurnControl,
         since: Instant,
@@ -392,6 +401,24 @@ impl App {
                 self.flush_pending_steers();
                 true
             }
+            AppEvent::RoutedTurn {
+                generation,
+                id,
+                control,
+            } => {
+                if generation != self.generation {
+                    return false;
+                }
+                self.queue.convert(&id, QueueKind::FollowUp);
+                self.queue.set_state(&id, QueueState::Sent);
+                self.mapper.begin_turn();
+                self.turn = TurnState::Running {
+                    control,
+                    since: Instant::now(),
+                };
+                self.flush_pending_steers();
+                true
+            }
             AppEvent::TurnFinished { generation, result } => {
                 if generation != self.generation {
                     return false;
@@ -565,6 +592,16 @@ impl App {
 
     fn agent_event(&mut self, event: &AgentEvent) {
         let mapped = self.mapper.apply(&mut self.transcript, event);
+        if event.kind == AgentEventKind::RunStarted
+            && matches!(self.turn, TurnState::Idle)
+            && !self.starting
+        {
+            self.turn = TurnState::External(Instant::now());
+        }
+        if event.kind.is_terminal() && matches!(self.turn, TurnState::External(_)) {
+            self.turn = TurnState::Idle;
+            self.settle_turn();
+        }
         if mapped.accepted.is_some() {
             self.session_started = true;
         }
@@ -712,6 +749,10 @@ impl App {
     }
 
     fn flush_pending_steers(&mut self) {
+        if matches!(self.turn, TurnState::External(_)) {
+            self.route_pending_steers();
+            return;
+        }
         let TurnState::Running { control, .. } = &self.turn else {
             return;
         };
@@ -736,10 +777,53 @@ impl App {
         }
     }
 
+    fn route_pending_steers(&mut self) {
+        let Some(agent) = self.agent.clone() else {
+            return;
+        };
+        let pending = self
+            .queue
+            .items()
+            .iter()
+            .filter(|item| item.kind == QueueKind::Steer && item.state == QueueState::Pending)
+            .map(|item| (item.id.clone(), item.text.clone()))
+            .collect::<Vec<_>>();
+        let generation = self.generation;
+        for (id, text) in pending {
+            self.queue.set_state(&id, QueueState::Sent);
+            let agent = agent.clone();
+            let tx = self.tx.clone();
+            tokio::spawn(async move {
+                match agent.route_prompt(text.as_str()).await {
+                    Ok(PromptRoute::Steered) => {
+                        drop(tx.send(AppEvent::SteerSent { id, result: Ok(()) }))
+                    }
+                    Ok(PromptRoute::Started(turn)) => {
+                        drop(tx.send(AppEvent::RoutedTurn {
+                            generation,
+                            id,
+                            control: turn.control(),
+                        }));
+                        let result = turn.await.map_err(|error| error.to_string());
+                        drop(tx.send(AppEvent::TurnFinished { generation, result }));
+                    }
+                    Err(error) => drop(tx.send(AppEvent::SteerSent {
+                        id,
+                        result: Err(error.to_string()),
+                    })),
+                }
+            });
+        }
+    }
+
     fn interrupt(&mut self) {
         let TurnState::Running { control, .. } = &self.turn else {
-            if matches!(self.turn, TurnState::Starting(_)) {
-                self.flash("turn is starting; press esc again once it runs");
+            match self.turn {
+                TurnState::Starting(_) => self.flash("turn is starting; press esc again once it runs"),
+                TurnState::External(_) => self.flash(
+                    "this turn was started by the SDK after a subagent finished; it can't be interrupted from here",
+                ),
+                _ => {}
             }
             return;
         };
@@ -1072,7 +1156,7 @@ impl App {
             return;
         }
         match self.turn {
-            TurnState::Running { .. } | TurnState::Starting(_) => {
+            TurnState::Running { .. } | TurnState::Starting(_) | TurnState::External(_) => {
                 self.enqueue_follow_up(text);
                 self.flash("queued · enter on an empty prompt steers it into the running turn");
             }

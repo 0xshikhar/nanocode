@@ -338,9 +338,10 @@ impl LifecycleBackend for LocalLifecycle {
         let commands = self.commands.clone();
         let shutdown = self.shutdown.clone();
         Box::pin(async move {
-            let state =
-                request_command(&commands, &shutdown, |result| Command::ChildSnapshot { result })
-                    .await?;
+            let state = request_command(&commands, &shutdown, |result| Command::ChildSnapshot {
+                result,
+            })
+            .await?;
             Ok(state
                 .conversation
                 .as_ref()

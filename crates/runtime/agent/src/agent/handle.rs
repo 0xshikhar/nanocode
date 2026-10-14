@@ -527,10 +527,7 @@ impl Nanocodex {
         Ok(transcript)
     }
 
-    pub fn with_transcript(
-        self,
-        transcript: Vec<nanocode_types::PromptMessage>,
-    ) -> Result<Self> {
+    pub fn with_transcript(self, transcript: Vec<nanocode_types::PromptMessage>) -> Result<Self> {
         Prompt::new("transcript")
             .with_transcript(transcript.clone())
             .validate()
@@ -548,10 +545,19 @@ impl Nanocodex {
     }
 
     fn take_seed(&self, prompt: Prompt) -> (Prompt, Option<Vec<nanocode_types::PromptMessage>>) {
-        let Some(seed) = self.seed.lock().expect("transcript seed lock poisoned").take() else {
+        let Some(seed) = self
+            .seed
+            .lock()
+            .expect("transcript seed lock poisoned")
+            .take()
+        else {
             return (prompt, None);
         };
-        let transcript = seed.iter().cloned().chain(prompt.transcript().iter().cloned()).collect::<Vec<_>>();
+        let transcript = seed
+            .iter()
+            .cloned()
+            .chain(prompt.transcript().iter().cloned())
+            .collect::<Vec<_>>();
         (prompt.with_transcript(transcript), Some(seed))
     }
 

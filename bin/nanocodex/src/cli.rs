@@ -100,6 +100,9 @@ pub struct RemoteArgs {
 
     #[arg(long, value_enum, default_value_t)]
     pub runner_mode: RunnerModeArg,
+
+    #[arg(long, value_name = "MS")]
+    pub runner_call_timeout_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Args)]

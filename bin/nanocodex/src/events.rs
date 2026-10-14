@@ -21,18 +21,11 @@ struct Usage {
     tool_calls: u64,
 }
 
-pub fn completion_prompt(agent: &str) -> String {
-    format!(
-        "A direct subagent completed after the previous turn ended. Continue the current task by inspecting its structured result. Call list_agents with include_completed=true, find agent {agent}, integrate and verify its result, then respond to the user. Do not merely repeat the raw subagent result. <subagent_completion agent_id=\"{agent}\" />"
-    )
-}
-
 fn completion_agent(text: &str) -> Option<&str> {
     text.rsplit_once("<subagent_completion agent_id=\"")
         .and_then(|(_, rest)| rest.split_once('"'))
         .map(|(agent, _)| agent)
 }
-
 
 pub enum Accepted {
     Prompt { request_id: Option<String> },
@@ -70,9 +63,7 @@ impl EventMapper {
         match event.kind {
             AgentEventKind::InputAccepted => {
                 let text = prompt_text(&payload["input"]);
-                let shown = text
-                    .rsplit_once(HANDOFF_END)
-                    .map_or(text.as_str(), |(_, message)| message);
+                let shown = text.as_str();
                 match completion_agent(shown) {
                     Some(agent) => transcript.push(CellKind::Notice(
                         NoticeLevel::Info,

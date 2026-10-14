@@ -1479,6 +1479,8 @@ struct WasmConfig {
 struct WasmSubagentsConfig {
     #[serde(default = "default_max_subagents")]
     max_concurrency: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    continuation: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -1934,6 +1936,7 @@ impl WasmSubagents {
         updates: tokio::sync::mpsc::UnboundedReceiver<ScopedAgentUpdate>,
         parents: Arc<Mutex<HashMap<String, AgentHandle>>>,
         hosts: Arc<Mutex<HashMap<String, u32>>>,
+        continuation: bool,
     ) -> Self {
         let sessions = Rc::new(RefCell::new(HashMap::new()));
         let event_forwarders = Rc::new(Cell::new(0));
@@ -1949,15 +1952,17 @@ impl WasmSubagents {
             flush_requests,
         );
         let roots = Arc::new(Mutex::new(HashMap::<String, RustNanocodex>::new()));
-        let resolver_roots = Arc::downgrade(&roots);
-        registry.set_parent_resolver(Arc::new(move |session_id: &str| {
-            resolver_roots
-                .upgrade()?
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .get(session_id)
-                .cloned()
-        }));
+        if continuation {
+            let resolver_roots = Arc::downgrade(&roots);
+            registry.set_parent_resolver(Arc::new(move |session_id: &str| {
+                resolver_roots
+                    .upgrade()?
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .get(session_id)
+                    .cloned()
+            }));
+        }
         Self {
             host_definition_id,
             hosts,
@@ -2072,6 +2077,7 @@ impl WasmNanocodex {
                 updates,
                 parents,
                 factory.hosts.clone(),
+                settings.continuation != Some(false),
             );
             (Some(factory), Some(subagents))
         } else {

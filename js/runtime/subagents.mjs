@@ -20,8 +20,12 @@ export function create(options = {}) {
   if (maxConcurrency !== undefined && (!Number.isSafeInteger(maxConcurrency) || maxConcurrency < 1)) {
     throw new TypeError("subagents maxConcurrency must be a positive safe integer");
   }
+  const continuation = options.continuation;
+  if (continuation !== undefined && typeof continuation !== "boolean") {
+    throw new TypeError("subagents continuation must be a boolean");
+  }
   return Object.freeze([Object.freeze({
-    [subagentsBrand]: Object.freeze({ maxConcurrency }),
+    [subagentsBrand]: Object.freeze({ maxConcurrency, continuation }),
   })]);
 }
 

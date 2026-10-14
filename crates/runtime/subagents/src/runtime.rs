@@ -151,14 +151,28 @@ pub struct Registry {
 
 pub type ParentResolver = Arc<dyn Fn(&str) -> Option<Nanocodex> + Send + Sync>;
 
-pub fn completion_continuation_prompt(id: AgentId) -> String {
-    format!(
-        "Subagent {id} completed. Continue the current task by inspecting its structured result: \
-         call list_agents with include_completed=true, find agent {id}, and use only the result \
-         fields needed for the next step. Integrate or verify them as appropriate, perform any \
-         remaining work, and then respond to the user. Do not merely repeat the raw result.\n\n\
-         <subagent_completion agent_id=\"{id}\" />"
-    )
+pub fn completion_continuation_prompt(id: AgentId, status: &AgentStatus) -> String {
+    match status {
+        AgentStatus::Failed { error } => format!(
+            "Subagent {id} failed: {error}\n\nContinue the current task: decide whether to retry, \
+             recover, or report the failure, perform any remaining work, and then respond to the \
+             user. Do not repeat side effects the subagent already completed.\n\n\
+             <subagent_completion agent_id=\"{id}\" status=\"failed\" />"
+        ),
+        AgentStatus::Interrupted => format!(
+            "Subagent {id} was interrupted before finishing. Continue the current task: call \
+             list_agents with include_completed=true to inspect agent {id}, decide whether to \
+             resume it with a message, replace it, or finish without it, and then respond to the \
+             user.\n\n<subagent_completion agent_id=\"{id}\" status=\"interrupted\" />"
+        ),
+        _ => format!(
+            "Subagent {id} completed. Continue the current task by inspecting its structured \
+             result: call list_agents with include_completed=true, find agent {id}, and use only \
+             the result fields needed for the next step. Integrate or verify them as appropriate, \
+             perform any remaining work, and then respond to the user. Do not merely repeat the \
+             raw result.\n\n<subagent_completion agent_id=\"{id}\" status=\"completed\" />"
+        ),
+    }
 }
 
 fn completion_retry_delay(attempt: u32) -> Duration {
@@ -1889,9 +1903,7 @@ impl Registry {
             let id = agent.descriptor.id;
             let checkpoint = agent.snapshot(&lineage)?;
             let (session, resume, lost) = durable::restored_session(agent, checkpoint)?;
-            if session.pending_completion.is_some()
-                && matches!(session.status, AgentStatus::Completed { .. })
-            {
+            if session.pending_completion.is_some() && session.status.wakes_parent() && !resume {
                 report.completed.push(id);
             }
             match (stored.remove(&id), &session.stored_runtime) {
@@ -2293,7 +2305,7 @@ impl Registry {
                     .and_then(|scope| scope.sessions.get(&key.1))
                     .filter(|session| {
                         session.pending_completion == Some(revision)
-                            && matches!(session.status, AgentStatus::Completed { .. })
+                            && session.status.wakes_parent()
                     })
                     .map(|session| session.status.clone())
             };
@@ -2366,7 +2378,7 @@ impl Registry {
                 let Some(revision) = session.pending_completion else {
                     continue;
                 };
-                if !matches!(session.status, AgentStatus::Completed { .. }) {
+                if !session.status.wakes_parent() {
                     continue;
                 }
                 let descriptor = std::mem::take(&mut session.announce).then(|| {
@@ -2667,7 +2679,7 @@ impl Registry {
             let settled = revision.unwrap_or(session.next_instruction_revision);
             session.settled_revision = Some(settled);
 
-            let completion = (matches!(session.status, AgentStatus::Completed { .. })
+            let completion = (session.status.wakes_parent()
                 && session.descriptor.parent.is_none())
             .then_some(settled);
             if completion.is_some() {
@@ -2868,9 +2880,9 @@ impl Registry {
                 "subagent completion parent is not the root session",
             ));
         }
-        if !self.take_completion(root_session_id, id, revision).await {
+        let Some(status) = self.take_completion(root_session_id, id, revision).await else {
             return Ok(false);
-        }
+        };
         if self.store_for(root_session_id).is_some()
             && let Err(error) = self.persist_durably(root_session_id).await
         {
@@ -2880,7 +2892,7 @@ impl Registry {
         }
         match parent
             .route_prompt(nanocode_agent::input::Prompt::new(
-                completion_continuation_prompt(id),
+                completion_continuation_prompt(id, &status),
             ))
             .await
         {
@@ -2898,7 +2910,12 @@ impl Registry {
         }
     }
 
-    async fn take_completion(&self, root_session_id: &str, id: AgentId, revision: u64) -> bool {
+    async fn take_completion(
+        &self,
+        root_session_id: &str,
+        id: AgentId,
+        revision: u64,
+    ) -> Option<AgentStatus> {
         let taken = {
             let mut state = self.state.lock().await;
             match state
@@ -2906,14 +2923,17 @@ impl Registry {
                 .get_mut(root_session_id)
                 .and_then(|scope| scope.sessions.get_mut(&id))
             {
-                Some(session) if session.pending_completion == Some(revision) => {
+                Some(session)
+                    if session.pending_completion == Some(revision)
+                        && session.status.wakes_parent() =>
+                {
                     session.pending_completion = None;
-                    true
+                    Some(session.status.clone())
                 }
-                _ => false,
+                _ => None,
             }
         };
-        if taken {
+        if taken.is_some() {
             lock_unpoisoned(&self.completion_retries).remove(&(root_session_id.to_owned(), id));
             self.changed();
         }
@@ -2928,7 +2948,7 @@ impl Registry {
             .and_then(|scope| scope.sessions.get_mut(&id))
             && session.pending_completion.is_none()
             && session.settled_revision == Some(revision)
-            && matches!(session.status, AgentStatus::Completed { .. })
+            && session.status.wakes_parent()
         {
             session.pending_completion = Some(revision);
         }
@@ -2946,7 +2966,7 @@ impl Registry {
                 .copied()
                 .filter(|id| {
                     scope.sessions.get_mut(id).is_some_and(|session| {
-                        matches!(session.status, AgentStatus::Completed { .. })
+                        session.status.wakes_parent()
                             && session.pending_completion.take().is_some()
                     })
                 })

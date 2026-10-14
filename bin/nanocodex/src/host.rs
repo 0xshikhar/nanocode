@@ -189,7 +189,7 @@ pub async fn attach_remote(
                     .runner_token
                     .clone()
                     .ok_or("--runner-connect requires --runner-token or NANOCODEX_RUNNER_TOKEN")?;
-                let runner = RemoteRunner::new(args.runner_name.clone())?;
+                let runner = call_timeout(RemoteRunner::new(args.runner_name.clone())?, args)?;
                 let connection = runner.connect(AttachmentTarget::new(url, token)?)?;
                 (runner, Arc::new(connection), format!("connected to {url}"))
             }
@@ -199,7 +199,7 @@ pub async fn attach_remote(
                     .clone()
                     .ok_or("--runner-host requires --runner-token or NANOCODEX_RUNNER_TOKEN")?;
                 let host = RunnerHost::bind(address).await?;
-                let runner = host.runner(args.runner_name.clone(), token)?;
+                let runner = call_timeout(host.runner(args.runner_name.clone(), token)?, args)?;
                 let label = format!("waiting for runner at {}", host.endpoint());
                 notify(&label);
                 (runner, Arc::new(host), label)
@@ -222,4 +222,11 @@ pub async fn attach_remote(
         ),
         _guard: Arc::new((guard, runner)),
     }))
+}
+
+fn call_timeout(runner: RemoteRunner, args: &RemoteArgs) -> Result<RemoteRunner> {
+    Ok(match args.runner_call_timeout_ms {
+        Some(ms) => runner.with_call_timeout(std::time::Duration::from_millis(ms))?,
+        None => runner,
+    })
 }

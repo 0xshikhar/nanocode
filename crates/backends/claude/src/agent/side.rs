@@ -51,7 +51,9 @@ pub(super) fn claude_transcript(messages: &[Message]) -> Vec<PromptMessage> {
                     content,
                     ..
                 } => transcript.tool_result(
-                    tools.get(tool_use_id).map_or(tool_use_id.as_str(), String::as_str),
+                    tools
+                        .get(tool_use_id)
+                        .map_or(tool_use_id.as_str(), String::as_str),
                     &tool_result_text(content),
                 ),
                 ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => {}

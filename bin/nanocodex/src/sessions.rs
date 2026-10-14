@@ -27,12 +27,7 @@ pub fn title(session: &SessionSummary) -> String {
         .title
         .clone()
         .or_else(|| session.preview.clone())
-        .map(|text| {
-            let text = text
-                .rsplit_once(crate::events::HANDOFF_END)
-                .map_or(text.as_str(), |(_, message)| message);
-            text.lines().next().unwrap_or_default().to_owned()
-        })
+        .map(|text| text.lines().next().unwrap_or_default().to_owned())
         .filter(|text| !text.trim().is_empty())
         .unwrap_or_else(|| "(no prompt yet)".into())
 }
@@ -119,4 +114,11 @@ pub fn replay(transcript: &mut Transcript, history: Vec<TranscriptItem>) {
             }
         }
     }
+}
+
+pub const fn user_facing(origin: nanocode::Origin) -> bool {
+    matches!(
+        origin,
+        nanocode::Origin::Root | nanocode::Origin::Fork | nanocode::Origin::Branch
+    )
 }

@@ -2025,7 +2025,7 @@ async fn accept_turn_steer(
 
     let call_index = model_call_index.lock().await;
     let Some(steer) = execution_turn
-        .accept_steer(prompt.clone(), id.clone(), *call_index, true)
+        .accept_steer(prompt.clone(), id.clone(), *call_index)
         .await?
     else {
         return Ok(());

@@ -188,7 +188,6 @@ enum Command {
         result: oneshot::Sender<Result<()>>,
     },
     AcceptSteer {
-        capacity_available: bool,
         message_id: Option<String>,
         caller: Caller,
         operation_id: String,
@@ -541,7 +540,6 @@ impl Driver {
                     drop(result.send(outcome));
                 }
                 Command::AcceptSteer {
-                    capacity_available,
                     message_id,
                     caller,
                     operation_id,
@@ -557,7 +555,6 @@ impl Driver {
                                 accepted_after_model_call_index,
                                 input,
                                 message_id,
-                                capacity_available,
                             )
                             .await
                         }
@@ -995,7 +992,6 @@ impl Driver {
         accepted_after_model_call_index: u32,
         input: EncodedPayload,
         message_id: Option<String>,
-        capacity_available: bool,
     ) -> Result<Option<u32>> {
         self.require_claimed(caller, &operation_id)?;
         self.require_running(&operation_id)?;
@@ -1016,9 +1012,6 @@ impl Driver {
                 });
             }
             return Ok(None);
-        }
-        if !capacity_available {
-            return Err(Error::SteerQueueFull);
         }
         let steer_index = u32::try_from(operation.steers.len())
             .ok()
@@ -2150,11 +2143,9 @@ impl DurableOwner {
         accepted_after_model_call_index: u32,
         input: &I,
         message_id: Option<String>,
-        capacity_available: bool,
     ) -> Result<Option<u32>> {
         let (result, receiver) = oneshot::channel();
         self.send(Command::AcceptSteer {
-            capacity_available,
             message_id,
             caller: self.caller()?,
             operation_id,

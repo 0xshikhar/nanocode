@@ -249,6 +249,13 @@ impl AgentStatus {
         matches!(self, Self::Pending | Self::Running | Self::Closing)
     }
 
+    pub(super) const fn wakes_parent(&self) -> bool {
+        matches!(
+            self,
+            Self::Completed { .. } | Self::Interrupted | Self::Failed { .. }
+        )
+    }
+
     pub(super) const fn is_wait_terminal(&self) -> bool {
         matches!(
             self,

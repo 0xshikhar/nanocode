@@ -204,12 +204,11 @@ impl ClaudeExecutionPolicy for LazyClaudeExecution {
         message_id: Option<String>,
         after: u32,
         input_json: String,
-        capacity: bool,
     ) -> PolicyFuture<'_, Option<u32>> {
         Box::pin(async move {
             self.get()
                 .await?
-                .accept_steer(id, message_id, after, input_json, capacity)
+                .accept_steer(id, message_id, after, input_json)
                 .await
         })
     }
@@ -383,7 +382,6 @@ impl ClaudeExecutionPolicy for ClaudeExecution {
         message_id: Option<String>,
         after: u32,
         input_json: String,
-        capacity: bool,
     ) -> PolicyFuture<'_, Option<u32>> {
         Box::pin(async move {
             let input: Box<serde_json::value::RawValue> = serde_json::from_str(&input_json)
@@ -391,7 +389,7 @@ impl ClaudeExecutionPolicy for ClaudeExecution {
                     nanocode_agent::NanocodexError::InvalidRequest(error.to_string())
                 })?;
             self.owner
-                .accept_steer(id, after, &input, message_id, capacity)
+                .accept_steer(id, after, &input, message_id)
                 .await
                 .map_err(agent_error)
         })

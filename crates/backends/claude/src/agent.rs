@@ -4432,7 +4432,6 @@ impl State {
                     id.clone(),
                     turn.model_call_index,
                     journaled,
-                    true,
                 )
                 .await?
             else {

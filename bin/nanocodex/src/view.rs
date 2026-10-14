@@ -248,7 +248,9 @@ fn status_line(app: &App, spinner: &str, now: Instant) -> Line<'static> {
         );
     }
     match &app.turn {
-        TurnState::Running { since, .. } | TurnState::Starting(since) => Line::from(vec![
+        TurnState::Running { since, .. }
+        | TurnState::Starting(since)
+        | TurnState::External(since) => Line::from(vec![
             Span::styled(format!(" {spinner} "), Style::default().fg(theme.accent())),
             Span::styled(
                 "Working",
@@ -258,8 +260,13 @@ fn status_line(app: &App, spinner: &str, now: Instant) -> Line<'static> {
             ),
             Span::styled(
                 format!(
-                    " ({} · esc esc to interrupt · enter queues · enter on empty steers)",
-                    elapsed_label(now.duration_since(*since))
+                    " ({} · {} · enter queues · enter on empty steers)",
+                    elapsed_label(now.duration_since(*since)),
+                    if matches!(app.turn, TurnState::External(_)) {
+                        "woken by a finished subagent"
+                    } else {
+                        "esc esc to interrupt"
+                    }
                 ),
                 Style::default().fg(theme.muted()),
             ),
