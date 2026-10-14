@@ -1,6 +1,9 @@
 use std::collections::HashSet;
 
-use nanocode_agent::{HarnessFamily, SessionCheckpoint, session::TranscriptItem};
+use nanocode_agent::{
+    HarnessFamily, SessionCheckpoint,
+    session::{ToolOutcome, TranscriptItem},
+};
 use nanocode_durability::{
     AdmittedTurn, CheckpointFormat, EncodedPayload, Error, FormatFuture, PayloadReader, Result,
     SessionRecord,
@@ -97,6 +100,21 @@ impl CheckpointFormat for CodexCheckpointFormat {
                     arguments: item["input"].as_str().unwrap_or_default().into(),
                     parent_call_id: None,
                 }),
+                Some("function_call_output" | "custom_tool_call_output") => {
+                    let output = item["output"]
+                        .as_str()
+                        .map_or_else(|| item["output"].to_string(), str::to_owned);
+                    let outcome = if output.contains("outcome unknown") {
+                        ToolOutcome::Unknown
+                    } else {
+                        ToolOutcome::Completed
+                    };
+                    items.push(TranscriptItem::tool_result(
+                        item["call_id"].as_str().unwrap_or_default(),
+                        &output,
+                        outcome,
+                    ));
+                }
                 _ => {}
             }
         }

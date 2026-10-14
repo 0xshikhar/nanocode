@@ -45,6 +45,8 @@ pub enum ExecutionAdmission {
 pub enum ExecutionStepAdmission {
     Execute,
 
+    Interrupted,
+
     Replay(String),
 }
 
@@ -940,6 +942,7 @@ pub(crate) enum SteerDelivery {
 
 pub(crate) enum ExecutionStep<O> {
     Execute,
+    Interrupted,
     Replay(O),
 }
 
@@ -1009,6 +1012,7 @@ impl ExecutionSteps {
             .await?
         {
             ExecutionStepAdmission::Execute => Ok(ExecutionStep::Execute),
+            ExecutionStepAdmission::Interrupted => Ok(ExecutionStep::Interrupted),
             ExecutionStepAdmission::Replay(output) => Ok(ExecutionStep::Replay(decode(&output)?)),
         }
     }

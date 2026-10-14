@@ -53,6 +53,8 @@ impl<C, O> AutomaticAdmission<C, O> {
 pub enum BeginStep<O = EncodedPayload> {
     Execute,
 
+    Interrupted,
+
     Replay(O),
 }
 
@@ -104,6 +106,7 @@ impl StoredAdmission {
 
 enum StoredBeginStep {
     Execute,
+    Interrupted,
     Replay(EncodedPayload),
 }
 
@@ -1150,7 +1153,7 @@ impl Driver {
                         output.load(&mut *self.store, &self.state_id).await?,
                     ));
                 }
-                StepStatus::EffectPending => {}
+                StepStatus::EffectPending => return Ok(StoredBeginStep::Interrupted),
             }
         }
         let entry = Transition::StepStarted {
@@ -1816,6 +1819,7 @@ impl DurableSession {
             .await?
         {
             StoredBeginStep::Execute => Ok(BeginStep::Execute),
+            StoredBeginStep::Interrupted => Ok(BeginStep::Interrupted),
             StoredBeginStep::Replay(output) => Ok(BeginStep::Replay(output)),
         }
     }
@@ -1841,6 +1845,7 @@ impl DurableSession {
             .await?
         {
             StoredBeginStep::Execute => Ok(BeginStep::Execute),
+            StoredBeginStep::Interrupted => Ok(BeginStep::Interrupted),
             StoredBeginStep::Replay(output) => Ok(BeginStep::Replay(output.decode()?)),
         }
     }
@@ -2220,6 +2225,7 @@ impl DurableOwner {
         .await?;
         match receive(receiver).await? {
             StoredBeginStep::Execute => Ok(BeginStep::Execute),
+            StoredBeginStep::Interrupted => Ok(BeginStep::Interrupted),
             StoredBeginStep::Replay(output) => Ok(BeginStep::Replay(output)),
         }
     }

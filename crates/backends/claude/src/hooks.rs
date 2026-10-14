@@ -181,6 +181,11 @@ pub async fn run_lifecycle_hooks(
             None => Step::Execute,
         };
         let outcome: ClaudeLifecycleOutcome = match admitted {
+            Step::Interrupted => {
+                return Err(nanocode_agent::NanocodexError::InvalidExecutionPolicy(
+                    "lifecycle step was admitted with an interrupted tool outcome".into(),
+                ));
+            }
             Step::Replay(value) => serde_json::from_value(value).map_err(serialization_error)?,
             Step::Execute => {
                 let uncertain = if let Some(policy) = policy {
@@ -194,7 +199,7 @@ pub async fn run_lifecycle_hooks(
                         )
                         .await?
                     {
-                        Step::Replay(_) => true,
+                        Step::Replay(_) | Step::Interrupted => true,
                         Step::Execute => {
                             policy
                                 .complete_step(

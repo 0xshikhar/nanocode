@@ -823,7 +823,13 @@ impl Nanocodex {
             .session_checkpoint()
             .map_err(catalog_error)?
             .map_or_else(
-                || model.default_thinking(),
+                || {
+                    stored
+                        .summary
+                        .record
+                        .initial
+                        .map_or_else(|| model.default_thinking(), |initial| initial.thinking)
+                },
                 |checkpoint| checkpoint.thinking(),
             );
         self.inner.recipe(model.family())?;

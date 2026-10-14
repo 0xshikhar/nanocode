@@ -213,6 +213,7 @@ async fn interactive(args: SessionArgs) -> Result<()> {
                 .as_deref()
                 .map(host::parse_thinking)
                 .transpose()?,
+            tier_override: args.tier.as_deref().map(host::parse_tier).transpose()?,
         },
         terminal,
     )

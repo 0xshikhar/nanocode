@@ -447,11 +447,15 @@ impl State {
         let index = cursor.index;
         let step = format!("tool-{index}-{id}");
         let effect = cursor.effect(self, &step);
-        if let Some(effect) = &effect
-            && let Step::Replay(value) = effect
+        let admitted = if let Some(effect) = &effect {
+            effect
                 .begin("tool", json!({"id":id,"name":name,"input":input}))
                 .await?
-        {
+        } else {
+            Step::Execute
+        };
+        let interrupted = matches!(&admitted, Step::Interrupted);
+        if let Step::Replay(value) = admitted {
             #[derive(Deserialize)]
             #[serde(deny_unknown_fields)]
             struct Receipt {
@@ -473,7 +477,9 @@ impl State {
         let unknown = || {
             ContentBlock::tool_result_content(id, ToolResultContent::Text("Tool execution interrupted; outcome unknown. Do not assume it did not run or automatically repeat it.".into()), true)
         };
-        let result = if cancel.flag.load(Ordering::SeqCst) {
+        let result = if interrupted {
+            ContentBlock::tool_result_content(id, ToolResultContent::Text("Tool execution interrupted by a host crash; outcome unknown. Do not assume it did not run or automatically repeat it.".into()), true)
+        } else if cancel.flag.load(Ordering::SeqCst) {
             unknown()
         } else if self.code_only && cursor.recovered_code_index == Some(index) && name == "exec" {
             ContentBlock::tool_result_content(id, ToolResultContent::Text(
@@ -531,6 +537,21 @@ impl State {
         };
         if let Some(effect) = &effect {
             effect.complete(json!({"result":result,"tasks":self.task_snapshot()?,"discovered":self.discovered.lock().await.clone()})).await?;
+        }
+        if interrupted {
+            self.emit(
+                events,
+                AgentEventKind::ToolResult,
+                json!({
+                    "call_id": id,
+                    "tool": name,
+                    "status": "unknown",
+                    "result": "Tool execution interrupted by a host crash; outcome unknown. Do not assume it did not run or automatically repeat it.",
+                    "outcome_unknown": true,
+                    "duration_ns": 0,
+                    "started_after_ns": null,
+                }),
+            );
         }
         Ok(result)
     }

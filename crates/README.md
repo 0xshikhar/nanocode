@@ -45,6 +45,11 @@ retain the full unsigned 64-bit range. Removing the index rebuilds it from JSONL
 WASM defaults to memory; hosts implement `StateStore` over persistent storage to
 retain sessions across host restarts.
 
+Beginning a previously started step without a committed receipt returns
+`BeginStep::Interrupted`. The built-in backends record an unknown-outcome error
+for interrupted tool calls and deliver it to the model without invoking the
+handler again. Committed tool receipts replay their recorded output.
+
 ## Composition
 
 | Host | Crates |

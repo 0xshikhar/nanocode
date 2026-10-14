@@ -77,6 +77,11 @@ where
                 .begin::<_, RecordedModelResult>(&step_id, "model_call", &())
                 .await?
             {
+                crate::agent::ExecutionStep::Interrupted => {
+                    return Err(NanocodexError::InvalidExecutionPolicy(
+                        "non-tool step was admitted with an interrupted tool outcome".into(),
+                    ));
+                }
                 crate::agent::ExecutionStep::Execute => None,
                 crate::agent::ExecutionStep::Replay(output) => Some(output),
             }

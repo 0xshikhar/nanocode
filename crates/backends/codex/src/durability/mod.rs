@@ -30,7 +30,16 @@ pub use session::DurableSessionExt;
 impl<F> DurableAgentExt for NanocodexBuilder<F> {
     async fn durability(self, state: DurableSession) -> AgentResult<Self> {
         let state_id = state.state_id().to_owned();
-        let record = state.record().await.map_err(agent_error)?;
+        let mut record = state.record().await.map_err(agent_error)?;
+        if let Some(stored) = &mut record
+            && stored.initial.is_none()
+        {
+            stored.initial = Some(InitialSettings {
+                thinking: self.config.thinking,
+                service_tier: self.config.service_tier,
+            });
+            *stored = state.describe(stored.clone()).await.map_err(agent_error)?;
+        }
         let mut builder = self.child_journal(state.child_journal());
 
         if builder.explicit_session_id().is_none()
@@ -480,10 +489,14 @@ impl ExecutionPolicy for DurableExecution {
             let input = raw(input_json)?;
             match self
                 .owner
-                .begin_step(operation_id, step_id, kind, &input)
+                .begin_step(operation_id, step_id, kind.clone(), &input)
                 .await
             {
                 Ok(BeginStep::Execute) => Ok(ExecutionStepAdmission::Execute),
+                Ok(BeginStep::Interrupted) if kind == "tool_call" => {
+                    Ok(ExecutionStepAdmission::Interrupted)
+                }
+                Ok(BeginStep::Interrupted) => Ok(ExecutionStepAdmission::Execute),
                 Ok(BeginStep::Replay(output)) => Ok(ExecutionStepAdmission::Replay(
                     output.json().map_err(agent_error)?.to_owned(),
                 )),

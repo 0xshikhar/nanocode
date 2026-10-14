@@ -488,6 +488,11 @@ pub(crate) async fn freeze_admitted(
         )
         .await?
     {
+        crate::execution::Step::Interrupted => {
+            return Err(invalid(
+                "prompt step was admitted with an interrupted tool outcome",
+            ));
+        }
         crate::execution::Step::Replay(value) => {
             let receipt = serde_json::from_value(value)
                 .map_err(|_| invalid("invalid frozen Claude prompt receipt"))?;

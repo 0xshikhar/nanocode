@@ -53,9 +53,16 @@ impl DurableAgentExt for ClaudeBuilder {
     async fn durability(self, state: DurableSession) -> AgentResult<Self> {
         let state_id = state.state_id().to_owned();
         let journal = state.child_journal();
+        let mut record = state.record().await.map_err(agent_error)?;
+        if let Some(stored) = &mut record
+            && stored.initial.is_none()
+        {
+            stored.initial = Some(self.durable_initial_settings()?);
+            *stored = state.describe(stored.clone()).await.map_err(agent_error)?;
+        }
         let branches = Branches {
             store: state.shared_store(),
-            record: state.record().await.map_err(agent_error)?,
+            record,
         };
 
         let builder = match &branches.record {
@@ -63,6 +70,20 @@ impl DurableAgentExt for ClaudeBuilder {
             None => self,
         };
         let (owner, checkpoint) = state.acquire_agent().await.map_err(agent_error)?;
+        let builder = if checkpoint.is_none()
+            && let Some(record) = &branches.record
+            && let Some(initial) = record.initial
+        {
+            record
+                .model
+                .capabilities(nanocode_agent::ModelTransport::Native)
+                .check_service_tier(initial.service_tier)?;
+            builder
+                .thinking(initial.thinking)?
+                .fast_mode(initial.service_tier != nanocode_agent::ServiceTier::Standard)
+        } else {
+            builder
+        };
         let checkpoint = match checkpoint {
             Some(value) => Some(value.decode::<Value>().map_err(agent_error)?),
             None => {
@@ -462,11 +483,13 @@ impl ClaudeExecutionPolicy for ClaudeExecution {
         Box::pin(async move {
             match self
                 .owner
-                .begin_step(id, step_id, kind, &*input)
+                .begin_step(id, step_id, kind.clone(), &*input)
                 .await
                 .map_err(agent_error)?
             {
                 BeginStep::Execute => Ok(Step::Execute),
+                BeginStep::Interrupted if kind == "tool" => Ok(Step::Interrupted),
+                BeginStep::Interrupted => Ok(Step::Execute),
                 BeginStep::Replay(value) => Ok(Step::Replay(value.decode().map_err(agent_error)?)),
             }
         })
@@ -491,11 +514,13 @@ impl ClaudeExecutionPolicy for ClaudeExecution {
         Box::pin(async move {
             match self
                 .owner
-                .begin_step(id, step_id, kind, &input)
+                .begin_step(id, step_id, kind.clone(), &input)
                 .await
                 .map_err(agent_error)?
             {
                 BeginStep::Execute => Ok(Step::Execute),
+                BeginStep::Interrupted if kind == "tool" => Ok(Step::Interrupted),
+                BeginStep::Interrupted => Ok(Step::Execute),
                 BeginStep::Replay(value) => Ok(Step::Replay(value.decode().map_err(agent_error)?)),
             }
         })

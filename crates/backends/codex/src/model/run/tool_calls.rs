@@ -325,12 +325,17 @@ where
                 async move {
                     let started_at = active.started_at;
                     let step_id = format!("tool-{call_index}-{}", call.call_id);
+                    let mut interrupted = false;
                     let recovered = if let Some(steps) = &execution_steps {
                         match steps
                             .begin::<_, CompletedToolCall>(&step_id, "tool_call", &call)
                             .await?
                         {
                             crate::agent::ExecutionStep::Execute => None,
+                            crate::agent::ExecutionStep::Interrupted => {
+                                interrupted = true;
+                                Some(Self::interrupted_tool_call(&active))
+                            }
                             crate::agent::ExecutionStep::Replay(output) => Some(output),
                         }
                     } else {
@@ -341,7 +346,7 @@ where
                         nanocode_code_mode::image::prepare_history_images(
                             &mut completed.response_items,
                         );
-                        (Ok(completed), false)
+                        (Ok(completed), interrupted)
                     } else {
                         let dispatch = async {
                             active
@@ -609,6 +614,29 @@ where
             work_duration_ns: Self::completed_tool_work_duration(active),
             output,
             structured_result,
+            metadata: None,
+            response_items: vec![response_item],
+        }
+    }
+
+    fn interrupted_tool_call(active: &ActiveToolCall) -> CompletedToolCall {
+        let output = ToolOutputBody::Text(
+            "Tool execution interrupted by a host crash; outcome unknown. Do not assume it did not run or automatically repeat it.".into(),
+        );
+        let response_item = match active.kind {
+            CodeCallKind::Custom => custom_tool_output(active.call_id.clone(), output.clone()),
+            CodeCallKind::Function => function_tool_output(active.call_id.clone(), output.clone()),
+            CodeCallKind::ToolSearch => tool_search_output(active.call_id.clone(), Vec::new()),
+        };
+        CompletedToolCall {
+            cell: None,
+            call_id: active.call_id.clone(),
+            tool: active.name.clone(),
+            success: false,
+            duration_ns: 0,
+            work_duration_ns: 0,
+            output,
+            structured_result: serde_json::json!({"outcome": "unknown", "outcome_unknown": true}),
             metadata: None,
             response_items: vec![response_item],
         }

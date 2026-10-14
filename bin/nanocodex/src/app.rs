@@ -159,6 +159,7 @@ pub struct Launch {
     pub history_path: Option<PathBuf>,
     pub home: PathBuf,
     pub thinking_override: Option<Thinking>,
+    pub tier_override: Option<ServiceTier>,
 }
 
 pub struct App {
@@ -194,6 +195,7 @@ pub struct App {
     pub(crate) pending_copy: Option<String>,
     pub(crate) interrupting: bool,
     thinking_override: Option<Thinking>,
+    tier_override: Option<ServiceTier>,
     awaiting_terminal: bool,
     pub(crate) session_started: bool,
     pub(crate) tx: UnboundedSender<AppEvent>,
@@ -250,6 +252,7 @@ pub async fn run(launch: Launch, mut terminal: TerminalSession) -> Result<()> {
         pending_copy: None,
         interrupting: false,
         thinking_override: launch.thinking_override,
+        tier_override: launch.tier_override,
         awaiting_terminal: false,
         session_started: false,
         tx,
@@ -394,6 +397,7 @@ impl App {
     pub fn connect(&mut self, resume: Option<String>) {
         self.starting = true;
         let thinking_override = self.thinking_override.take();
+        let tier_override = self.tier_override.take();
         let host = self.host.clone();
         let model = self.model.clone();
         let thinking = self.thinking;
@@ -403,7 +407,8 @@ impl App {
             let ready = async {
                 match resume {
                     Some(session_id) => {
-                        open_session(&host, &session_id, tier, thinking_override).await
+                        open_session(&host, &session_id, tier, thinking_override, tier_override)
+                            .await
                     }
                     None => {
                         let (agent, events) = host.start(&model, thinking).await?;
@@ -1627,6 +1632,7 @@ pub async fn open_session(
     session_id: &str,
     tier: ServiceTier,
     thinking_override: Option<Thinking>,
+    tier_override: Option<ServiceTier>,
 ) -> Result<Ready> {
     let store = host
         .config
@@ -1678,9 +1684,10 @@ pub async fn open_session(
     if thinking != opened_thinking {
         agent.set_thinking(thinking).await?;
     }
-    let tier = model
+    let tier = tier_override.unwrap_or(tier);
+    model
         .capabilities(nanocode::ModelTransport::Native)
-        .normalize_service_tier(tier);
+        .check_service_tier(tier)?;
     apply_tier(&agent, &model, tier).await?;
     Ok(Ready {
         notice: format!("resumed session {session_id} · {model} · thinking {thinking}"),

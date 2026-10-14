@@ -270,6 +270,16 @@ impl EventMapper {
             .copied()
             .or_else(|| transcript.find_tool(call_id))
         else {
+            let name = payload["tool"].as_str().unwrap_or("tool").to_owned();
+            let display = if name == "exec" {
+                "code".to_owned()
+            } else {
+                name
+            };
+            let cell = ToolCell::new(call_id.to_owned(), display);
+            let index = transcript.push(CellKind::Tool(cell));
+            self.tools.insert(call_id.to_owned(), index);
+            self.tool_result(transcript, payload);
             return;
         };
         let status = match payload["status"].as_str() {

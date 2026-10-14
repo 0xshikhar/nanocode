@@ -23,6 +23,8 @@ pub enum Admission {
 pub enum Step {
     Execute,
 
+    Interrupted,
+
     Replay(Value),
 }
 

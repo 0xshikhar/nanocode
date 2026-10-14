@@ -407,6 +407,11 @@ where
                         receipt.validate()?;
                         true
                     }
+                    crate::agent::ExecutionStep::Interrupted => {
+                        return Err(NanocodexError::InvalidExecutionPolicy(
+                            "non-tool step was admitted with an interrupted tool outcome".into(),
+                        ));
+                    }
                     crate::agent::ExecutionStep::Execute => false,
                 }
             } else {
@@ -463,6 +468,11 @@ where
                     .begin::<_, RecordedCompactionOutcome>(&step_id, "compaction", &())
                     .await?
                 {
+                    crate::agent::ExecutionStep::Interrupted => {
+                        return Err(NanocodexError::InvalidExecutionPolicy(
+                            "non-tool step was admitted with an interrupted tool outcome".into(),
+                        ));
+                    }
                     crate::agent::ExecutionStep::Execute => None,
                     crate::agent::ExecutionStep::Replay(output) => Some(output),
                 }

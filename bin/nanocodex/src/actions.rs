@@ -343,7 +343,7 @@ impl App {
                 drop(previous.flush().await);
                 drop(previous.shutdown().await);
             }
-            let event = match open_session(&host, &session_id, tier, None).await {
+            let event = match open_session(&host, &session_id, tier, None, None).await {
                 Ok(ready) => AppEvent::AgentReady(Box::new(ready)),
                 Err(error) => AppEvent::AgentFailed(format!("resume failed: {error}")),
             };

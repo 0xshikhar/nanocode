@@ -500,6 +500,21 @@ pub struct ClaudeBuilder {
     task_board: Option<Arc<crate::tools::tasks::ClaudeTasks>>,
 }
 impl ClaudeBuilder {
+    pub(crate) fn durable_initial_settings(&self) -> Result<nanocode_durability::InitialSettings> {
+        Ok(nanocode_durability::InitialSettings {
+            thinking: if self.thinking_explicit || self.effort.is_some() {
+                effort_thinking(self.effort)
+            } else {
+                self.claude
+                    .model
+                    .parse::<ModelSelection>()
+                    .map_err(unsupported)?
+                    .default_thinking()
+            },
+            service_tier: nanocode_agent::ServiceTier::from_fast_mode(self.fast_mode),
+        })
+    }
+
     fn new(claude: Claude) -> Self {
         let context_window_tokens = default_context_window_tokens(&claude.model);
         Self {
@@ -3775,6 +3790,11 @@ impl State {
             None => Step::Execute,
         };
         let upgrade = match admitted {
+            Step::Interrupted => {
+                return Err(durable::recovery_error(
+                    "model step was admitted with an interrupted tool outcome",
+                ).into());
+            }
             Step::Replay(value) if value.get("code_only_tools").is_some() => Some(
                 serde_json::from_value::<durable::CodeOnlyUpgrade>(value)
                     .map_err(durable::recovery_error)?,
