@@ -7,3 +7,4 @@
 - Benchmark performance changes with reproducible commands, inputs, and before/after results. Separate cold builds, incremental builds, and runtime performance.
 - Keep logs, traces, and benchmark artifacts in ignored output/. Never commit credentials or personal test data.
 - Prefer simple code and small changes. Preserve unrelated work. Use subagents only when explicitly requested.
+- Work in the main checkout by default. Use a worktree only for an actual conflict or an explicit request; unrelated dirty or untracked files alone are not a reason.
