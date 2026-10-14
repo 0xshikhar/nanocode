@@ -33,6 +33,15 @@ Durability is enabled by default on the SDK runtime. Native sessions use
 `nanocode-store-jsonl` at the configured Codex home under `nanocode/sessions.jsonl`.
 `.durability(...)` selects one shared store for roots and their subagents.
 `nanocode-store-sqlite` and `nanocode-store-postgres` are optional store crates.
+The JSONL adapter keeps a rebuildable SQLite offset index beside each log as
+`<log>.index.sqlite`. Payloads and immutable records remain in JSONL; opening an
+indexed log or resuming one state reads only its index pages and referenced log
+entries. The first open builds the index for existing logs. JSONL is synced
+before the index advances, and any unindexed tail is replayed on recovery.
+Index transactions and connection shutdown share the log's file lock. The index
+uses SQLite WAL with normal synchronization and requires a local filesystem;
+its offsets use SQLite's signed 64-bit integer range, while revisions and fences
+retain the full unsigned 64-bit range. Removing the index rebuilds it from JSONL.
 WASM defaults to memory; hosts implement `StateStore` over persistent storage to
 retain sessions across host restarts.
 

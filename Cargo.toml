@@ -141,6 +141,9 @@ split-debuginfo = "unpacked"
 [profile.dev.package."*"]
 debug = false
 
+[profile.dev.package.ratatui-widgets]
+opt-level = 2
+
 [profile.dev.package."sha2:0.11.0"]
 opt-level = 3
 
