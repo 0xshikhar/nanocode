@@ -24,7 +24,9 @@ use super::{
 };
 use crate::prepared::{PreparedToolCall, PreparedToolError, PreparedToolRuntime};
 
-const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const INITIAL_TRANSPORT_BACKOFF: Duration = Duration::from_millis(100);
+
+pub(crate) const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 const PONG_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -37,7 +39,7 @@ pub(crate) const ATTACHMENT_REVOKED_REASON: &str =
 
 const MAX_REJECTED_BACKOFF: Duration = Duration::from_secs(60);
 
-const MAX_TRANSPORT_BACKOFF: Duration = Duration::from_secs(5);
+pub(crate) const MAX_TRANSPORT_BACKOFF: Duration = Duration::from_secs(5);
 
 const MAX_SERVICE_BACKOFF: Duration = Duration::from_secs(2);
 
@@ -45,6 +47,7 @@ const FAST_SERVICE_WINDOW: Duration = Duration::from_secs(30);
 
 pub(crate) struct Config {
     pub(crate) endpoint: Url,
+    pub(crate) listener: Option<tokio::net::TcpListener>,
     pub(crate) authorization: Box<str>,
     pub(crate) tools: Value,
     pub(crate) metadata: Option<AttachmentMetadata>,
@@ -66,7 +69,7 @@ pub(crate) async fn run(
     let mut active = Vec::<InFlight>::new();
     let mut journal = HashMap::<Box<str>, RetainedCall>::new();
     let (completed_tx, mut completed_rx) = mpsc::unbounded_channel::<Completion>();
-    let mut backoff = Duration::from_millis(100);
+    let mut backoff = INITIAL_TRANSPORT_BACKOFF;
     let mut attempt = 0_u64;
     let mut previous_delay = Duration::ZERO;
 
@@ -84,44 +87,51 @@ pub(crate) async fn run(
             Err(error) => break Err(error),
         };
         let connect_started = Instant::now();
-        let connected = tokio::select! {
-            command = commands.recv() => match command { Some(Command::Detach) | None => break Ok(()) },
-            connected = tokio::time::timeout(Duration::from_secs(5), async {
-                let connector = if request.uri().scheme_str() == Some("wss") {
-                    Some(tokio_tungstenite::Connector::Rustls(nanocode_tls::native_client_config().await?))
-                } else { None };
-                tracing::info!(target: "nanocode_code_mode::attachment",
-                    stage = "attachment.socket.trust",
-                    elapsed_ms = connect_started.elapsed().as_secs_f64() * 1000.0,
-                    "attachment TLS trust ready");
-                let host = request.uri().host().ok_or(tokio_tungstenite::tungstenite::Error::Url(
-                    tokio_tungstenite::tungstenite::error::UrlError::NoHostName,
-                ))?;
-                let host = host.trim_start_matches('[').trim_end_matches(']');
-                let port = request.uri().port_u16().unwrap_or(if connector.is_some() { 443 } else { 80 });
-                let dns_started = Instant::now();
-                let addresses: Vec<_> = tokio::net::lookup_host((host, port)).await?.collect();
-                tracing::info!(target: "nanocode_code_mode::attachment",
-                    stage = "attachment.socket.resolved",
-                    duration_ms = dns_started.elapsed().as_secs_f64() * 1000.0,
-                    elapsed_ms = connect_started.elapsed().as_secs_f64() * 1000.0,
-                    "attachment address resolved");
-                let tcp_started = Instant::now();
-                let stream = tokio::net::TcpStream::connect(addresses.as_slice()).await?;
-                stream.set_nodelay(true)?;
-                tracing::info!(target: "nanocode_code_mode::attachment",
-                    stage = "attachment.socket.tcp",
-                    duration_ms = tcp_started.elapsed().as_secs_f64() * 1000.0,
-                    elapsed_ms = connect_started.elapsed().as_secs_f64() * 1000.0,
-                    "attachment TCP connected");
-                let upgrade_started = Instant::now();
-                let upgraded = client_async_tls_with_config(request, stream, None, connector).await;
+        let connected = if let Some(listener) = &config.listener {
+            tokio::select! {
+                _ = commands.recv() => break Ok(()),
+                accepted = accept_runner(listener, &config.authorization) => Ok(accepted),
+            }
+        } else {
+            tokio::select! {
+                command = commands.recv() => match command { Some(Command::Detach) | None => break Ok(()) },
+                connected = tokio::time::timeout(Duration::from_secs(5), async {
+                    let connector = if request.uri().scheme_str() == Some("wss") {
+                        Some(tokio_tungstenite::Connector::Rustls(nanocode_tls::native_client_config().await?))
+                    } else { None };
+                    tracing::info!(target: "nanocode_code_mode::attachment",
+                        stage = "attachment.socket.trust",
+                        elapsed_ms = connect_started.elapsed().as_secs_f64() * 1000.0,
+                        "attachment TLS trust ready");
+                    let host = request.uri().host().ok_or(tokio_tungstenite::tungstenite::Error::Url(
+                        tokio_tungstenite::tungstenite::error::UrlError::NoHostName,
+                    ))?;
+                    let host = host.trim_start_matches('[').trim_end_matches(']');
+                    let port = request.uri().port_u16().unwrap_or(if connector.is_some() { 443 } else { 80 });
+                    let dns_started = Instant::now();
+                    let addresses: Vec<_> = tokio::net::lookup_host((host, port)).await?.collect();
+                    tracing::info!(target: "nanocode_code_mode::attachment",
+                        stage = "attachment.socket.resolved",
+                        duration_ms = dns_started.elapsed().as_secs_f64() * 1000.0,
+                        elapsed_ms = connect_started.elapsed().as_secs_f64() * 1000.0,
+                        "attachment address resolved");
+                    let tcp_started = Instant::now();
+                    let stream = tokio::net::TcpStream::connect(addresses.as_slice()).await?;
+                    stream.set_nodelay(true)?;
+                    tracing::info!(target: "nanocode_code_mode::attachment",
+                        stage = "attachment.socket.tcp",
+                        duration_ms = tcp_started.elapsed().as_secs_f64() * 1000.0,
+                        elapsed_ms = connect_started.elapsed().as_secs_f64() * 1000.0,
+                        "attachment TCP connected");
+                    let upgrade_started = Instant::now();
+                    let upgraded = client_async_tls_with_config(request, stream, None, connector).await;
 
-                tracing::info!(target: "nanocode_code_mode::attachment", stage = "attachment.socket.tls_upgrade",
-                    duration_ms = upgrade_started.elapsed().as_secs_f64() * 1000.0,
-                    reason_code = if upgraded.is_ok() { "connected" } else { "tls_upgrade_failure" }, "attachment TLS and upgrade finished");
-                upgraded
-            }.instrument(connection_span.clone())) => connected,
+                    tracing::info!(target: "nanocode_code_mode::attachment", stage = "attachment.socket.tls_upgrade",
+                        duration_ms = upgrade_started.elapsed().as_secs_f64() * 1000.0,
+                        reason_code = if upgraded.is_ok() { "connected" } else { "tls_upgrade_failure" }, "attachment TLS and upgrade finished");
+                    upgraded
+                }.instrument(connection_span.clone())) => connected,
+            }
         };
         let socket = match connected {
             Ok(Ok((socket, response))) => {
@@ -216,7 +226,7 @@ pub(crate) async fn run(
         if matches!(*status.borrow(), AttachmentStatus::Ready)
             && connected_at.elapsed() >= STABLE_CONNECTION
         {
-            backoff = Duration::from_millis(100);
+            backoff = INITIAL_TRANSPORT_BACKOFF;
         }
 
         let delay = matches!(
@@ -334,7 +344,7 @@ fn safe_uuid(value: &str) -> Option<String> {
 }
 
 #[derive(Clone, Copy)]
-enum Failure {
+pub(crate) enum Failure {
     Transport,
 
     Service { retry_after: Option<Duration> },
@@ -343,7 +353,7 @@ enum Failure {
 }
 
 impl Failure {
-    fn delay(self, backoff: &mut Duration, service_outage: Option<Instant>) -> Duration {
+    pub(crate) fn delay(self, backoff: &mut Duration, service_outage: Option<Instant>) -> Duration {
         let cap = match self {
             Self::Transport => MAX_TRANSPORT_BACKOFF,
             Self::Service { .. }
@@ -692,7 +702,11 @@ fn start_call(
                     task_identity.call_id.to_string(),
                     task_identity.name.to_string(),
                     clamp_shell_yield(&task_identity.name, task_identity.input.clone(), remaining),
-                    task_identity.output_token_budget as usize,
+                    if task_identity.output_token_budget == protocol::JSON_SAFE_INTEGER_MAX {
+                        crate::contract::DEFAULT_TOOL_OUTPUT_TOKENS
+                    } else {
+                        task_identity.output_token_budget as usize
+                    },
                 )
                 .with_turn_id(task_identity.turn_id.as_deref().map(str::to_owned));
                 let execute = async {
@@ -1511,5 +1525,53 @@ fn trace_attachment_event(event: &AttachmentEvent) {
             "attachment fenced"
         ),
         AttachmentEvent::CallStarted { .. } | AttachmentEvent::CallCompleted { .. } => {}
+    }
+}
+
+async fn accept_runner(
+    listener: &tokio::net::TcpListener,
+    authorization: &str,
+) -> Result<
+    (
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        http::Response<Option<Vec<u8>>>,
+    ),
+    tokio_tungstenite::tungstenite::Error,
+> {
+    loop {
+        let (stream, _) = listener.accept().await?;
+        stream.set_nodelay(true)?;
+        let authenticate =
+            |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
+             response: tokio_tungstenite::tungstenite::handshake::server::Response| {
+                if request
+                    .headers()
+                    .get(http::header::AUTHORIZATION)
+                    .and_then(|value| value.to_str().ok())
+                    == Some(authorization)
+                {
+                    Ok(response)
+                } else {
+                    let mut rejection =
+                        tokio_tungstenite::tungstenite::handshake::server::ErrorResponse::new(
+                            Some("invalid runner credential".into()),
+                        );
+                    *rejection.status_mut() = http::StatusCode::UNAUTHORIZED;
+                    Err(rejection)
+                }
+            };
+        if let Ok(Ok(socket)) = tokio::time::timeout(
+            HANDSHAKE_TIMEOUT,
+            tokio_tungstenite::accept_hdr_async(
+                tokio_tungstenite::MaybeTlsStream::Plain(stream),
+                authenticate,
+            ),
+        )
+        .await
+        {
+            return Ok((socket, http::Response::new(None)));
+        }
     }
 }

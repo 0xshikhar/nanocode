@@ -257,6 +257,33 @@ impl ToolRegistry {
         }
     }
 
+    pub(super) fn route_workspaces(&mut self, routes: &[crate::attachment::routing::Route]) {
+        if routes.is_empty() {
+            return;
+        }
+        let routes = Arc::new(routes.to_vec());
+        let sessions = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        for (index, tool) in self.ordered.iter_mut().enumerate() {
+            let name = tool.definition().name().to_owned();
+            if matches!(
+                name.as_str(),
+                "exec_command" | "write_stdin" | "apply_patch" | "view_image"
+            ) || routes.iter().any(|route| {
+                route
+                    .tools
+                    .iter()
+                    .any(|remote| remote.remote_name() == name)
+            }) {
+                *tool = Arc::new(crate::attachment::routing::RoutedTool {
+                    local: Arc::clone(tool),
+                    routes: Arc::clone(&routes),
+                    sessions: Arc::clone(&sessions),
+                });
+                self.definitions[index] = tool.definition();
+            }
+        }
+    }
+
     pub(super) fn set_all_exposures(&mut self, exposure: ToolExposure) {
         self.exposures.fill(exposure);
     }

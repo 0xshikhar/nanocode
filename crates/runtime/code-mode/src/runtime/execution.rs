@@ -109,6 +109,7 @@ impl ToolRuntime {
                 .map(|tool| (tool, tools.exposure())),
         );
         registry.providers.extend(tools.providers.iter().cloned());
+        registry.route_workspaces(&tools.remote_runners);
         if let Some(working_directory) = &tools.working_directory {
             self.working_directory = Arc::clone(working_directory);
         }

@@ -166,6 +166,8 @@ pub struct Tools {
     #[cfg(not(target_family = "wasm"))]
     pub(crate) workspace_tools: Option<crate::WorkspaceTools>,
     #[cfg(not(target_family = "wasm"))]
+    pub(crate) remote_runners: Vec<crate::attachment::routing::Route>,
+    #[cfg(not(target_family = "wasm"))]
     pub(super) deferred_tools_guidance_enabled: bool,
 
     pub(crate) embedded_host: Option<Arc<dyn crate::embedded::CodeModeHost>>,
@@ -199,6 +201,8 @@ impl Default for Tools {
             attachment_mcps: Vec::new(),
             #[cfg(not(target_family = "wasm"))]
             workspace_tools: None,
+            #[cfg(not(target_family = "wasm"))]
+            remote_runners: Vec::new(),
             #[cfg(not(target_family = "wasm"))]
             deferred_tools_guidance_enabled: false,
 
@@ -390,6 +394,43 @@ impl ToolsBuilder {
     )]
     pub fn add<S: ToolSource>(self, source: S) -> Self {
         source.install(self)
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub fn remote_runner(
+        mut self,
+        tools: crate::attachment::RemoteTools,
+        workspace: impl Into<std::path::PathBuf>,
+        mode: crate::attachment::RemoteMode,
+    ) -> Result<Self, crate::attachment::AttachmentError> {
+        let workspace = workspace.into();
+        if !workspace.is_absolute() || tools.iter().next().is_none() {
+            return Err(crate::attachment::AttachmentError::Catalog(
+                "remote routing requires an absolute workspace and nonempty catalog".into(),
+            ));
+        }
+        let namespace = tools.iter().next().unwrap().namespace();
+        if self.tools.remote_runners.iter().any(|route| {
+            route.tools.iter().next().unwrap().namespace() == namespace
+                || route.mode == crate::attachment::RemoteMode::Replace
+                || mode == crate::attachment::RemoteMode::Replace
+        }) {
+            return Err(crate::attachment::AttachmentError::Catalog(
+                "duplicate runner or replacement mixed with other runners".into(),
+            ));
+        }
+        self.tools.workspace = true;
+        if mode == crate::attachment::RemoteMode::Replace {
+            self.tools.working_directory = Some(Arc::from(format!("/{namespace}")));
+        }
+        self.tools
+            .remote_runners
+            .push(crate::attachment::routing::Route {
+                tools,
+                workspace,
+                mode,
+            });
+        Ok(self)
     }
 
     #[must_use]

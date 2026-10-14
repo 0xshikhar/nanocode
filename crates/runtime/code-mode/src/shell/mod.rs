@@ -104,7 +104,7 @@ pub(crate) struct ExecCommandResult {
 
 pub(crate) struct ShellSessions {
     lifecycle: Mutex<()>,
-    sessions: Mutex<HashMap<i64, Arc<Session>>>,
+    sessions: Arc<Mutex<HashMap<i64, Arc<Session>>>>,
     next_session_id: AtomicI64,
     default_shell: selection::Shell,
     environment: Arc<Vec<(OsString, OsString)>>,
@@ -114,7 +114,7 @@ impl ShellSessions {
     pub(crate) fn with_environment(environment: Arc<Vec<(OsString, OsString)>>) -> Self {
         Self {
             lifecycle: Mutex::new(()),
-            sessions: Mutex::new(HashMap::new()),
+            sessions: Arc::new(Mutex::new(HashMap::new())),
             next_session_id: AtomicI64::new(1),
             default_shell: selection::default_user_shell(),
             environment,
@@ -161,6 +161,10 @@ impl ShellSessions {
             }
         };
         let session = Session::new(session_id, spawned, secrets);
+        let mut cancellation = CancelExecution {
+            session: Some(Arc::clone(&session)),
+            sessions: Arc::clone(&self.sessions),
+        };
         let _interaction_guard = session.interaction.lock().await;
         self.sessions
             .lock()
@@ -177,6 +181,7 @@ impl ShellSessions {
         let result = session
             .wait_for_output(yield_time, command.max_output_tokens, started_at)
             .await;
+        cancellation.session = None;
         if result.exit_code.is_some() {
             self.sessions.lock().await.remove(&session_id);
         }
@@ -521,4 +526,20 @@ fn generate_chunk_id() -> Result<String, getrandom::Error> {
             ]
         })
         .collect())
+}
+
+struct CancelExecution {
+    session: Option<Arc<Session>>,
+    sessions: Arc<Mutex<HashMap<i64, Arc<Session>>>>,
+}
+impl Drop for CancelExecution {
+    fn drop(&mut self) {
+        if let Some(session) = self.session.take() {
+            let sessions = Arc::clone(&self.sessions);
+            tokio::spawn(async move {
+                sessions.lock().await.remove(&session.id);
+                session.terminate().await;
+            });
+        }
+    }
 }

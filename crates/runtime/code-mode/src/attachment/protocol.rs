@@ -3,6 +3,8 @@ use serde_json::Value;
 
 use super::AttachmentMachine;
 
+pub(crate) const JSON_SAFE_INTEGER_MAX: u64 = 9_007_199_254_740_991;
+
 pub(crate) const HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(20);
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -144,7 +146,7 @@ impl RemoteFrame {
                     || !valid_identifier(call_id)
                     || !valid_tool_name(name)
                     || !(input.is_object() || input.is_string())
-                    || !positive(*output_token_budget)
+                    || *output_token_budget > JSON_SAFE_INTEGER_MAX
                     || !positive(*output_byte_budget)
                     || !positive(*deadline_at)
                 {
@@ -198,7 +200,7 @@ fn deserialize_turn_id<'de, D: serde::Deserializer<'de>>(
 }
 
 const fn positive(value: u64) -> bool {
-    value > 0 && value <= 9_007_199_254_740_991
+    value > 0 && value <= JSON_SAFE_INTEGER_MAX
 }
 
 fn valid_identifier(value: &str) -> bool {

@@ -1,8 +1,12 @@
 mod driver;
 mod host;
 mod protocol;
+pub(crate) mod routing;
+mod runner;
+pub use routing::RemoteMode;
+pub use runner::{RunnerConfig, RunnerEndpoint, run_runner, run_runner_with_tools};
 
-pub use host::{RemoteRunner, RemoteTool, RemoteTools, RunnerHost};
+pub use host::{RemoteRunner, RemoteTool, RemoteTools, RunnerConnection, RunnerHost};
 
 use std::{collections::HashSet, fmt, sync::Arc};
 use tokio::sync::{mpsc, watch};
@@ -369,6 +373,7 @@ async fn initialize_and_run(
             .map_err(|error| AttachmentError::Catalog(error.to_string().into()))?;
         Ok::<_, AttachmentError>(driver::Config {
             endpoint: target.endpoint,
+            listener: None,
             authorization: format!("Bearer {}", target.bearer).into(),
             tools,
             metadata,

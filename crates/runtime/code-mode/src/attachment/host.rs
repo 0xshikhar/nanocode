@@ -25,7 +25,7 @@ use crate::{
     contract::{ToolError, ToolOutputWire},
 };
 
-const JSON_SAFE_INTEGER_MAX: u64 = 9_007_199_254_740_991;
+use super::protocol::JSON_SAFE_INTEGER_MAX;
 const RECOVER_BATCH_LIMIT: usize = 100;
 const PUBLIC_TOOL_NAME_LIMIT: usize = 128;
 const PROTOCOL_IDENTIFIER_LIMIT: usize = 128;
@@ -41,6 +41,7 @@ pub struct RemoteRunner {
 struct Inner {
     namespace: Box<str>,
     catalog: watch::Sender<Option<Arc<[Arc<RemoteSpec>]>>>,
+    failure: watch::Sender<Option<AttachmentError>>,
     state: Mutex<State>,
 }
 
@@ -52,6 +53,7 @@ struct State {
     catalog: Option<Value>,
     pending: HashMap<Box<str>, Pending>,
     last_turn_ended: Option<[Box<str>; 3]>,
+    deferred_frames: Vec<String>,
 }
 
 struct Connection {
@@ -62,7 +64,7 @@ struct Connection {
 struct Pending {
     frame: Arc<str>,
     sent: bool,
-    result: oneshot::Sender<Value>,
+    result: oneshot::Sender<(Value, Option<Box<str>>)>,
 }
 
 enum Outbound {
@@ -127,7 +129,7 @@ impl RemoteRunner {
         if !valid_namespace(&namespace) {
             return Err(AttachmentError::Catalog(
                 format!(
-                    "runner namespace `{namespace}` must start with an ASCII letter, contain only ASCII alphanumerics or `_`, and must not contain `__` or end with `_`"
+                    "runner namespace `{namespace}` must start with an ASCII letter, contain only ASCII alphanumerics, `_`, or `-`, and must not contain `__` or end with `_`"
                 )
                 .into(),
             ));
@@ -136,6 +138,7 @@ impl RemoteRunner {
             inner: Arc::new(Inner {
                 namespace: namespace.into(),
                 catalog: watch::channel(None).0,
+                failure: watch::channel(None).0,
                 state: Mutex::default(),
             }),
         })
@@ -153,12 +156,11 @@ impl RemoteRunner {
 
     pub async fn tools(&self) -> Result<RemoteTools, AttachmentError> {
         let mut catalog = self.inner.catalog.subscribe();
-        let specs = catalog
-            .wait_for(Option::is_some)
-            .await
-            .map_err(|_| AttachmentError::Closed)?
-            .clone()
-            .ok_or(AttachmentError::Closed)?;
+        let mut failure = self.inner.failure.subscribe();
+        let specs = tokio::select! {
+            result = catalog.wait_for(Option::is_some) => result.map_err(|_| AttachmentError::Closed)?.clone().ok_or(AttachmentError::Closed)?,
+            result = failure.wait_for(Option::is_some) => return Err(result.map_err(|_| AttachmentError::Closed)?.clone().unwrap_or(AttachmentError::Closed)),
+        };
         Ok(RemoteTools {
             tools: specs
                 .iter()
@@ -175,7 +177,10 @@ impl RemoteRunner {
         T: Stream<Item = Result<String, E>> + Sink<String, Error = E> + Unpin,
         E: fmt::Display,
     {
-        let first = match transport.next().await {
+        let first = match tokio::time::timeout(super::driver::HANDSHAKE_TIMEOUT, transport.next())
+            .await
+            .map_err(transport_error)?
+        {
             Some(Ok(text)) => text,
             Some(Err(error)) => return Err(transport_error(error)),
             None => {
@@ -190,6 +195,10 @@ impl RemoteRunner {
             ));
         };
         let (generation, mut outbound, backlog) = self.inner.attach(&runtime_id, tools)?;
+        let _lease = ConnectionLease {
+            inner: Arc::clone(&self.inner),
+            generation,
+        };
         let result = self
             .connection(&mut transport, generation, &mut outbound, backlog)
             .await;
@@ -234,7 +243,7 @@ impl RemoteRunner {
                     };
                     match parse_frame(&text)? {
                         RunnerFrame::Result { call_id, outcome } => {
-                            self.inner.deliver(&call_id, outcome);
+                            self.inner.deliver(generation, &call_id, outcome);
                             send(transport, json!({"type": "ack", "call_id": call_id}).to_string()).await?;
                         }
                         RunnerFrame::Status { call_id, state } => match state.as_str() {
@@ -314,10 +323,13 @@ impl Inner {
                 .collect();
             for call_id in lost {
                 if let Some(pending) = state.pending.remove(&call_id) {
-                    let _ = pending.result.send(json!({
-                        "status": "ambiguous",
-                        "message": "runner restarted before returning a receipt",
-                    }));
+                    let _ = pending.result.send((
+                        json!({
+                            "status": "ambiguous",
+                            "message": "runner restarted before returning a receipt",
+                        }),
+                        None,
+                    ));
                 }
             }
         }
@@ -329,7 +341,7 @@ impl Inner {
             generation,
             outbound,
         });
-        let mut backlog = Vec::new();
+        let mut backlog = std::mem::take(&mut state.deferred_frames);
         let mut recover = Vec::new();
         for (call_id, pending) in &mut state.pending {
             if pending.sent {
@@ -387,14 +399,22 @@ impl Inner {
             .connection
             .as_ref()
             .is_some_and(|connection| connection.generation == generation);
+        if !current {
+            return None;
+        }
         let pending = state.pending.get_mut(call_id)?;
-        pending.sent = current;
+        pending.sent = true;
         current.then(|| pending.frame.to_string())
     }
 
-    fn deliver(&self, call_id: &str, outcome: Value) {
-        if let Some(pending) = self.state().pending.remove(call_id) {
-            let _ = pending.result.send(outcome);
+    fn deliver(&self, generation: u64, call_id: &str, outcome: Value) {
+        let mut state = self.state();
+        if state.generation != generation {
+            return;
+        }
+        let runtime_id = state.runtime_id.clone();
+        if let Some(pending) = state.pending.remove(call_id) {
+            let _ = pending.result.send((outcome, runtime_id));
         }
     }
 
@@ -402,11 +422,13 @@ impl Inner {
         let mut state = self.state();
         if let Some(pending) = state.pending.remove(call_id)
             && pending.sent
-            && let Some(connection) = &state.connection
         {
-            let _ = connection.outbound.send(Outbound::Frame(
-                json!({"type": "cancel", "call_id": call_id}).to_string(),
-            ));
+            let frame = json!({"type": "cancel", "call_id": call_id}).to_string();
+            if let Some(connection) = &state.connection {
+                let _ = connection.outbound.send(Outbound::Frame(frame));
+            } else {
+                state.deferred_frames.push(frame);
+            }
         }
     }
 
@@ -415,7 +437,7 @@ impl Inner {
         spec: &RemoteSpec,
         input: Value,
         context: ToolContext<'_>,
-    ) -> Result<Value, AttachmentError> {
+    ) -> Result<(Value, Option<Box<str>>), AttachmentError> {
         let session_id = context.session_id();
         if !valid_identifier(session_id) {
             return Err(AttachmentError::Transport(
@@ -430,19 +452,32 @@ impl Inner {
                 "turn id is not a valid attachment turn identifier".into(),
             ));
         }
-        let output_token_budget = u64::try_from(context.output_token_budget())
-            .unwrap_or(u64::MAX)
-            .min(JSON_SAFE_INTEGER_MAX);
-        if output_token_budget == 0 {
-            return Err(AttachmentError::Transport(
-                "attached calls require a positive output token budget".into(),
-            ));
-        }
+        let output_token_budget = if context.output_token_budget()
+            == crate::contract::DEFAULT_TOOL_OUTPUT_TOKENS
+        {
+            JSON_SAFE_INTEGER_MAX
+        } else {
+            let budget = u64::try_from(context.output_token_budget()).map_err(transport_error)?;
+            if budget > JSON_SAFE_INTEGER_MAX {
+                return Err(AttachmentError::Transport(
+                    "output token budget exceeds the protocol integer range".into(),
+                ));
+            }
+            budget
+        };
         let call_id: Box<str> = uuid::Uuid::new_v4().to_string().into();
         let now = now_ms();
-        let deadline_at = now
-            .saturating_add(spec.timeout_ms)
-            .min(JSON_SAFE_INTEGER_MAX);
+        let deadline_at = if spec.timeout_ms == JSON_SAFE_INTEGER_MAX {
+            JSON_SAFE_INTEGER_MAX
+        } else {
+            now.checked_add(spec.timeout_ms)
+                .filter(|value| *value <= JSON_SAFE_INTEGER_MAX)
+                .ok_or_else(|| {
+                    AttachmentError::Transport(
+                        "call deadline exceeds the protocol integer range".into(),
+                    )
+                })?
+        };
         let mut frame = json!({
             "type": "call",
             "session_id": session_id,
@@ -516,16 +551,11 @@ impl Inner {
             return Ok(());
         }
         state.last_turn_ended = Some(key);
+        let frame = json!({"type": "turn_ended", "session_id": session_id, "turn_id": turn_id, "hook_event_name": hook_event_name}).to_string();
         if let Some(connection) = &state.connection {
-            let _ = connection.outbound.send(Outbound::Frame(
-                json!({
-                    "type": "turn_ended",
-                    "session_id": session_id,
-                    "turn_id": turn_id,
-                    "hook_event_name": hook_event_name,
-                })
-                .to_string(),
-            ));
+            let _ = connection.outbound.send(Outbound::Frame(frame));
+        } else {
+            state.deferred_frames.push(frame);
         }
         Ok(())
     }
@@ -593,6 +623,9 @@ impl fmt::Debug for RemoteTool {
 }
 
 impl RemoteTool {
+    pub(crate) fn runtime_id(&self) -> Option<Box<str>> {
+        self.runner.state().runtime_id.clone()
+    }
     #[must_use]
     pub fn name(&self) -> &str {
         self.spec.definition.name()
@@ -631,6 +664,18 @@ impl Tool for RemoteTool {
     }
 
     async fn execute(&self, input: ToolInput, context: ToolContext<'_>) -> ToolResult {
+        self.execute_with_runtime(input, context)
+            .await
+            .map(|(output, _)| output)
+    }
+}
+
+impl RemoteTool {
+    pub(crate) async fn execute_with_runtime(
+        &self,
+        input: ToolInput,
+        context: ToolContext<'_>,
+    ) -> Result<(ToolOutput, Option<Box<str>>), ToolError> {
         let input = match input {
             ToolInput::Function(input) => {
                 let input: Value = serde_json::from_str(input.get())?;
@@ -641,7 +686,7 @@ impl Tool for RemoteTool {
             }
             ToolInput::Freeform(input) => Value::String(input),
         };
-        let outcome = self.runner.call(&self.spec, input, context).await?;
+        let (outcome, runtime_id) = self.runner.call(&self.spec, input, context).await?;
         let Outcome {
             status,
             output,
@@ -672,6 +717,7 @@ impl Tool for RemoteTool {
             )
             .into()),
         }
+        .map(|output| (output, runtime_id))
     }
 }
 
@@ -795,7 +841,14 @@ async fn serve_socket(stream: TcpStream, runners: Runners) {
             Err(rejection)
         }
     };
-    let socket = match tokio_tungstenite::accept_hdr_async(stream, authenticate).await {
+    let socket = match tokio::time::timeout(
+        super::driver::HANDSHAKE_TIMEOUT,
+        tokio_tungstenite::accept_hdr_async(stream, authenticate),
+    )
+    .await
+    .map_err(transport_error)
+    .and_then(|result| result.map_err(transport_error))
+    {
         Ok(socket) => socket,
         Err(error) => {
             tracing::info!(target: "nanocode_code_mode::attachment", %error, "runner handshake rejected");
@@ -852,6 +905,16 @@ fn parse_catalog(
 ) -> Result<Arc<[Arc<RemoteSpec>]>, AttachmentError> {
     let entries: Vec<CatalogEntry> = serde_json::from_value(tools.clone())
         .map_err(|error| AttachmentError::Catalog(error.to_string().into()))?;
+    crate::selection::validate_public_tool_catalog_names(
+        entries.iter().map(|entry| entry.definition.name()),
+    )
+    .map_err(|error| AttachmentError::Catalog(error.to_string().into()))?;
+    if entries
+        .iter()
+        .any(|entry| entry.timeout_ms == 0 || entry.timeout_ms > JSON_SAFE_INTEGER_MAX)
+    {
+        return Err(AttachmentError::Catalog("invalid tool timeout".into()));
+    }
     entries
         .into_iter()
         .map(|entry| {
@@ -929,7 +992,7 @@ fn valid_namespace(namespace: &str) -> bool {
         .is_some_and(u8::is_ascii_alphabetic)
         && namespace
             .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
         && !namespace.contains(NAMESPACE_SEPARATOR)
         && !namespace.ends_with('_')
 }
@@ -951,4 +1014,91 @@ fn now_ms() -> u64 {
         .map_or(0, |duration| {
             u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
         })
+}
+
+pub struct RunnerConnection(tokio::task::JoinHandle<()>);
+
+impl Drop for RunnerConnection {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+impl RemoteRunner {
+    pub fn connect(
+        &self,
+        target: super::AttachmentTarget,
+    ) -> Result<RunnerConnection, AttachmentError> {
+        use tungstenite::client::IntoClientRequest;
+        let mut request = target
+            .endpoint()
+            .as_str()
+            .into_client_request()
+            .map_err(transport_error)?;
+        let mut authorization = http::HeaderValue::from_str(&format!("Bearer {}", target.bearer()))
+            .map_err(transport_error)?;
+        authorization.set_sensitive(true);
+        request
+            .headers_mut()
+            .insert(http::header::AUTHORIZATION, authorization);
+        let runner = self.clone();
+        Ok(RunnerConnection(tokio::spawn(async move {
+            let mut backoff = super::driver::INITIAL_TRANSPORT_BACKOFF;
+            loop {
+                match tokio::time::timeout(
+                    super::driver::HANDSHAKE_TIMEOUT,
+                    tokio_tungstenite::connect_async(request.clone()),
+                )
+                .await
+                .map_err(|error| {
+                    tungstenite::Error::Io(std::io::Error::new(std::io::ErrorKind::TimedOut, error))
+                })
+                .and_then(|result| result)
+                {
+                    Ok((socket, _)) => {
+                        let mut frames = socket.with(|text: String| future::ready(Ok::<_, tungstenite::Error>(Message::text(text)))).filter_map(|message| future::ready(match message {
+                            Ok(Message::Text(text)) => Some(Ok(text.to_string())),
+                            Ok(Message::Close(_)) => None,
+                            Ok(Message::Binary(_)) => Some(Err(tungstenite::Error::Protocol(tungstenite::error::ProtocolError::ResetWithoutClosingHandshake))),
+                            Ok(_) => None,
+                            Err(error) => Some(Err(error)),
+                        }));
+                        if let Err(
+                            error @ (AttachmentError::Catalog(_) | AttachmentError::Fenced(_)),
+                        ) = runner.serve(&mut frames).await
+                        {
+                            runner.inner.failure.send_replace(Some(error));
+                            return;
+                        }
+                    }
+                    Err(tungstenite::Error::Http(response))
+                        if matches!(response.status().as_u16(), 401 | 403) =>
+                    {
+                        runner
+                            .inner
+                            .failure
+                            .send_replace(Some(AttachmentError::Authentication(
+                                "runner rejected the bearer credential".into(),
+                            )));
+                        return;
+                    }
+                    Err(error) => {
+                        tracing::warn!(target: "nanocode_code_mode::attachment", %error, "runner connection failed")
+                    }
+                }
+                tokio::time::sleep(super::driver::Failure::Transport.delay(&mut backoff, None))
+                    .await;
+            }
+        })))
+    }
+}
+
+struct ConnectionLease {
+    inner: Arc<Inner>,
+    generation: u64,
+}
+impl Drop for ConnectionLease {
+    fn drop(&mut self) {
+        self.inner.detach(self.generation);
+    }
 }
