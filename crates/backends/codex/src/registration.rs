@@ -122,7 +122,7 @@ impl<F> NanocodexBuilder<F> {
             .parse::<Model>()
             .map_err(|error| NanocodexError::InvalidRequest(error.to_string()))?;
         let mut builder = self
-            .additive_tools(request.additive_tools)
+            .runtime_tools(request.tools)
             .model(model)
             .workspace(request.workspace)
             .spawn_factory(request.spawn_factory)

@@ -12,13 +12,21 @@ pub trait DurableAgentExt: Sized {
 }
 
 pub trait DurableBackendRegistration: BackendRegistration {
-    fn checkpoint_format(&self) -> Arc<dyn CheckpointFormat>;
+    fn checkpoint_format(&self) -> Option<Arc<dyn CheckpointFormat>> {
+        None
+    }
 
     fn build_durable(
         &self,
-        request: BackendRequest,
-        state: DurableSession,
-    ) -> BackendFuture<AgentResult<(Nanocodex, AgentEvents)>>;
+        _request: BackendRequest,
+        _state: DurableSession,
+    ) -> BackendFuture<AgentResult<(Nanocodex, AgentEvents)>> {
+        Box::pin(async {
+            Err(NanocodexError::UnsupportedCapability {
+                capability: "durability",
+            })
+        })
+    }
 }
 
 #[derive(Clone)]

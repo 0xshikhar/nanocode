@@ -33,8 +33,8 @@ where
     <F::Service as Service<ResponsesAttempt>>::Error: Into<ResponseError> + PlatformSend + 'static,
     <F::Service as Service<ResponsesAttempt>>::Future: PlatformSend,
 {
-    fn checkpoint_format(&self) -> Arc<dyn CheckpointFormat> {
-        Arc::new(CodexCheckpointFormat)
+    fn checkpoint_format(&self) -> Option<Arc<dyn CheckpointFormat>> {
+        Some(Arc::new(CodexCheckpointFormat))
     }
 
     fn build_durable(
@@ -70,8 +70,8 @@ where
     <F::Service as Service<ResponsesAttempt>>::Error: Into<ResponseError> + PlatformSend + 'static,
     <F::Service as Service<ResponsesAttempt>>::Future: PlatformSend,
 {
-    fn checkpoint_format(&self) -> Arc<dyn CheckpointFormat> {
-        Arc::new(CodexCheckpointFormat)
+    fn checkpoint_format(&self) -> Option<Arc<dyn CheckpointFormat>> {
+        Some(Arc::new(CodexCheckpointFormat))
     }
 
     fn build_durable(

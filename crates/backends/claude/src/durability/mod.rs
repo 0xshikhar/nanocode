@@ -21,8 +21,8 @@ mod format;
 pub use format::ClaudeCheckpointFormat;
 
 impl DurableBackendRegistration for ClaudeBuilder {
-    fn checkpoint_format(&self) -> Arc<dyn CheckpointFormat> {
-        Arc::new(ClaudeCheckpointFormat)
+    fn checkpoint_format(&self) -> Option<Arc<dyn CheckpointFormat>> {
+        Some(Arc::new(ClaudeCheckpointFormat))
     }
 
     fn build_durable(
@@ -36,8 +36,8 @@ impl DurableBackendRegistration for ClaudeBuilder {
 }
 
 impl DurableBackendRegistration for Claude {
-    fn checkpoint_format(&self) -> Arc<dyn CheckpointFormat> {
-        Arc::new(ClaudeCheckpointFormat)
+    fn checkpoint_format(&self) -> Option<Arc<dyn CheckpointFormat>> {
+        Some(Arc::new(ClaudeCheckpointFormat))
     }
 
     fn build_durable(

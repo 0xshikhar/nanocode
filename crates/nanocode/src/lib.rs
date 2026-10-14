@@ -133,3 +133,16 @@ pub use nanocode_backend_codex::builtin_tools as codex_tools;
 pub use nanocode_code_mode as code_mode;
 
 pub use nanocode_tools as tool_contract;
+
+pub mod backend {
+    pub use nanocode_agent::backend::*;
+    pub use nanocode_agent::input::{Prompt, PromptInput};
+    pub use nanocode_agent::{
+        AgentHandle, AgentSessionContext, AgentToolsFactory, BackendId, BackendKind,
+        BackendRegistration, BackendRequest, Capabilities, ForkRequest, HarnessFamily,
+        ModelSelection, Nanocodex as Agent, NanocodexError, Result, RuntimeTools,
+        SessionCheckpoint, SpawnOptions, Thinking, TurnResult,
+    };
+    pub use nanocode_durability::{CheckpointFormat, DurableBackendRegistration};
+    pub use nanocode_tools::{Tool, ToolCollection, ToolContext, ToolInput};
+}

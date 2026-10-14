@@ -156,6 +156,19 @@ pub trait AgentFactory: Send + Sync + 'static {
     }
 }
 
+pub struct CrossHarnessOnly;
+
+impl AgentFactory for CrossHarnessOnly {
+    fn spawn(
+        &self,
+        _parent: AgentHandle,
+        _options: SpawnOptions,
+        _host_context: Option<Arc<str>>,
+    ) -> BackendFuture<Result<(Nanocodex, AgentEvents)>> {
+        unsupported("same_harness_spawn")
+    }
+}
+
 fn unsupported<T: 'static>(capability: &'static str) -> BackendFuture<Result<T>> {
     Box::pin(async move { Err(NanocodexError::UnsupportedCapability { capability }) })
 }

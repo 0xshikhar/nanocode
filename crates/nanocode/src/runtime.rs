@@ -260,8 +260,24 @@ impl<B> NanocodexBuilder<B> {
     }
 
     pub fn build(mut self) -> Result<Nanocodex> {
-        if self.codex.is_none() && self.claude.is_none() && self.backends.is_empty() {
+        let preferred = if self.codex.is_some() {
+            Some(HarnessFamily::Codex)
+        } else if self.claude.is_some() {
+            Some(HarnessFamily::Claude)
+        } else {
+            self.backends
+                .first()
+                .map(|backend| HarnessFamily::from(backend.id()))
+        };
+        let registered = |family: HarnessFamily| {
+            self.backends
+                .iter()
+                .any(|backend| HarnessFamily::from(backend.id()) == family)
+        };
+        if self.codex.is_none() && !registered(HarnessFamily::Codex) {
             self.codex = Some(OpenAi::default().into());
+        }
+        if self.claude.is_none() && !registered(HarnessFamily::Claude) {
             self.claude = Some(ClaudeClient::default().into());
         }
         let mut configured = Vec::new();
@@ -289,11 +305,9 @@ impl<B> NanocodexBuilder<B> {
             }
             configured.push(family);
         }
-        let Some(fallback) = configured
-            .iter()
-            .find(|family| **family == HarnessFamily::Codex)
-            .or_else(|| configured.first())
-            .cloned()
+        let Some(fallback) = preferred
+            .filter(|family| configured.contains(family))
+            .or_else(|| configured.first().cloned())
         else {
             return Err(NanocodexError::InvalidRequest(
                 "a Nanocodex runtime requires at least one harness backend".into(),
@@ -358,23 +372,23 @@ impl<B> NanocodexBuilder<B> {
                 (model, thinking)
             })
             .collect();
-        let store = match self.durability {
-            Some(store) => store.map_err(|error| NanocodexError::Backend {
+        let durability = self
+            .durability
+            .transpose()
+            .map_err(|error| NanocodexError::Backend {
                 backend: "durability",
                 source: error,
-            })?,
-            None => crate::durability::SessionStore::new(
-                crate::durability::MemoryStore::new().map_err(catalog_error)?,
-            )
-            .map_err(catalog_error)?,
-        };
-        crate::register_builtin_formats(&store).map_err(catalog_error)?;
-        for backend in &self.backends {
-            store
-                .register_format(backend.checkpoint_format())
-                .map_err(catalog_error)?;
+            })?;
+        let mut ephemeral = Vec::new();
+        if let Some(store) = &durability {
+            crate::register_builtin_formats(store).map_err(catalog_error)?;
+            for backend in &self.backends {
+                match backend.checkpoint_format() {
+                    Some(format) => store.register_format(format).map_err(catalog_error)?,
+                    None => ephemeral.push(backend.id()),
+                }
+            }
         }
-        let durability = Some(store);
         let subagents = (!self.subagents_disabled).then(|| {
             let (registry, _, _) = nanocode_subagents::channel(
                 self.max_subagents
@@ -404,7 +418,7 @@ impl<B> NanocodexBuilder<B> {
                     &self.settings,
                     &workspace,
                     cua.clone(),
-                    subagents,
+                    subagents.clone(),
                 ),
             ));
         }
@@ -414,12 +428,21 @@ impl<B> NanocodexBuilder<B> {
             })?;
             recipes.push((
                 family,
-                registered_recipe(backend, &self.settings, &workspace, cua.clone()),
+                registered_recipe(
+                    backend,
+                    &self.settings,
+                    &workspace,
+                    cua.clone(),
+                    subagents.clone(),
+                ),
             ));
         }
 
         if let Some(store) = &durability {
-            for (_, recipe) in &mut recipes {
+            for (family, recipe) in &mut recipes {
+                if ephemeral.iter().any(|id| id.as_str() == family.as_str()) {
+                    continue;
+                }
                 *recipe = persistent_recipe(recipe.clone(), store.clone(), workspace.clone());
             }
         }
@@ -488,6 +511,7 @@ fn registered_recipe(
     runtime: &Settings,
     workspace: &Arc<Path>,
     cua: Option<Arc<tokio::sync::OnceCell<crate::ComputerTools>>>,
+    subagents: Option<Arc<nanocode_subagents::Registry>>,
 ) -> Recipe {
     let workspace = Arc::clone(workspace);
     let defaults = runtime.clone();
@@ -496,9 +520,10 @@ fn registered_recipe(
         let cua = cua.clone();
         let workspace = Arc::clone(&workspace);
         let settings = spec.settings.or(&defaults);
+        let subagents = subagents.clone();
         Box::pin(async move {
             backend.validate_model(spec.model.as_str())?;
-            let additive_tools = if let Some(cua) = cua {
+            let cua_tools: Vec<Arc<dyn nanocode_tools::Tool>> = if let Some(cua) = cua {
                 let cua = cua
                     .get_or_try_init(|| async {
                         crate::ComputerTools::connect(crate::ComputerConfig::installed()?).await
@@ -513,8 +538,19 @@ fn registered_recipe(
             } else {
                 Vec::new()
             };
+            let mut tools = nanocode_agent::RuntimeTools::default().shared(cua_tools);
+            if let Some(registry) = subagents {
+                tools = tools.per_agent(Arc::new(move |handle| {
+                    let Ok(SharedTools(tools)) = nanocode_subagents::install_tools(
+                        SharedTools(Vec::new()),
+                        handle.clone(),
+                        Arc::clone(&registry),
+                    );
+                    tools
+                }));
+            }
             let request = crate::BackendRequest {
-                additive_tools,
+                tools,
                 model: crate::ModelSelection::new(backend.id(), spec.model.as_str()),
                 thinking: Some(spec.thinking),
                 options: spec.options,
@@ -583,14 +619,15 @@ fn persistent_recipe(
                 } else {
                     let id = uuid::Uuid::now_v7().to_string();
                     let lineage = if let Some(parent) = &spec.parent {
-                        let parent_record = store
-                            .load(parent.session_id())
-                            .await
-                            .map_err(catalog_error)?
-                            .summary
-                            .record;
+                        let parent_lineage = match store.load(parent.session_id()).await {
+                            Ok(stored) => stored.summary.record.lineage,
+                            Err(crate::durability::Error::SessionNotFound { .. }) => {
+                                crate::Lineage::root(parent.session_id())
+                            }
+                            Err(error) => return Err(catalog_error(error)),
+                        };
                         crate::Lineage::child_of(
-                            &parent_record.lineage,
+                            &parent_lineage,
                             parent.session_id(),
                             crate::Origin::Subagent,
                         )

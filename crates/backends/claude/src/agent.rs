@@ -6316,34 +6316,26 @@ impl ClaudeBuilder {
             builder = builder.system(instructions);
         }
         #[allow(unused_mut)]
-        let mut additive = request.additive_tools;
+        let mut runtime = request.tools;
         #[cfg(not(target_family = "wasm"))]
         if builder.tools_factory.is_none() {
             let workspace = request.workspace;
-            let defaults_additive = std::mem::take(&mut additive);
+            let defaults = std::mem::take(&mut runtime);
             builder = builder
                 .tools_factory(move |handle| {
-                    crate::install_default_tools(
-                        workspace.clone(),
-                        &handle,
-                        None,
-                        defaults_additive.clone(),
-                    )
+                    let additive = defaults.for_agent(&handle);
+                    crate::install_default_tools(workspace.clone(), &handle, None, additive)
                 })
                 .code_only(true);
         }
-        if !additive.is_empty() {
+        if !runtime.is_empty() {
             let configured = builder.tools_factory.clone();
             builder = builder.tools_factory(move |handle| {
-                use nanocode_tools::ToolCollection as _;
-                let mut tools = match &configured {
-                    Some(factory) => factory(handle)?,
+                let tools = match &configured {
+                    Some(factory) => factory(handle.clone())?,
                     None => ClaudeTools::new(),
                 };
-                for tool in &additive {
-                    tools = tools.add_shared_tool(tool.clone())?;
-                }
-                Ok(tools)
+                runtime.install(tools, &handle)
             });
         }
         if let Some(checkpoint) = request.checkpoint {

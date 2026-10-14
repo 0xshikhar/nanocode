@@ -1,6 +1,7 @@
 mod agent;
 mod error;
 mod harness;
+mod runtime_tools;
 pub mod session;
 pub mod usage;
 pub use agent::{
@@ -40,6 +41,7 @@ pub mod input {
 }
 
 pub use nanocode_types::BackendId;
+pub use runtime_tools::{AgentToolsFactory, RuntimeTools};
 
 pub trait BackendKind {
     type Model: Clone + Send + Sync + 'static;
@@ -66,6 +68,23 @@ pub trait BackendRegistration: Send + Sync {
     ) -> backend::BackendFuture<Result<(Nanocodex, AgentEvents)>>;
 }
 
+impl BackendRequest {
+    #[must_use]
+    pub fn agent_handle(&self, session_id: impl Into<std::sync::Arc<str>>) -> AgentHandle {
+        self.agent_handle_with(session_id, std::sync::Arc::new(backend::CrossHarnessOnly))
+    }
+
+    #[must_use]
+    pub fn agent_handle_with(
+        &self,
+        session_id: impl Into<std::sync::Arc<str>>,
+        native: std::sync::Arc<dyn backend::AgentFactory>,
+    ) -> AgentHandle {
+        AgentHandle::new(session_id, self.model.clone(), native)
+            .with_spawn_factory(std::sync::Arc::clone(&self.spawn_factory))
+    }
+}
+
 pub struct BackendRequest {
     pub model: ModelSelection,
 
@@ -81,7 +100,7 @@ pub struct BackendRequest {
 
     pub host_context: Option<std::sync::Arc<str>>,
 
-    pub additive_tools: Vec<std::sync::Arc<dyn nanocode_tools::Tool>>,
+    pub tools: RuntimeTools,
 
     pub checkpoint: Option<SessionCheckpoint>,
 }

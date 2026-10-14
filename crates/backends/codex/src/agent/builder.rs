@@ -192,21 +192,17 @@ impl<F> NanocodexBuilder<F> {
         self
     }
 
-    pub(crate) fn additive_tools(mut self, additive: Vec<Arc<dyn nanocode_tools::Tool>>) -> Self {
-        if additive.is_empty() {
+    pub(crate) fn runtime_tools(mut self, runtime: nanocode_agent::RuntimeTools) -> Self {
+        if runtime.is_empty() {
             return self;
         }
         let configured = self.tools.clone();
         self.tools = ToolsConfiguration::PerAgent(Arc::new(move |handle| {
-            use nanocode_tools::ToolCollection as _;
-            let mut tools = match &configured {
+            let tools = match &configured {
                 ToolsConfiguration::Shared(tools) => tools.clone(),
-                ToolsConfiguration::PerAgent(factory) => factory(handle)?,
+                ToolsConfiguration::PerAgent(factory) => factory(handle.clone())?,
             };
-            for tool in &additive {
-                tools = tools.add_shared_tool(tool.clone())?;
-            }
-            Ok(tools)
+            runtime.install(tools, &handle)
         }));
         self
     }
