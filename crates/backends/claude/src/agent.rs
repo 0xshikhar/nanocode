@@ -4046,7 +4046,7 @@ impl State {
                 || delay > Duration::from_secs(60)
             {
                 return Err(ResponseFailure {
-                    error: provider_error(error),
+                    error: NanocodexError::Response(nanocode_agent::BackendError(Box::new(error))),
                     recovery: if uncertain || upgrade.is_some() {
                         recovery
                     } else {

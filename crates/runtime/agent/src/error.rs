@@ -233,6 +233,10 @@ pub trait BackendFailure: std::error::Error + Send + Sync + 'static {
         false
     }
 
+    fn retryable(&self) -> bool {
+        false
+    }
+
     fn as_any(&self) -> &dyn std::any::Any;
 }
 

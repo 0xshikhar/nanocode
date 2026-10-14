@@ -8,6 +8,10 @@ impl nanocode_agent::BackendFailure for ResponseError {
             Some(ResponsesError::InvalidImageRequest { .. })
         )
     }
+    fn retryable(&self) -> bool {
+        self.responses_error()
+            .is_some_and(|source| source.retry_advice().is_some())
+    }
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }

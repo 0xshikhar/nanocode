@@ -67,6 +67,16 @@ impl ClaudeError {
     }
 }
 
+impl nanocode_agent::BackendFailure for ClaudeError {
+    fn retryable(&self) -> bool {
+        self.is_transient()
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
 fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
     let value = headers
         .get(reqwest::header::RETRY_AFTER)?

@@ -41,7 +41,6 @@ use nanocode::{
     ServiceTier, SessionCheckpoint, SessionInfo,
 };
 use nanocode_backend_codex::{
-    ErrorExt,
     backend::{AgentFactory, BackendFuture},
     client::session::SessionId,
 };
@@ -3477,13 +3476,7 @@ fn turn_failure(error: &NanocodexError) -> TurnFailure {
             .downcast_ref::<nanocode::durability::Error>()
             .filter(|error| matches!(error, nanocode::durability::Error::OperationConflict { .. }))
             .map_or(execution_policy_failure_code(*disposition), |_| "conflict"),
-        NanocodexError::Response(_)
-            if error
-                .responses_error()
-                .is_some_and(|source| source.retry_advice().is_some()) =>
-        {
-            "retryable"
-        }
+        NanocodexError::Response(source) if source.retryable() => "retryable",
         NanocodexError::Shutdown(source) => return turn_failure(source),
         NanocodexError::UnsupportedCapability { .. } => "unsupported_capability",
         NanocodexError::CheckpointFamilyMismatch { .. } => "checkpoint_family_mismatch",
