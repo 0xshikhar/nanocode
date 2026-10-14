@@ -44,8 +44,11 @@ pub fn main() -> ExitCode {
     let outcome = runtime.block_on(async move {
         match cli.command {
             Some(Command::Runner(args)) => runner(args).await,
-            Some(Command::Sessions(args)) => list_sessions(args).await,
-            Some(Command::Exec(args)) => exec(args).await,
+            Some(Command::Sessions(mut args)) => {
+                args.home = args.home.or(cli.session.home);
+                list_sessions(args).await
+            }
+            Some(Command::Exec(args)) => exec(args.or(cli.session)).await,
             Some(Command::Models) => {
                 print_models();
                 Ok(())

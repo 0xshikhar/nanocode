@@ -123,6 +123,36 @@ pub struct SessionArgs {
     pub remote: RemoteArgs,
 }
 
+impl SessionArgs {
+    pub fn or(self, root: SessionArgs) -> SessionArgs {
+        SessionArgs {
+            prompt: self.prompt.or(root.prompt),
+            model: self.model.or(root.model),
+            harness: self.harness.or(root.harness),
+            thinking: self.thinking.or(root.thinking),
+            tier: self.tier.or(root.tier),
+            workspace: self.workspace.or(root.workspace),
+            resume: self.resume.or(root.resume),
+            continue_last: self.continue_last || root.continue_last,
+            ephemeral: self.ephemeral || root.ephemeral,
+            home: self.home.or(root.home),
+            no_mouse: self.no_mouse || root.no_mouse,
+            no_subagents: self.no_subagents || root.no_subagents,
+            remote: RemoteArgs {
+                runner_connect: self.remote.runner_connect.or(root.remote.runner_connect),
+                runner_host: self.remote.runner_host.or(root.remote.runner_host),
+                runner_token: self.remote.runner_token.or(root.remote.runner_token),
+                runner_workspace: self.remote.runner_workspace.or(root.remote.runner_workspace),
+                runner_call_timeout_ms: self
+                    .remote
+                    .runner_call_timeout_ms
+                    .or(root.remote.runner_call_timeout_ms),
+                ..self.remote
+            },
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Args)]
 pub struct RemoteArgs {
     #[arg(
