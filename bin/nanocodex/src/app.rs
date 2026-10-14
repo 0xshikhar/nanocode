@@ -1139,7 +1139,7 @@ impl App {
                 }
                 _ => false,
             },
-            Event::Resize(..) | Event::FocusGained => true,
+            Event::Resize(..) => true,
             _ => false,
         }
     }
@@ -1449,6 +1449,11 @@ impl App {
             .split_once(' ')
             .map_or((command, ""), |(name, rest)| (name, rest.trim()));
         match name {
+            "model" | "m" if self.session_started => {
+                self.flash(
+                    "the model is fixed for this thread; use /new before choosing another model",
+                );
+            }
             "model" | "m" if argument.is_empty() => {
                 self.overlay = Some(Overlay::Picker(
                     PickerPurpose::Model,

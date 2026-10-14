@@ -15,8 +15,8 @@ use super::{
 use futures_util::future::join_all;
 use jsonschema::Validator;
 use nanocode_agent::{
-    AgentEvents, AgentHandle, Nanocodex, NanocodexError, Result as AgentResult, SessionCheckpoint,
-    TurnResult, events::AgentEventKind,
+    AgentEvents, AgentHandle, ModelSelection, Nanocodex, NanocodexError, Result as AgentResult,
+    SessionCheckpoint, Thinking, TurnResult, events::AgentEventKind,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -30,6 +30,8 @@ use std::{
 };
 use tokio::sync::{mpsc, oneshot, watch};
 use web_time::Instant;
+
+mod focus;
 
 pub(super) struct ChildSession {
     pub(super) descriptor: AgentDescriptor,
@@ -148,6 +150,8 @@ pub struct Registry {
     completion_dispatch: std::sync::Mutex<HashMap<(String, AgentId), Arc<tokio::sync::Mutex<()>>>>,
 
     parent_resolver: std::sync::RwLock<Option<ParentResolver>>,
+
+    pub(super) spawn_policy: std::sync::RwLock<crate::SpawnPolicy>,
 }
 
 pub type ParentResolver = Arc<dyn Fn(&str) -> Option<Nanocodex> + Send + Sync>;
@@ -249,6 +253,7 @@ impl AgentScope {
         let payload = serde_json::to_string(&durable::PersistedScope {
             version: durable::JOURNAL_VERSION,
             agents,
+            messages: self.messages.persist(&mut records)?,
         })
         .map_err(std::io::Error::other)?;
         Ok(JournalWrite { payload, records })
@@ -338,6 +343,10 @@ pub struct AgentSummary {
     pub parent_agent_id: Option<AgentId>,
     pub status: AgentStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<ModelSelection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<Thinking>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub last_output: Option<Value>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -353,6 +362,10 @@ pub struct AgentDirectoryEntry {
     pub status: AgentStatus,
     pub can_message: bool,
     pub can_manage: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<ModelSelection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<Thinking>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completion_revision: Option<u64>,
@@ -734,6 +747,8 @@ impl RegistryState {
                     status: session.status.clone(),
                     can_message,
                     can_manage,
+                    model: session.descriptor.model.clone(),
+                    thinking: session.descriptor.thinking,
                     completion_revision: session.completion_revision(),
                     resuming: false,
                 })
@@ -749,18 +764,23 @@ impl RegistryState {
         purpose: MessagePurpose,
         in_reply_to: Option<MessageId>,
         body: String,
+        user: bool,
     ) -> std::io::Result<PreparedMessage> {
         let root_session_id = self.root_session_id(session_id).to_owned();
         let scope = self
             .scopes
             .get_mut(&root_session_id)
             .ok_or_else(|| std::io::Error::other(format!("unknown agent_id {to}")))?;
-        let from = scope
-            .topology
-            .agent_for_session(session_id)
-            .map_or(MessageSender::Root, |agent_id| MessageSender::Agent {
-                agent_id,
-            });
+        let from = if user {
+            MessageSender::User
+        } else {
+            scope
+                .topology
+                .agent_for_session(session_id)
+                .map_or(MessageSender::Root, |agent_id| MessageSender::Agent {
+                    agent_id,
+                })
+        };
         if from.agent_id() == Some(to) {
             return Err(std::io::Error::other("agents cannot message themselves"));
         }
@@ -1194,6 +1214,7 @@ impl Registry {
             completion_retries: std::sync::Mutex::new(HashMap::new()),
             completion_dispatch: std::sync::Mutex::new(HashMap::new()),
             parent_resolver: std::sync::RwLock::new(None),
+            spawn_policy: std::sync::RwLock::new(crate::SpawnPolicy::default()),
         }
     }
 
@@ -1869,6 +1890,10 @@ impl Registry {
                 journal.version
             )));
         }
+        let messages = journal
+            .messages
+            .hydrate(store.as_ref(), root_session_id)
+            .await?;
         let mut agents = journal.agents;
         agents.sort_by_key(|agent| agent.descriptor.id);
 
@@ -1929,6 +1954,11 @@ impl Registry {
                 report.unrecoverable.push(id);
             }
         }
+        state
+            .scopes
+            .entry(root_session_id.to_owned())
+            .or_default()
+            .messages = messages;
         drop(state);
 
         if !report.interrupted.is_empty() || !report.completed.is_empty() {
@@ -2121,6 +2151,18 @@ impl Registry {
             .get(root_session_id)
             .and_then(|scope| scope.sessions.get(&id))
             .and_then(|session| session.host_context.as_ref().map(Arc::clone))
+    }
+
+    pub(super) async fn descriptor_for_session(&self, session_id: &str) -> Option<AgentDescriptor> {
+        let state = self.state.lock().await;
+        let root_session_id = state.root_by_session.get(session_id)?;
+        state
+            .scopes
+            .get(root_session_id)?
+            .sessions
+            .values()
+            .find(|session| session.descriptor.session_id == session_id)
+            .map(|session| session.descriptor.clone())
     }
 
     #[doc(hidden)]
@@ -3183,6 +3225,21 @@ impl Registry {
         in_reply_to: Option<MessageId>,
         body: String,
     ) -> std::io::Result<MessageReceipt> {
+        self.deliver_message(session_id, to, priority, purpose, in_reply_to, body, false)
+            .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn deliver_message(
+        self: &Arc<Self>,
+        session_id: &str,
+        to: AgentId,
+        priority: MessagePriority,
+        purpose: MessagePurpose,
+        in_reply_to: Option<MessageId>,
+        body: String,
+        user: bool,
+    ) -> std::io::Result<MessageReceipt> {
         let _residency_guard = self.residency_lock.lock().await;
         let _message_guard = self.message_lock.lock().await;
         self.rehydrate(session_id, to, purpose).await?;
@@ -3193,6 +3250,7 @@ impl Registry {
             purpose,
             in_reply_to,
             body,
+            user,
         )?;
         let delivery = prepared
             .harness
@@ -3201,6 +3259,15 @@ impl Registry {
             .lock()
             .await
             .commit_message(&prepared.root_session_id, prepared.message.clone())?;
+        if self.store_for(&prepared.root_session_id).is_some()
+            && let Err(error) = self.persist_durably(&prepared.root_session_id).await
+        {
+            self.state
+                .lock()
+                .await
+                .rollback_message(&prepared.root_session_id, prepared.message.id);
+            return Err(error);
+        }
         let disposition = match delivery.release().await {
             Ok(disposition) => disposition,
             Err(error) => {
@@ -3211,6 +3278,9 @@ impl Registry {
                 return Err(error);
             }
         };
+        if self.store_for(&prepared.root_session_id).is_some() {
+            self.persist_durably(&prepared.root_session_id).await?;
+        }
         Ok(MessageReceipt {
             message_id: prepared.message.id,
             thread_id: prepared.message.thread_id,
@@ -3890,6 +3960,8 @@ impl ChildSession {
             task: self.descriptor.task.clone(),
             parent_agent_id: self.descriptor.parent,
             status: self.status.clone(),
+            model: self.descriptor.model.clone(),
+            thinking: self.descriptor.thinking,
             last_output,
             completion_revision: self.completion_revision(),
         }
@@ -3904,7 +3976,7 @@ impl ChildSession {
 
 #[derive(Clone)]
 pub struct SubagentControl {
-    registry: Arc<Registry>,
+    pub(super) registry: Arc<Registry>,
 }
 
 impl SubagentControl {

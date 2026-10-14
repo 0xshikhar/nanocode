@@ -108,6 +108,7 @@ impl DurableAgentExt for ClaudeBuilder {
             Arc::new(ClaudeExecution {
                 state_id,
                 owner,
+                session: state,
                 branches,
             }),
             checkpoint,
@@ -118,6 +119,7 @@ impl DurableAgentExt for ClaudeBuilder {
 struct ClaudeExecution {
     state_id: String,
     owner: DurableOwner,
+    session: DurableSession,
     branches: Branches,
 }
 
@@ -174,6 +176,7 @@ impl LazyClaudeExecution {
                 Ok(ClaudeExecution {
                     state_id: record.session_id.clone(),
                     owner,
+                    session: state,
                     branches: Branches {
                         store: self.store.clone(),
                         record: Some(record),
@@ -225,7 +228,10 @@ impl ClaudeExecutionPolicy for LazyClaudeExecution {
         input_json: String,
     ) -> PolicyFuture<'_, bool> {
         Box::pin(async move {
-            self.get().await?.identified_steer_accepted(message_id, input_json).await
+            self.get()
+                .await?
+                .identified_steer_accepted(message_id, input_json)
+                .await
         })
     }
 
@@ -310,6 +316,10 @@ impl ClaudeExecutionPolicy for LazyClaudeExecution {
 
     fn checkpoint(&self, state: Value) -> PolicyFuture<'_, ()> {
         Box::pin(async move { self.get().await?.checkpoint(state).await })
+    }
+
+    fn developer_notices(&self, id: String) -> PolicyFuture<'_, Vec<(String, String)>> {
+        Box::pin(async move { self.get().await?.developer_notices(id).await })
     }
 
     fn initial_checkpoint(
@@ -414,8 +424,13 @@ impl ClaudeExecutionPolicy for ClaudeExecution {
     ) -> PolicyFuture<'_, bool> {
         Box::pin(async move {
             let input: Box<serde_json::value::RawValue> = serde_json::from_str(&input_json)
-                .map_err(|error| nanocode_agent::NanocodexError::InvalidRequest(error.to_string()))?;
-            self.owner.identified_steer_accepted(message_id, &input).await.map_err(agent_error)
+                .map_err(|error| {
+                    nanocode_agent::NanocodexError::InvalidRequest(error.to_string())
+                })?;
+            self.owner
+                .identified_steer_accepted(message_id, &input)
+                .await
+                .map_err(agent_error)
         })
     }
 
@@ -600,6 +615,38 @@ impl ClaudeExecutionPolicy for ClaudeExecution {
 
     fn shutdown(&self) -> PolicyFuture<'_, ()> {
         Box::pin(async move { self.owner.shutdown().await.map_err(agent_error) })
+    }
+
+    fn developer_notices(&self, id: String) -> PolicyFuture<'_, Vec<(String, String)>> {
+        Box::pin(async move {
+            let state = self.session.state().await.map_err(agent_error)?;
+            let operation = state.operation(&id).ok_or_else(|| {
+                nanocode_agent::NanocodexError::InvalidCheckpoint(
+                    "Claude notice operation is missing".into(),
+                )
+            })?;
+            let mut notices = Vec::new();
+            for (step_id, step) in &operation.steps {
+                if step.kind != "developer_notice" {
+                    continue;
+                }
+                let notice = self
+                    .owner
+                    .load_payload(step.input.clone())
+                    .await
+                    .map_err(agent_error)?
+                    .decode()
+                    .map_err(agent_error)?;
+                if matches!(step.status, nanocode_durability::StepStatus::EffectPending) {
+                    self.owner
+                        .complete_step(id.clone(), step_id.clone(), &Value::Null)
+                        .await
+                        .map_err(agent_error)?;
+                }
+                notices.push(notice);
+            }
+            Ok(notices)
+        })
     }
 
     fn checkpoint(&self, state: Value) -> PolicyFuture<'_, ()> {

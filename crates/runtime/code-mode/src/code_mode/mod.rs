@@ -53,12 +53,14 @@ pub(crate) struct CodeModeRuntime {
     host: Arc<Mutex<SharedJsHost>>,
     current_turn: Arc<AtomicU64>,
     preempt: watch::Sender<(u64, u64)>,
+    preempt_consumed: Arc<AtomicU64>,
 }
 
 #[derive(Clone)]
 pub(crate) struct CodeModeControl {
     current_turn: Arc<AtomicU64>,
     preempt: watch::Sender<(u64, u64)>,
+    preempt_consumed: Arc<AtomicU64>,
     admission: Arc<Mutex<()>>,
     admission_epoch: Arc<AtomicU64>,
 
@@ -296,6 +298,7 @@ impl CodeModeRuntime {
             host: Arc::new(Mutex::new(SharedJsHost::prewarmed())),
             current_turn,
             preempt: watch::channel((0, 0)).0,
+            preempt_consumed: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -303,6 +306,7 @@ impl CodeModeRuntime {
         CodeModeControl {
             current_turn: Arc::clone(&self.current_turn),
             preempt: self.preempt.clone(),
+            preempt_consumed: Arc::clone(&self.preempt_consumed),
             admission: Arc::clone(&self.admission),
             admission_epoch: Arc::clone(&self.admission_epoch),
 
@@ -375,10 +379,12 @@ impl CodeModeRuntime {
         started_at: Instant,
         observer: &mut dyn CodeModeObserver,
     ) -> CodeModeExecution {
-        let preempt = (
-            self.preempt.subscribe(),
-            self.current_turn.load(Ordering::Acquire),
-        );
+        let preempt = Preemption {
+            signal: self.preempt.subscribe(),
+            turn: self.current_turn.load(Ordering::Acquire),
+            seen: self.preempt_consumed.load(Ordering::Acquire),
+            consumed: Arc::clone(&self.preempt_consumed),
+        };
         let admission_epoch = self.admission_epoch.load(Ordering::Acquire);
         let source = match parse_exec_source(source) {
             Ok(source) => source,
@@ -456,10 +462,12 @@ impl CodeModeRuntime {
         input: &str,
         observer: &mut dyn CodeModeObserver,
     ) -> CodeModeExecution {
-        let preempt = (
-            self.preempt.subscribe(),
-            self.current_turn.load(Ordering::Acquire),
-        );
+        let preempt = Preemption {
+            signal: self.preempt.subscribe(),
+            turn: self.current_turn.load(Ordering::Acquire),
+            seen: self.preempt_consumed.load(Ordering::Acquire),
+            consumed: Arc::clone(&self.preempt_consumed),
+        };
         let started_at = Instant::now();
         let arguments = match serde_json::from_str::<WaitArguments>(input) {
             Ok(arguments) => arguments,
@@ -570,6 +578,11 @@ impl CodeModeControl {
         let turn = self.current_turn.load(Ordering::Acquire);
         self.preempt
             .send_modify(|generation| *generation = (turn, generation.1.wrapping_add(1)));
+    }
+
+    pub(super) fn settle_preempt(&self) {
+        self.preempt_consumed
+            .store(self.preempt.borrow().1, Ordering::Release);
     }
 
     pub(super) async fn detach_turn(
@@ -951,8 +964,26 @@ impl CellLifecycle {
     }
 }
 
+struct Preemption {
+    signal: watch::Receiver<(u64, u64)>,
+    turn: u64,
+    seen: u64,
+    consumed: Arc<AtomicU64>,
+}
+
+impl Preemption {
+    fn take(&self) -> bool {
+        let (turn, generation) = *self.signal.borrow();
+        if turn != self.turn || generation == self.seen {
+            return false;
+        }
+        self.consumed.store(generation, Ordering::Release);
+        true
+    }
+}
+
 enum ObservationMode {
-    YieldAfter(Duration, (watch::Receiver<(u64, u64)>, u64)),
+    YieldAfter(Duration, Preemption),
     Terminate,
 }
 
@@ -1015,11 +1046,7 @@ async fn observe_cell(
         let yield_deadline_elapsed = yield_timer
             .as_ref()
             .is_some_and(|yield_timer| yield_timer.deadline() <= tokio::time::Instant::now());
-        if preempt_remaining.is_none()
-            && preempt.as_ref().is_some_and(|(signal, turn)| {
-                signal.has_changed().unwrap_or(false) && signal.borrow().0 == *turn
-            })
-        {
+        if preempt_remaining.is_none() && preempt.as_ref().is_some_and(Preemption::take) {
             preempt_remaining = Some(observation.updates.len() + observation.replay.len());
         }
         let preempted = preempt_remaining.is_some();
@@ -1043,9 +1070,9 @@ async fn observe_cell(
             biased;
             () = async {
                 match preempt.as_mut() {
-                    Some((signal, turn)) => loop {
-                        if signal.changed().await.is_err() { std::future::pending::<()>().await; }
-                        if signal.borrow().0 == *turn { break; }
+                    Some(preemption) => loop {
+                        if preemption.signal.changed().await.is_err() { std::future::pending::<()>().await; }
+                        if preemption.take() { break; }
                     },
                     None => std::future::pending().await,
                 }

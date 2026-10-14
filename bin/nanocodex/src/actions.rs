@@ -22,6 +22,12 @@ impl App {
         thinking: Thinking,
         tier: ServiceTier,
     ) {
+        if self.session_started && model != self.model {
+            self.flash(
+                "the model is fixed for this thread; use /new before choosing another model",
+            );
+            return;
+        }
         if !matches!(self.turn, TurnState::Idle) || self.starting {
             self.pending_switch = Some((model, thinking, tier));
             self.flash("settings will apply when the current turn finishes");
@@ -31,6 +37,12 @@ impl App {
     }
 
     pub(crate) fn switch(&mut self, model: ModelSelection, thinking: Thinking, tier: ServiceTier) {
+        if self.session_started && model != self.model {
+            self.flash(
+                "the model is fixed for this thread; use /new before choosing another model",
+            );
+            return;
+        }
         let capabilities = model.capabilities(nanocode::ModelTransport::Native);
         if let Err(error) = capabilities
             .check_thinking(thinking)

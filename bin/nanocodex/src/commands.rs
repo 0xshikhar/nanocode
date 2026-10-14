@@ -1,5 +1,8 @@
 pub const COMMANDS: [(&str, &str); 22] = [
-    ("/model", "switch harness, model, thinking and speed"),
+    (
+        "/model",
+        "choose harness, model, thinking and speed for a new thread",
+    ),
     ("/thinking", "open the thinking dial"),
     ("/effort", "open the thinking dial"),
     (

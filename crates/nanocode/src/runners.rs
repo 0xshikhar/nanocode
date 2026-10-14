@@ -130,6 +130,8 @@ impl RunnerAgents {
     }
 
     pub(crate) async fn initialize(self: &Arc<Self>) -> Result<(), AttachmentError> {
+        tokio::runtime::Handle::try_current()
+            .map_err(|error| AttachmentError::Transport(error.to_string().into()))?;
         self.activate();
         self.initialized
             .get_or_init(|| async {
@@ -168,14 +170,8 @@ impl RunnerAgents {
             .filter(|runner| runner.status == RunnerStatus::Ready)
             .map(|runner| {
                 format!(
-                    "/{} (mode: {:?}, workspace: {}, tools: {})",
-                    runner.name,
-                    runner.mode,
-                    runner.workspace.as_ref().map_or_else(
-                        || "unspecified".to_owned(),
-                        |path| path.display().to_string()
-                    ),
-                    runner.tool_count,
+                    "/{} (mode: {:?}, tools: {})",
+                    runner.name, runner.mode, runner.tool_count,
                 )
             })
             .collect::<Vec<_>>();
@@ -191,7 +187,7 @@ impl RunnerAgents {
             RunnerEvent::StatusChanged { info } => match info.status {
                 RunnerStatus::Ready | RunnerStatus::Disconnected | RunnerStatus::Failed(_) => {
                     format!(
-                        "Runner {} status: {:?}. {}",
+                        "Runner /{} status: {:?}. {}",
                         info.name,
                         info.status,
                         self.summary()
@@ -200,7 +196,7 @@ impl RunnerAgents {
                 RunnerStatus::Connecting => return,
             },
             RunnerEvent::Failed { name, error } => {
-                format!("Runner {name} failed: {error}. {}", self.summary())
+                format!("Runner /{name} failed: {error}. {}", self.summary())
             }
         };
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
@@ -215,12 +211,23 @@ impl RunnerAgents {
         });
     }
 
+    pub(crate) fn unregister(&self, session_id: &str) {
+        self.state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .agents
+            .retain(|(id, _, _)| id != session_id);
+    }
+
     pub(crate) async fn register(
         self: &Arc<Self>,
         agent: &crate::Agent,
         await_initial: bool,
     ) -> nanocode_agent::Result<()> {
         self.activate();
+        if !agent.capabilities().developer_messages {
+            return Ok(());
+        }
         let weak = agent.downgrade();
         let worker = weak.clone();
         let (notices, mut receiver) = mpsc::unbounded_channel::<Notice>();

@@ -203,6 +203,7 @@ pub struct ClaudeTools {
     adapter_shutdown: Vec<ToolCleanup>,
     pub(crate) code_turn_cleanup: Vec<CodeTurnCleanup>,
     pub(crate) code_turn_preempt: Vec<ToolCleanup>,
+    pub(crate) code_turn_settle: Vec<ToolCleanup>,
     pub(crate) nested_tools: Option<NestedToolLookup>,
     #[cfg(not(target_family = "wasm"))]
     pub(crate) shared_catalog: Option<(nanocode_code_mode::Tools, std::path::PathBuf, AgentHandle)>,
@@ -221,6 +222,7 @@ impl nanocode_tools::ToolCollection for ClaudeTools {
             self.adapter_cleanup.extend(replacement.adapter_cleanup);
             self.code_turn_cleanup = replacement.code_turn_cleanup;
             self.code_turn_preempt = replacement.code_turn_preempt;
+            self.code_turn_settle = replacement.code_turn_settle;
             self.nested_tools = replacement.nested_tools;
             self.shared_catalog = replacement.shared_catalog;
             return Ok(self);
@@ -258,6 +260,16 @@ impl ClaudeTools {
     {
         self.code_turn_preempt
             .push(Arc::new(move || Box::pin(preempt())));
+        self
+    }
+
+    pub fn code_turn_settle<F, Fut>(mut self, settle: F) -> Self
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: crate::ToolFuture<Output = ()> + 'static,
+    {
+        self.code_turn_settle
+            .push(Arc::new(move || Box::pin(settle())));
         self
     }
 
@@ -1157,6 +1169,7 @@ impl ClaudeBuilder {
         let mut adapter_shutdown = Vec::new();
         let mut code_turn_cleanup = Vec::new();
         let mut code_turn_preempt = Vec::new();
+        let mut code_turn_settle = Vec::new();
         let mut nested_tools = None;
         if let Some(factory) = &self.tools_factory {
             let native = factory(handle.clone())?;
@@ -1169,6 +1182,7 @@ impl ClaudeBuilder {
             adapter_shutdown.extend(native.adapter_shutdown);
             code_turn_cleanup.extend(native.code_turn_cleanup);
             code_turn_preempt.extend(native.code_turn_preempt);
+            code_turn_settle.extend(native.code_turn_settle);
         }
 
         if self.claude.model.trim().is_empty()
@@ -1353,6 +1367,7 @@ impl ClaudeBuilder {
                 adapter_shutdown: Vec::new(),
                 code_turn_cleanup: Vec::new(),
                 code_turn_preempt: Vec::new(),
+                code_turn_settle: Vec::new(),
                 nested_tools: nested_tools.clone(),
                 #[cfg(not(target_family = "wasm"))]
                 shared_catalog: None,
@@ -1373,6 +1388,7 @@ impl ClaudeBuilder {
             adapter_shutdown.extend(adapted.adapter_shutdown);
             code_turn_cleanup.extend(adapted.code_turn_cleanup);
             code_turn_preempt.extend(adapted.code_turn_preempt);
+            code_turn_settle.extend(adapted.code_turn_settle);
             self.client_tool_search = false;
         }
         let mut names = handlers.keys().map(String::as_str).collect::<HashSet<_>>();
@@ -1441,7 +1457,7 @@ impl ClaudeBuilder {
             subagent_type_resolver: self.subagent_type_resolver,
             lifecycle_opened: Mutex::new(None),
             client: self.claude.client.bind_subscription_session(&session_id),
-            model: std::sync::RwLock::new(self.claude.model),
+            model: self.claude.model,
             max_tokens: self.max_tokens,
             effort: std::sync::RwLock::new(self.effort),
             automatic_cache: self.automatic_cache,
@@ -1471,6 +1487,7 @@ impl ClaudeBuilder {
             adapter_shutdown,
             code_turn_cleanup,
             code_turn_preempt,
+            code_turn_settle,
             nested_tools,
             dynamic_tools: self.dynamic_tools,
             tool_hooks: self.tool_hooks,
@@ -2632,6 +2649,7 @@ struct State {
     adapter_shutdown: Vec<ToolCleanup>,
     code_turn_cleanup: Vec<CodeTurnCleanup>,
     code_turn_preempt: Vec<ToolCleanup>,
+    code_turn_settle: Vec<ToolCleanup>,
     lifecycle_opened: Mutex<Option<String>>,
     subagent_type: Option<String>,
     subagent_type_resolver: Option<SubagentTypeResolver>,
@@ -2641,7 +2659,7 @@ struct State {
 
     conversation_id: String,
     client: ClaudeClient,
-    model: std::sync::RwLock<String>,
+    model: String,
     max_tokens: Option<u32>,
     effort: std::sync::RwLock<Option<crate::Effort>>,
     automatic_cache: bool,
@@ -3191,7 +3209,6 @@ const CLAUDE_CAPABILITIES: Capabilities = {
     capabilities.identified_steering = true;
     capabilities.developer_messages = true;
     capabilities.compaction = true;
-    capabilities.model = Mutability::BetweenTurns;
     capabilities.thinking = Mutability::Anytime;
     capabilities.service_tier = Mutability::Anytime;
     capabilities
@@ -3616,10 +3633,7 @@ impl State {
         }
     }
     fn model(&self) -> String {
-        self.model
-            .read()
-            .expect("Claude model lock poisoned")
-            .clone()
+        self.model.clone()
     }
     fn effort(&self) -> Option<crate::Effort> {
         *self.effort.read().expect("Claude effort lock poisoned")
@@ -3828,7 +3842,8 @@ impl State {
             Step::Interrupted => {
                 return Err(durable::recovery_error(
                     "model step was admitted with an interrupted tool outcome",
-                ).into());
+                )
+                .into());
             }
             Step::Replay(value) if value.get("code_only_tools").is_some() => Some(
                 serde_json::from_value::<durable::CodeOnlyUpgrade>(value)
@@ -4569,6 +4584,12 @@ impl State {
         Ok(())
     }
 
+    async fn settle_code_preempt(&self) {
+        for settle in &self.code_turn_settle {
+            settle().await;
+        }
+    }
+
     async fn consume_steering(
         &self,
         request: &BackendPrompt,
@@ -4582,15 +4603,10 @@ impl State {
         };
         let boundary = cursor.index.saturating_add(cursor.model_step_offset);
         let mut consumed = false;
-        while turn
-            .pending
-            .front()
-            .is_some_and(|steer| {
-                steer.after < boundary
-                    && (!replaying_boundary
-                        || steer.boundary.is_some_and(|bound| bound <= boundary))
-            })
-        {
+        while turn.pending.front().is_some_and(|steer| {
+            steer.after < boundary
+                && (!replaying_boundary || steer.boundary.is_some_and(|bound| bound <= boundary))
+        }) {
             let steer = turn.pending.front().expect("pending steer");
             let messages = prompt_messages(&steer.prompt)?;
             if steer.durable
@@ -4618,6 +4634,9 @@ impl State {
             }
             self.emit(&request.events, AgentEventKind::RunSteered, data);
             consumed = true;
+        }
+        if consumed {
+            self.settle_code_preempt().await;
         }
         Ok(consumed)
     }
@@ -5799,8 +5818,12 @@ impl Driver {
 
 impl LifecycleBackend for Driver {
     fn decode_durable_prompt(&self, input: Value) -> Result<Prompt> {
-        serde_json::from_value(input.get("prompt").cloned().ok_or_else(|| NanocodexError::InvalidCheckpoint("durable Claude prompt envelope is missing its prompt".into()))?)
-            .map_err(|error| NanocodexError::InvalidCheckpoint(error.to_string()))
+        serde_json::from_value(input.get("prompt").cloned().ok_or_else(|| {
+            NanocodexError::InvalidCheckpoint(
+                "durable Claude prompt envelope is missing its prompt".into(),
+            )
+        })?)
+        .map_err(|error| NanocodexError::InvalidCheckpoint(error.to_string()))
     }
 
     fn harness_family(&self) -> HarnessFamily {
@@ -5867,32 +5890,10 @@ impl LifecycleBackend for Driver {
                 return Err(unsupported("model belongs to another harness family"));
             }
 
-            let Ok(conversation) = state.conversation.try_lock() else {
-                return Err(unsupported("the model can only be changed between turns"));
-            };
-            *state
-                .model
-                .write()
-                .map_err(|_| unsupported("Claude model lock poisoned"))? = model.as_str().into();
-            if !model.supports_thinking(state.thinking()) {
-                let thinking = model.default_thinking();
-                *state
-                    .effort
-                    .write()
-                    .map_err(|_| unsupported("Claude effort lock poisoned"))? =
-                    thinking_effort(thinking);
-                state
-                    .adaptive_thinking
-                    .store(thinking != Thinking::None, Ordering::SeqCst);
-            }
-            if let Some(policy) = state.policy.clone()
-                && (!conversation.messages.is_empty() || !conversation.summary.is_empty())
-            {
-                let snapshot = state.snapshot(&conversation).await?;
-                policy
-                    .checkpoint(serde_json::to_value(&snapshot).map_err(provider_error)?)
-                    .await?;
-                state.publish_boundary(snapshot);
+            if model.as_str() != state.model {
+                return Err(unsupported(
+                    "the model is fixed for this thread; start a new thread to use another model",
+                ));
             }
             Ok(())
         })
@@ -6330,7 +6331,7 @@ impl LifecycleBackend for Driver {
                 let mut snapshot = state.latest_boundary().await?;
                 snapshot
                     .developer_notices
-                    .push((uuid::Uuid::new_v4().to_string(), text.clone()));
+                    .push((uuid::Uuid::now_v7().to_string(), text.clone()));
                 if let Some(policy) = &state.policy {
                     let operation = state
                         .steering
@@ -6343,16 +6344,21 @@ impl LifecycleBackend for Driver {
                         .min_by_key(|(key, _)| *key)
                         .map(|(_, id)| id);
                     if let Some(operation) = operation {
-                        let Some(mut continuation) = policy.continuation(operation.clone()).await?
-                        else {
-                            drop(update);
-                            drop(admission);
-                            notified.await;
-                            continue;
-                        };
-                        continuation["snapshot"]["developer_notices"] =
-                            json!(snapshot.developer_notices);
-                        policy.advance(operation, continuation).await?;
+                        let notice = snapshot
+                            .developer_notices
+                            .last()
+                            .cloned()
+                            .ok_or_else(|| unsupported("Claude developer notice is missing"))?;
+                        let step = format!("developer-notice-{}", notice.0);
+                        policy
+                            .begin_step(
+                                operation.clone(),
+                                step.clone(),
+                                "developer_notice".into(),
+                                json!(notice),
+                            )
+                            .await?;
+                        policy.complete_step(operation, step, Value::Null).await?;
                     } else {
                         if let Err(error) = policy
                             .checkpoint(serde_json::to_value(&snapshot).map_err(provider_error)?)

@@ -338,6 +338,10 @@ fn group_direct_code_mode_definitions(
 }
 
 impl ToolRuntimeControl {
+    pub fn settle_preempt(&self) {
+        self.code_mode.settle_preempt();
+    }
+
     pub async fn preempt_turn(&self) {
         self.code_mode.preempt_turn();
     }

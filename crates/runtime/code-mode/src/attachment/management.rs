@@ -122,5 +122,5 @@ impl Tool for RunnerManagement {
 }
 
 fn info(info: super::RunnerInfo) -> Value {
-    json!({"name":info.name,"mount":format!("/{}",info.name),"url":info.endpoint,"mode":match info.mode {super::RemoteMode::Alongside=>"alongside",super::RemoteMode::Replace=>"replace"},"status":match info.status {super::RunnerStatus::Connecting=>"connecting".to_owned(),super::RunnerStatus::Ready=>"ready".to_owned(),super::RunnerStatus::Disconnected=>"disconnected".to_owned(),super::RunnerStatus::Failed(error)=>format!("failed: {error}")},"workspace":info.workspace,"tool_count":info.tool_count})
+    json!({"name":info.name,"mount":format!("/{}",info.name),"url":info.endpoint,"mode":match info.mode {super::RemoteMode::Alongside=>"alongside",super::RemoteMode::Replace=>"replace"},"status":match info.status {super::RunnerStatus::Connecting=>"connecting".to_owned(),super::RunnerStatus::Ready=>"ready".to_owned(),super::RunnerStatus::Disconnected=>"disconnected".to_owned(),super::RunnerStatus::Failed(error)=>format!("failed: {error}")},"tool_count":info.tool_count})
 }

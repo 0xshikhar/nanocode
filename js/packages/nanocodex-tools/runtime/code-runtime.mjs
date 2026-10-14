@@ -825,11 +825,17 @@ export function createCodeRuntime(toolConfiguration = {}, extras = {}) {
     }
   }
 
+  const pendingPreempts = new Map();
+
   function observeOperation(sessionId, callId, operation) {
     const key = codeObservationKey(sessionId, callId);
     const observation = createCodeObservation(sessionId, turns.get(sessionId) ?? 0);
     codeObservations.get(key)?.close();
     codeObservations.set(key, observation);
+    if (pendingPreempts.get(sessionId) === observation.turn) {
+      pendingPreempts.delete(sessionId);
+      observation.preempt();
+    }
     return Promise.resolve().then(() => operation(observation)).catch((error) => {
       if (error?.code === "host_interrupted") throw error;
       return JSON.stringify({
@@ -1019,7 +1025,12 @@ export function createCodeRuntime(toolConfiguration = {}, extras = {}) {
       if (observation.sessionId === sessionId && observation.turn === turn
         && observation.preempt()) count++;
     }
+    if (count === 0) pendingPreempts.set(sessionId, turn);
     return count;
+  }
+
+  function settlePreemptTurn(sessionId) {
+    pendingPreempts.delete(sessionId);
   }
 
   function closeCodeObservations(sessionId, turn) {
@@ -1139,7 +1150,8 @@ export function createCodeRuntime(toolConfiguration = {}, extras = {}) {
     cancelTurnWithUpdates,
     preempt,
     preemptTurn,
-    beginTurn(sessionId) { turns.set(sessionId, (turns.get(sessionId) ?? 0) + 1); },
+    settlePreemptTurn,
+    beginTurn(sessionId) { pendingPreempts.delete(sessionId); turns.set(sessionId, (turns.get(sessionId) ?? 0) + 1); },
     cancelTurn(sessionId) { cancel(sessionId, turns.get(sessionId) ?? 0); },
     cancel,
     toolDefinitions: () => JSON.stringify(callableDefinitions()),

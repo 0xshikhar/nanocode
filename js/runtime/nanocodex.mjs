@@ -507,9 +507,10 @@ async function createRuntime(config, catalog, defaults, platform) {
     const errors = results.filter(result => result.status === "rejected").map(result => result.reason);
     if (errors.length) throw new AggregateError(errors, "runner mount message delivery failed");
   }, config.durability);
-  const process = await platform.runnerProcessTools?.(config.workspace);
-  config = { ...config, runnerPool, processTools: { ...(process?.tools ?? unavailableProcessTools()), ...(config.runnerManagement === false ? {} : { runners: runnerManagementTool(runnerPool) }) } };
+  let process;
   try {
+    process = await platform.runnerProcessTools?.(config.workspace);
+    config = { ...config, runnerPool, processTools: { ...(process?.tools ?? unavailableProcessTools()), ...(config.runnerManagement === false ? {} : { runners: runnerManagementTool(runnerPool) }) } };
     if (config.runnerServer !== undefined) await runnerPool.listenForRunners(config.runnerServer);
     if (config.runners !== undefined) {
       if (!Array.isArray(config.runners)) throw new TypeError("runners must be an array");
@@ -621,23 +622,26 @@ async function createRuntime(config, catalog, defaults, platform) {
   async function switchAgent(agent, options) {
     const settings = checkKeys(options, SPAWN_KEYS, "nano.switch");
     const selection = select(config, catalog, defaults, settings);
-    if (selection.harness === agentSessionInfo(agent).harness) {
-      let next;
-      try {
-        next = await agent.session.fork();
-      } catch (error) {
-        if (error?.code !== "fork_before_completed_turn") throw error;
-      }
-      if (next !== undefined) {
-        own(next);
+    if (selection.harness === agentSessionInfo(agent).harness && agent.session.capabilities().checkpoint) {
+      const checkpoint = await agent.session.checkpoint();
+      const model = typeof checkpoint.model === "string" ? checkpoint.model : checkpoint.model.model;
+      if (selection.model === model) {
+        let next;
         try {
-          await next.session.setModel(selection.model);
-          if (selection.thinking !== undefined) await next.session.setThinking(selection.thinking);
+          next = await agent.session.fork();
         } catch (error) {
-          await shutdownOwnedAgent(next).catch(() => {});
-          throw error;
+          if (error?.code !== "fork_before_completed_turn") throw error;
         }
-        return next;
+        if (next !== undefined) {
+          own(next);
+          try {
+            if (selection.thinking !== undefined) await next.session.setThinking(selection.thinking);
+          } catch (error) {
+            await shutdownOwnedAgent(next).catch(() => {});
+            throw error;
+          }
+          return next;
+        }
       }
     }
     const inherit = await agentInheritance(agent);

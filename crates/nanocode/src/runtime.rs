@@ -443,6 +443,13 @@ impl<B> NanocodexBuilder<B> {
             self.runners,
             self.runner_servers,
         );
+        #[cfg(not(target_family = "wasm"))]
+        {
+            *ownership
+                .runners
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = Arc::downgrade(&runner_agents);
+        }
         let backend_defaults: Vec<_> = self
             .backends
             .iter()
@@ -963,11 +970,13 @@ impl Nanocodex {
             .capabilities(ModelTransport::Native)
             .check_thinking(thinking)?;
         self.inner.recipe(model.family())?;
-        if model.family() == agent.harness_family() {
+        if model.family() == agent.harness_family()
+            && agent.capabilities().checkpoint
+            && agent.checkpoint().await?.model() == model
+        {
             match agent.fork(crate::ForkRequest::latest()).await {
                 Ok((switched, events)) => {
                     let configured = async {
-                        switched.set_harness_model(model).await?;
                         switched.set_thinking(thinking).await?;
                         #[cfg(not(target_family = "wasm"))]
                         self.inner.runner_agents.register(&switched, true).await?;
@@ -1441,6 +1450,8 @@ fn catalog_error(error: crate::durability::Error) -> NanocodexError {
 #[derive(Default)]
 pub(crate) struct Ownership {
     state: Mutex<OwnershipState>,
+    #[cfg(not(target_family = "wasm"))]
+    runners: Mutex<std::sync::Weak<crate::runners::RunnerAgents>>,
     idle: tokio::sync::Notify,
     stopped: tokio::sync::OnceCell<Option<Arc<ShutdownError>>>,
 }
@@ -1500,12 +1511,26 @@ impl Ownership {
     {
         let admission = self.admission()?;
         let created = construct.await?;
-        let mut state = self.lock();
-        state.children.retain(WeakAgent::is_live);
-        state
-            .children
-            .extend(created.iter().map(|(agent, _)| agent.downgrade()));
-        drop(state);
+        {
+            let mut state = self.lock();
+            state.children.retain(WeakAgent::is_live);
+            state
+                .children
+                .extend(created.iter().map(|(agent, _)| agent.downgrade()));
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let runners = self
+                .runners
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .upgrade();
+            if let Some(runners) = runners {
+                for (agent, _) in &created {
+                    runners.register(agent, false).await?;
+                }
+            }
+        }
         drop(admission);
         Ok(created)
     }
@@ -1582,12 +1607,47 @@ impl AgentOwner for Ownership {
         if state.drained {
             return false;
         }
-        state.owned.push((key, agent));
+        state.owned.push((key, agent.clone()));
+        drop(state);
+        #[cfg(not(target_family = "wasm"))]
+        if let Some(runners) = self
+            .runners
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .upgrade()
+        {
+            tokio::spawn(async move {
+                let _ = runners.register(&agent, false).await;
+            });
+        }
         true
     }
 
     fn release(&self, key: usize) {
-        self.lock().owned.retain(|(owned, _)| *owned != key);
+        #[cfg(not(target_family = "wasm"))]
+        let session_id;
+        {
+            let mut state = self.lock();
+            #[cfg(not(target_family = "wasm"))]
+            {
+                session_id = state
+                    .owned
+                    .iter()
+                    .find(|(owned, _)| *owned == key)
+                    .map(|(_, agent)| agent.session_id().to_owned());
+            }
+            state.owned.retain(|(owned, _)| *owned != key);
+        }
+        #[cfg(not(target_family = "wasm"))]
+        if let Some(session_id) = session_id
+            && let Some(runners) = self
+                .runners
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .upgrade()
+        {
+            runners.unregister(&session_id);
+        }
     }
 }
 

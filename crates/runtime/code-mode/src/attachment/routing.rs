@@ -457,6 +457,15 @@ impl Tool for RoutedTool {
                     };
                     let id = self.sessions.insert(context.session_id(), mapping).await?;
                     result["session_id"] = id.into();
+                    if let Some(trace) = output.process_trace().copied() {
+                        output = output.with_process_trace(
+                            trace.exit_code,
+                            Some(i64::from(id)),
+                            trace.original_token_count,
+                            trace.output_bytes,
+                            trace.wall_time_seconds,
+                        );
+                    }
                     output = output.with_structured_result(result.clone());
                     output.output = crate::contract::ToolOutputBody::Text(result.to_string());
                 }

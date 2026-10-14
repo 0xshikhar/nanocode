@@ -162,6 +162,8 @@ pub trait CodeModeHost: Send + Sync + 'static {
         Box::pin(async { Ok(()) })
     }
 
+    fn settle_preempt(&self, _session_id: &str) {}
+
     fn cancel_turn<'a>(
         &'a self,
         session_id: &'a str,

@@ -835,12 +835,16 @@ where
         loop {
             let call_index = self.stats.model_calls + 1;
             if can_drain_steers {
+                let delivered = self.stats.steers;
                 let mut current_call_index = model_call_index.lock().await;
                 *current_call_index = call_index;
                 pending_steers.extend(steers.lock().await.drain(..));
                 drop(current_call_index);
                 self.drain_steers(&mut session.conversation, &mut pending_steers, call_index)
                     .await?;
+                if self.stats.steers != delivered {
+                    session.tools.control().settle_preempt();
+                }
             }
 
             if first_batch && resumed {

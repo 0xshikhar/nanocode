@@ -41,7 +41,7 @@ where
     #[allow(clippy::too_many_lines)]
     pub(super) async fn run(mut self) -> Result<()> {
         let session_id = self.events.request_id().to_owned();
-        let mut thread_model = self.spawner.config.model;
+        let thread_model = self.spawner.config.model;
         let mut default_thinking = self.spawner.config.thinking;
         let mut default_service_tier = self.spawner.config.service_tier;
         let inherited_checkpoint = self.initial_model.as_ref().map(|initial| {
@@ -429,47 +429,11 @@ where
                     result,
                 } = command
                 {
-                    let mut outcome = if pending_developer_messages.is_empty() {
-                        validate_model_thinking(requested_model, default_thinking).and_then(|()| {
-                            validate_model_reasoning_mode(
-                                requested_model,
-                                self.spawner.config.reasoning_mode,
-                            )
-                        })
+                    let outcome = if requested_model == thread_model {
+                        Ok(())
                     } else {
                         Err(model_change_locked())
                     };
-                    let relabeled = latest_fork_checkpoint.as_ref().map(|latest| {
-                        Arc::new(CommittedSession::new(
-                            Arc::clone(&self.spawner.lineage_id),
-                            requested_model,
-                            default_thinking,
-                            default_service_tier,
-                            latest.model().clone(),
-                        ))
-                    });
-                    if outcome.is_ok()
-                        && requested_model != thread_model
-                        && let Some(relabeled) = &relabeled
-                    {
-                        outcome = self.execution.commit_checkpoint(relabeled).await;
-                    }
-                    if outcome.is_ok() && requested_model != thread_model {
-                        model.shutdown().await;
-                        Arc::make_mut(&mut self.spawner.config).model = requested_model;
-                        if relabeled.is_some() {
-                            latest_fork_checkpoint = relabeled;
-                        }
-                        model = model_from_checkpoint(
-                            &self.events,
-                            &self.transport_stats,
-                            &self.tools,
-                            &self.spawner,
-                            &prompt_cache,
-                            latest_fork_checkpoint.as_deref(),
-                        );
-                        thread_model = requested_model;
-                    }
                     drop(result.send(outcome));
                     continue;
                 }

@@ -1,3 +1,4 @@
+import { toolRouterBrand, toolRouterRuntime, toolRuntimeLifecycle } from "./tool-router.mjs";
 import { createWorkerEvaluator } from './worker-evaluator.mjs';
 import { freezeJson } from '../internal.mjs';
 import { createCodeRuntime, toolResult } from './code-runtime.mjs';
@@ -21,6 +22,19 @@ const PLATFORM_SUBAGENT_NAMES = new Set([
 
 
 export function resolveClaudeTools(tools = []) {
+  if (tools?.[toolRouterBrand]) {
+    const router = tools[toolRouterRuntime] ?? tools;
+    const handlers = new Map();
+    const parallelSafe = [];
+    const definitions = router.modelDefinitions().map(definition => {
+      const name = definition.name ?? (definition.type === "tool_search" ? "tool_search" : undefined);
+      const tool = router.resolve(name);
+      if (tool) handlers.set(name, tool.handler);
+      if (tool?.parallelSafe) parallelSafe.push(name);
+      return { name, description: definition.description ?? "", input_schema: definition.parameters ?? { type: "object", properties: {} } };
+    });
+    return { handlers, definitions: freezeJson(definitions), parallelSafe: Object.freeze(parallelSafe) };
+  }
   if (!Array.isArray(tools)) throw new TypeError('Claude tools must be an explicit array');
   const handlers = new Map();
   const parallelSafe = [];
@@ -88,6 +102,10 @@ export function createClaudeHost({ auth, tools = [], onEvent = () => {}, fetch, 
   if (toolMode !== 'code-only' && toolMode !== 'direct') throw new TypeError('Claude toolMode must be code-only or direct');
 
   const codeOnly = toolMode === 'code-only';
+  const routedTools = tools?.[toolRouterBrand];
+  if (routedTools && !codeOnly) throw new TypeError("tool routers require Claude Code Mode");
+  const toolsLifecycle = tools?.[toolRuntimeLifecycle];
+  toolsLifecycle?.available();
   if (codeOnly && codeEvaluator === undefined && typeof globalThis.Worker === 'function') codeEvaluator = createWorkerEvaluator();
   if (codeOnly && typeof codeEvaluator !== 'function') throw new TypeError('Claude Code Mode requires a Worker or explicit codeEvaluator');
   let apiKey = auth.apiKey;
@@ -99,7 +117,7 @@ export function createClaudeHost({ auth, tools = [], onEvent = () => {}, fetch, 
   const codeTurns = new Map();
   const codeTurnOrdinals = new Map();
   const effectIdentity = createCodeEffectIdentity(codeEffectJournal);
-  const code = codeOnly ? createCodeRuntime(Object.fromEntries(definitions.map(definition => [definition.name, {
+  const code = codeOnly ? createCodeRuntime(routedTools ? tools : Object.fromEntries(definitions.map(definition => [definition.name, {
     description: definition.description, parameters: definition.input_schema,
     endTurn: tools.find(tool => tool.name === definition.name)?.endTurn,
     releaseSession: tools.find(tool => tool.name === definition.name)?.releaseSession,
@@ -313,9 +331,10 @@ export function createClaudeHost({ auth, tools = [], onEvent = () => {}, fetch, 
       codeTurns.clear();
       codeTurnOrdinals.clear();
       effectIdentity.reset();
-      return code?.reset();
+      return Promise.all([code?.reset(), toolsLifecycle?.close()]);
     },
   };
+  toolsLifecycle?.claim();
   return host;
 }
 

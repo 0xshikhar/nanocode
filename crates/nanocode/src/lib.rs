@@ -119,6 +119,8 @@ pub mod prelude {
     pub use crate::SubagentUpdates;
     pub use crate::Tool;
     pub use crate::{AgentStatus, AgentUpdate, ScopedAgentUpdate, SubagentControl};
+    #[cfg(not(target_family = "wasm"))]
+    pub use crate::{Runner, RunnerPool, RunnerServerConfig};
 
     pub use crate::Tools;
     #[cfg(not(target_family = "wasm"))]

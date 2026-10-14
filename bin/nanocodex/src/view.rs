@@ -3,13 +3,13 @@ use std::time::{Duration, Instant};
 use nanocode_tui::{
     keybindings::{self, Binding},
     ratatui::{
-        Frame,
         layout::{Constraint, Layout, Rect},
         style::{Modifier, Style},
         text::{Line, Span},
         widgets::{Block, BorderType, Borders, Clear, Paragraph, Widget},
     },
     spinner::elapsed_label,
+    terminal::Canvas,
 };
 
 use crate::app::{App, Overlay, TurnState};
@@ -127,7 +127,7 @@ pub const BINDINGS: [Binding; 27] = [
     },
 ];
 
-pub fn draw(app: &mut App, frame: &mut Frame<'_>) {
+pub fn draw(app: &mut App, frame: &mut Canvas<'_>) {
     let area = frame.area();
     let now = Instant::now();
     let spinner = app.spinner.frame(now);
@@ -228,7 +228,7 @@ pub fn draw(app: &mut App, frame: &mut Frame<'_>) {
 
 pub const FINDER_ROWS: usize = 8;
 
-fn finder_popup(app: &App, composer_area: Rect, transcript_area: Rect, frame: &mut Frame<'_>) {
+fn finder_popup(app: &App, composer_area: Rect, transcript_area: Rect, frame: &mut Canvas<'_>) {
     let Some(finder) = &app.finder else {
         return;
     };
@@ -259,7 +259,7 @@ fn finder_popup(app: &App, composer_area: Rect, transcript_area: Rect, frame: &m
     Paragraph::new(all).render(popup, buffer);
 }
 
-fn command_popup(app: &App, composer_area: Rect, transcript_area: Rect, frame: &mut Frame<'_>) {
+fn command_popup(app: &App, composer_area: Rect, transcript_area: Rect, frame: &mut Canvas<'_>) {
     let text = app.composer.text();
     if app.overlay.is_some() || !text.starts_with('/') || text.contains(' ') || text.contains('\n')
     {
@@ -426,7 +426,7 @@ fn footer(app: &App) -> Line<'static> {
     Line::from(spans)
 }
 
-pub fn splash(frame: &mut Frame<'_>, theme: &nanocode_tui::theme::Theme, message: &str) {
+pub fn splash(frame: &mut Canvas<'_>, theme: &nanocode_tui::theme::Theme, message: &str) {
     let area = frame.area();
     let y = area.y + area.height / 2;
     let line = Line::from(vec![

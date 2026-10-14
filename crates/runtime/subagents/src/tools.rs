@@ -2,8 +2,9 @@ use super::{
     message::MAX_MESSAGE_BYTES,
     model::{
         AgentDescriptor, AgentId, AgentStatus, AgentUpdate, MessageId, MessagePriority,
-        MessagePurpose, agent_prompt,
+        MessagePurpose, agent_prompt_in_context,
     },
+    policy::{SpawnParent, SpawnPolicy, SpawnPolicyError},
     runtime::{
         AgentDirectoryEntry, AgentSummary, OutputContract, Registry, SubmissionOutcome,
         forward_events,
@@ -134,9 +135,10 @@ impl SpawnAgentTask {
         };
         let mut options = SpawnOptions::new();
         if let Some(model) = self.model {
-            let backend = self.harness.clone().or(parent).ok_or_else(|| {
-                std::io::Error::other("a model requires a backend selection or parent")
-            })?;
+            let backend = match self.harness.clone() {
+                Some(harness) => harness,
+                None => inferred_harness(parent, &model)?,
+            };
             let model = ModelSelection::new(backend, model);
             let model = if let Some(known) = model.as_codex() {
                 ModelSelection::Codex(known)
@@ -170,6 +172,61 @@ pub struct AgentStartReport {
     pub agent_id: AgentId,
     pub role: String,
     pub status: AgentStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<ModelSelection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<Thinking>,
+}
+
+fn inferred_harness(
+    parent: Option<HarnessFamily>,
+    model: &str,
+) -> std::io::Result<HarnessFamily> {
+    let parent = parent
+        .ok_or_else(|| std::io::Error::other("a model requires a backend selection or parent"))?;
+    let inherited = ModelSelection::new(parent.clone(), model);
+    if inherited.as_codex().is_some()
+        || inherited.as_claude().is_some()
+        || !HarnessFamily::builtin().contains(&parent)
+    {
+        return Ok(parent);
+    }
+    Ok(model
+        .parse::<ModelSelection>()
+        .map_or(parent, |known| known.family()))
+}
+
+async fn spawn_parent(parent: &AgentHandle, registry: &Registry, session_id: &str) -> SpawnParent {
+    let descriptor = registry.descriptor_for_session(session_id).await;
+    SpawnParent {
+        model: parent.harness_model(),
+        registered: descriptor.is_some(),
+        thinking: descriptor.and_then(|descriptor| descriptor.thinking),
+    }
+}
+
+async fn child_settings(
+    child: &nanocode_agent::Nanocodex,
+    policy: Option<(&SpawnPolicy, &SpawnParent)>,
+) -> std::io::Result<(Option<ModelSelection>, Option<Thinking>)> {
+    match child.checkpoint().await {
+        Ok(checkpoint) => {
+            let (model, thinking) = (checkpoint.model(), checkpoint.thinking());
+            if let Some((policy, parent)) = policy {
+                policy.admit(parent, Some(&model), Some(thinking))?;
+            }
+            Ok((Some(model), Some(thinking)))
+        }
+        Err(error) => match policy {
+            Some((policy, _)) if !policy.is_unrestricted() => {
+                Err(SpawnPolicyError::ChildSettingsUnknown {
+                    reason: error.to_string(),
+                }
+                .into())
+            }
+            _ => Ok((None, None)),
+        },
+    }
 }
 
 #[derive(Deserialize)]
@@ -324,14 +381,31 @@ pub async fn start_agents_observed(
             .await?
     };
 
+    let policy = registry.spawn_policy();
+    let policy_parent = spawn_parent(parent, registry, session_id).await;
+    let mut settings = Vec::with_capacity(children.len());
+    for (child, _) in &children {
+        match child_settings(child, Some((&policy, &policy_parent))).await {
+            Ok(value) => settings.push(value),
+            Err(error) => {
+                for (child, _) in &children {
+                    child.abandon_created().await;
+                }
+                return Err(error.into());
+            }
+        }
+    }
+
     let mut reports = Vec::with_capacity(prepared.len());
     let mut launches = Vec::with_capacity(prepared.len());
     let mut additions = Vec::with_capacity(prepared.len());
-    for (((reservation, (task, contract)), (child, events)), capacity) in reservations
-        .into_iter()
-        .zip(prepared)
-        .zip(children)
-        .zip(capacities)
+    for ((((reservation, (task, contract)), (child, events)), capacity), (model, thinking)) in
+        reservations
+            .into_iter()
+            .zip(prepared)
+            .zip(children)
+            .zip(capacities)
+            .zip(settings)
     {
         let id = reservation.id;
         let descriptor = AgentDescriptor {
@@ -340,6 +414,8 @@ pub async fn start_agents_observed(
             role: task.role.clone(),
             task: task.task.clone(),
             parent: reservation.parent,
+            model: model.clone(),
+            thinking,
         };
         let (start_events, events_ready) = oneshot::channel();
         let event_task = forward_events(
@@ -368,6 +444,8 @@ pub async fn start_agents_observed(
             agent_id: id,
             role: task.role,
             status: AgentStatus::Running,
+            model: model.clone(),
+            thinking,
         });
         additions.push((
             reservation.root_session_id.clone(),
@@ -377,7 +455,7 @@ pub async fn start_agents_observed(
         launches.push((
             reservation.root_session_id,
             id,
-            agent_prompt(id, &task.task),
+            agent_prompt_in_context(id, &task.task, model.as_ref(), thinking),
             capacity,
         ));
     }
@@ -474,6 +552,15 @@ async fn start_child(
         return Err("child caller identity must match its native parent handle".into());
     }
     registry.register_handle(parent.clone());
+    let policy = registry.spawn_policy();
+    let policy_parent = spawn_parent(parent, registry, session_id).await;
+    if !fork {
+        policy.admit(
+            &policy_parent,
+            options.selected_harness_model().as_ref(),
+            options.selected_thinking(),
+        )?;
+    }
 
     let admission = registry.admit_spawn(session_id).await?;
     let AgentTask {
@@ -519,6 +606,14 @@ async fn start_child(
             )
             .await?
     };
+    let (model, thinking) =
+        match child_settings(&child, (!fork).then_some((&policy, &policy_parent))).await {
+            Ok(settings) => settings,
+            Err(error) => {
+                child.abandon_created().await;
+                return Err(error.into());
+            }
+        };
     if let (Some(router), Some(route)) = (&router, &route)
         && let Err(error) = router.bind(
             session_id,
@@ -537,6 +632,8 @@ async fn start_child(
         role: role.clone(),
         task: task.clone(),
         parent: reservation.parent,
+        model: model.clone(),
+        thinking,
     };
     let (start_events, events_ready) = oneshot::channel();
     let event_task = forward_events(
@@ -565,7 +662,7 @@ async fn start_child(
         .launch_initial_turn(
             &reservation.root_session_id,
             id,
-            agent_prompt(id, &task),
+            agent_prompt_in_context(id, &task, model.as_ref(), thinking),
             capacity,
         )
         .await
@@ -577,6 +674,8 @@ async fn start_child(
         agent_id: id,
         role,
         status: AgentStatus::Running,
+        model,
+        thinking,
     })
 }
 
@@ -591,7 +690,13 @@ impl Tool for SpawnAgent {
         ToolDefinition::function(
             SPAWN_AGENT_TOOL,
             "Starts a reusable clean-room subagent without inherited conversation history and immediately returns its ID. When the root agent is durable, the task tree survives runtime restarts with the same IDs and interrupted children resume from their latest committed checkpoint; otherwise children are dropped when the parent runtime restarts.",
-            spawn_agent_parameters(),
+            spawn_agent_parameters_for(
+                &self
+                    .registry
+                    .upgrade()
+                    .map(|registry| registry.spawn_policy())
+                    .unwrap_or_default(),
+            ),
         )
         .with_strict_parameters()
         .with_output_schema(spawn_agent_output_schema())
@@ -639,6 +744,58 @@ impl Tool for SpawnAgent {
         };
         json_output(&report)
     }
+}
+
+fn spawn_agent_parameters_for(policy: &SpawnPolicy) -> Value {
+    let mut parameters = spawn_agent_parameters();
+    let properties = &mut parameters["properties"];
+    if let Some(models) = policy.offered_models() {
+        let mut names = models
+            .iter()
+            .map(|model| json!(model.as_str()))
+            .collect::<Vec<_>>();
+        names.push(Value::Null);
+        let mut families = Vec::new();
+        for model in models {
+            let family = json!(model.family().as_str());
+            if !families.contains(&family) {
+                families.push(family);
+            }
+        }
+        families.push(Value::Null);
+        properties["model"]["enum"] = Value::Array(names);
+        properties["harness"]["enum"] = Value::Array(families);
+    }
+    if !policy.model_ladder.is_empty() {
+        let ladder = policy
+            .model_ladder
+            .iter()
+            .map(ModelSelection::as_str)
+            .collect::<Vec<_>>()
+            .join(" < ");
+        let description = format!(
+            "{} A child cannot rank above its spawning agent on this ladder: {ladder}.",
+            properties["model"]["description"].as_str().unwrap_or_default()
+        );
+        properties["model"]["description"] = json!(description);
+    }
+    if policy.min_thinking.is_some() || policy.max_thinking.is_some() {
+        let mut levels = policy
+            .offered_thinking()
+            .into_iter()
+            .map(|thinking| json!(thinking.as_str()))
+            .collect::<Vec<_>>();
+        levels.push(Value::Null);
+        properties["thinking"]["enum"] = Value::Array(levels);
+    }
+    if policy.bounded_by_parent_thinking {
+        let description = format!(
+            "{} A registered subagent cannot request more effort than its own.",
+            properties["thinking"]["description"].as_str().unwrap_or_default()
+        );
+        properties["thinking"]["description"] = json!(description);
+    }
+    parameters
 }
 
 fn spawn_agent_parameters() -> Value {
@@ -1123,6 +1280,8 @@ fn spawn_agent_output_schema() -> Value {
         "properties": {
             "agent_id": { "type": "integer" },
             "role": { "type": "string" },
+            "model": {},
+            "thinking": { "type": "string" },
             "status": {
                 "type": "object",
                 "properties": { "state": { "type": "string", "const": "running" } },
@@ -1149,6 +1308,8 @@ fn wait_agent_output_schema() -> Value {
                         "task": { "type": "string" },
                         "parent_agent_id": { "type": ["integer", "null"] },
                         "status": agent_status_schema(),
+                        "model": {},
+                        "thinking": { "type": "string" },
                         "last_output": {},
                         "completion_revision": { "type": "integer", "minimum": 0 }
                     },

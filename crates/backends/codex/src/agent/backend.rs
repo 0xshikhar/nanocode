@@ -64,7 +64,6 @@ const CODEX_CAPABILITIES: Capabilities = {
     capabilities.compaction = true;
     capabilities.developer_messages = true;
     capabilities.context = true;
-    capabilities.model = crate::session::Mutability::BetweenTurns;
     capabilities.thinking = crate::session::Mutability::Anytime;
     capabilities.service_tier = crate::session::Mutability::Anytime;
     capabilities.ultrafast_service_tier = true;

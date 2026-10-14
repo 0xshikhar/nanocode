@@ -350,6 +350,7 @@ export function createNodeHost(options = {}) {
     cancelCodeTurn: code.cancelTurn,
     preemptCode: code.preempt,
     preemptCodeTurn: code.preemptTurn,
+    settlePreemptCodeTurn: code.settlePreemptTurn,
     nextCodeUpdate: code.nextCodeUpdate,
     detachCodeTurn: code.detachTurn,
     cancelCodeTurnWithUpdates: code.cancelTurnWithUpdates,

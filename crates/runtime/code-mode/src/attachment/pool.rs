@@ -3,7 +3,7 @@ use super::{
 };
 use futures_util::{SinkExt, StreamExt, future};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     fmt,
     path::PathBuf,
     sync::{Arc, Mutex, MutexGuard, PoisonError, Weak},
@@ -17,6 +17,7 @@ use tokio::{
 use tokio_tungstenite::tungstenite::{
     self, Message,
     handshake::server::{ErrorResponse, Request, Response},
+    protocol::{CloseFrame, frame::coding::CloseCode},
 };
 use tokio_util::sync::CancellationToken;
 
@@ -209,6 +210,7 @@ struct PoolInner {
 #[derive(Default)]
 struct PoolState {
     runners: BTreeMap<String, Entry>,
+    revocations: HashSet<(String, Box<str>)>,
     servers: Vec<Arc<ServerInner>>,
     subscribers: Vec<mpsc::UnboundedSender<RunnerEvent>>,
     closed: bool,
@@ -445,7 +447,13 @@ impl RunnerPool {
             entry.connection.take();
             entry.status.send_replace(RunnerStatus::Disconnected);
             let remote = entry.remote.clone();
+            let revoked = remote
+                .runtime_id()
+                .map(|runtime_id| (name.to_owned(), runtime_id));
             let info = entry.info(name);
+            if let Some(revoked) = revoked {
+                state.revocations.insert(revoked);
+            }
             emit(&mut state, RunnerEvent::StatusChanged { info });
             remote
         };
@@ -862,13 +870,26 @@ async fn incoming(
             AttachmentError::Catalog("incoming runner catalog requires machines[0].id".into())
         })?
         .to_owned();
-    let (remote, cancel, identity) = {
+    let registration = (|| {
         let pool = pool.upgrade().ok_or(AttachmentError::Closed)?;
         let mut state = pool.state();
+        if catalog
+            .get("runtime_id")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|runtime_id| {
+                state
+                    .revocations
+                    .contains(&(name.clone(), runtime_id.into()))
+            })
+        {
+            return Err(AttachmentError::Fenced(
+                super::driver::ATTACHMENT_REVOKED_REASON.into(),
+            ));
+        }
         validate_registration(&state, &name, mode)?;
         let mut remote = match state.runners.get(&name) {
-            Some(entry) => entry.remote.clone(),
-            None => RemoteRunner::new(&name)?,
+            Some(entry) if !entry.cancel.is_cancelled() => entry.remote.clone(),
+            _ => RemoteRunner::new(&name)?,
         };
         if let Some(timeout) = timeout {
             remote = remote.with_call_timeout(timeout)?;
@@ -900,9 +921,29 @@ async fn incoming(
         );
         let info = state.runners[&name].info(&name);
         emit(&mut state, RunnerEvent::StatusChanged { info });
-        (remote, cancel, identity)
+        Ok((remote, cancel, identity))
+    })();
+    let (remote, cancel, identity) = match registration {
+        Ok(registration) => registration,
+        Err(error) => {
+            if error.is_revoked() {
+                let _ = frames
+                    .get_mut()
+                    .get_mut()
+                    .close(Some(revoked_close()))
+                    .await;
+            }
+            return Err(error);
+        }
     };
-    let result = tokio::select! { biased; _ = cancel.cancelled() => Ok(()), result = remote.serve_catalog(first, &mut frames) => result };
+    let (result, cancelled) = tokio::select! { biased; _ = cancel.cancelled() => (Ok(()), true), result = remote.serve_catalog(first, &mut frames) => (result, false) };
+    if cancelled {
+        let _ = frames
+            .get_mut()
+            .get_mut()
+            .close(Some(revoked_close()))
+            .await;
+    }
     if let Some(pool) = pool.upgrade() {
         pool.update(
             &name,
@@ -919,4 +960,11 @@ async fn incoming(
         }
     }
     result
+}
+
+fn revoked_close() -> CloseFrame {
+    CloseFrame {
+        code: CloseCode::Policy,
+        reason: super::driver::ATTACHMENT_REVOKED_REASON.into(),
+    }
 }

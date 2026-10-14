@@ -75,7 +75,8 @@ export type MessagePriority = "deferred" | "urgent";
 export type MessagePurpose = "delegate" | "coordinate" | "finding" | "question" | "reply";
 export type MessageSender =
   | Readonly<{ kind: "root" }>
-  | Readonly<{ kind: "agent"; agent_id: AgentId }>;
+  | Readonly<{ kind: "agent"; agent_id: AgentId }>
+  | Readonly<{ kind: "user" }>;
 export type SendOptions = Readonly<{
   agentId: AgentId;
   message: string;
@@ -83,6 +84,7 @@ export type SendOptions = Readonly<{
   purpose?: MessagePurpose | undefined;
 
   inReplyTo?: number | undefined;
+  fromUser?: boolean | undefined;
 }>;
 export type MessageReceipt = Readonly<{
   message_id: number;

@@ -6,12 +6,18 @@ pub use durable::{
 };
 
 pub use diagnostics::{CompletionError, CompletionErrorCode};
+mod authority;
 mod harness;
 mod message;
 mod model;
 mod platform;
+mod policy;
+mod roster;
 mod routing;
 mod runtime;
+pub use authority::{AuthorityError, RootAgentAuthority};
+pub use policy::{SpawnPolicy, SpawnPolicyError};
+pub use roster::{SubagentNode, SubagentRoster};
 pub use routing::{SpawnDecision, SpawnRoute, SpawnRouter};
 mod task_tree;
 mod tools;

@@ -233,6 +233,35 @@ struct LegacyCheckpointRecord {
 pub(super) struct PersistedScope {
     pub(super) version: u32,
     pub(super) agents: Vec<PersistedAgent>,
+    #[serde(default)]
+    pub(super) messages: PersistedMessages,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+pub(super) struct PersistedMessages {
+    pub(super) next_message_id: u64,
+    pub(super) records: Vec<String>,
+    pub(super) pending: Vec<super::model::MessageId>,
+}
+
+impl PersistedMessages {
+    pub(super) async fn hydrate(
+        self,
+        store: &dyn SubagentStore,
+        root_session_id: &str,
+    ) -> std::io::Result<super::message::MessageThreads> {
+        let mut messages = Vec::with_capacity(self.records.len());
+        for key in self.records {
+            let json = store.load_record(root_session_id, &key).await?;
+            if checkpoint_key(&json) != key {
+                return Err(std::io::Error::other(
+                    "persisted message record does not match its key",
+                ));
+            }
+            messages.push(serde_json::from_str(&json).map_err(std::io::Error::other)?);
+        }
+        super::message::MessageThreads::restore(self.next_message_id, messages, self.pending)
+    }
 }
 
 #[derive(Serialize, Deserialize)]

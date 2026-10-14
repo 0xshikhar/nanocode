@@ -207,6 +207,9 @@ extern "C" {
     #[wasm_bindgen(js_namespace = ["globalThis", "nanocodexHost"], js_name = preemptCodeTurn)]
     fn host_preempt_code_turn(session_id: &str);
 
+    #[wasm_bindgen(js_namespace = ["globalThis", "nanocodexHost"], js_name = settlePreemptCodeTurn)]
+    fn host_settle_preempt_code_turn(session_id: &str);
+
     #[wasm_bindgen(js_namespace = ["globalThis", "nanocodexHost"], js_name = cancelCodeTurn)]
     fn host_cancel_code_turn(session_id: &str);
 
@@ -1013,6 +1016,10 @@ impl CodeModeHost for JavaScriptCodeModeHost {
         })
     }
 
+    fn settle_preempt(&self, session_id: &str) {
+        host_settle_preempt_code_turn(session_id);
+    }
+
     fn cancel_turn<'a>(
         &'a self,
         session_id: &'a str,
@@ -1594,6 +1601,8 @@ struct WasmSubagentMessage {
     purpose: MessagePurpose,
     #[serde(default)]
     in_reply_to: Option<SubagentMessageId>,
+    #[serde(default)]
+    from_user: bool,
 }
 
 #[derive(Serialize)]
@@ -4179,6 +4188,19 @@ impl WasmSubagents {
             .map_err(|error| js_error(format!("invalid subagent message: {error}")))?;
         let subagents = self;
         subagents.parent(session_id)?;
+        if task.from_user {
+            if task.purpose != MessagePurpose::Coordinate || task.in_reply_to.is_some() {
+                return Err(js_error(
+                    "user messages use the coordinate purpose without inReplyTo",
+                ));
+            }
+            let receipt = subagents
+                .control
+                .send_user_message(session_id, task.agent_id, task.priority, task.message)
+                .await
+                .map_err(js_error)?;
+            return serde_json::to_string(&receipt).map_err(js_error);
+        }
         let receipt = subagents
             .registry
             .send_message(

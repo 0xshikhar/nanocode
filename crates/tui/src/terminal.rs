@@ -8,18 +8,24 @@ use std::{
 };
 
 use crossterm::{
-    cursor::Show,
+    cursor::{Hide, MoveTo, Show},
     event::{
         DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
         KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
-    execute,
+    execute, queue,
+    style::{Attribute, SetAttribute},
     terminal::{
-        BeginSynchronizedUpdate, EndSynchronizedUpdate, EnterAlternateScreen, LeaveAlternateScreen,
-        disable_raw_mode, enable_raw_mode,
+        BeginSynchronizedUpdate, Clear, ClearType, EndSynchronizedUpdate, EnterAlternateScreen,
+        LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
     },
 };
-use ratatui::{Frame, Terminal, backend::CrosstermBackend};
+use ratatui::{
+    backend::{Backend, CrosstermBackend},
+    buffer::Buffer,
+    layout::{Position, Rect},
+    style::Color,
+};
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 static MODES: AtomicU8 = AtomicU8::new(0);
@@ -43,8 +49,44 @@ impl Default for TerminalOptions {
     }
 }
 
+pub struct Canvas<'a> {
+    area: Rect,
+    buffer: &'a mut Buffer,
+    cursor: Option<Position>,
+}
+
+impl Canvas<'_> {
+    #[must_use]
+    pub const fn area(&self) -> Rect {
+        self.area
+    }
+
+    pub const fn buffer_mut(&mut self) -> &mut Buffer {
+        self.buffer
+    }
+
+    pub fn set_cursor_position(&mut self, position: impl Into<Position>) {
+        self.cursor = Some(position.into());
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct FrameStats {
+    pub frames: u64,
+    pub skipped: u64,
+    pub full_repaints: u64,
+    pub bytes: u64,
+}
+
 pub struct TerminalSession {
-    terminal: Terminal<CrosstermBackend<Stdout>>,
+    output: Stdout,
+    previous: Buffer,
+    current: Buffer,
+    stale: bool,
+    cursor: Option<Position>,
+    bytes: Vec<u8>,
+    truecolor: bool,
+    stats: FrameStats,
     options: TerminalOptions,
     active: bool,
 }
@@ -58,34 +100,96 @@ impl TerminalSession {
             restore(&mut output);
             return Err(error);
         }
-        let terminal = match Terminal::new(CrosstermBackend::new(output)) {
-            Ok(terminal) => terminal,
-            Err(error) => {
-                restore(&mut stdout());
-                return Err(error);
-            }
-        };
         Ok(Self {
-            terminal,
+            output,
+            previous: Buffer::empty(Rect::default()),
+            current: Buffer::empty(Rect::default()),
+            stale: true,
+            cursor: None,
+            bytes: Vec::new(),
+            truecolor: truecolor(),
+            stats: FrameStats::default(),
             options,
             active: true,
         })
     }
 
-    pub fn draw(&mut self, render: impl FnOnce(&mut Frame<'_>)) -> io::Result<()> {
-        execute!(self.terminal.backend_mut(), BeginSynchronizedUpdate)?;
-        let drawn = self.terminal.draw(render).map(drop);
-        execute!(self.terminal.backend_mut(), EndSynchronizedUpdate)?;
-        drawn
+    pub fn draw(&mut self, render: impl FnOnce(&mut Canvas<'_>)) -> io::Result<()> {
+        let (columns, rows) = crossterm::terminal::size()?;
+        let area = Rect::new(0, 0, columns, rows);
+        if area != self.current.area {
+            self.previous = Buffer::empty(area);
+            self.current = Buffer::empty(area);
+            self.stale = true;
+        }
+        self.current.reset();
+        let mut canvas = Canvas {
+            area,
+            buffer: &mut self.current,
+            cursor: None,
+        };
+        render(&mut canvas);
+        let cursor = canvas.cursor.filter(|position| area.contains(*position));
+        if !self.truecolor {
+            downsample(&mut self.current);
+        }
+        let blank = Buffer::empty(area);
+        let updates = if self.stale {
+            blank.diff(&self.current)
+        } else {
+            self.previous.diff(&self.current)
+        };
+        if updates.is_empty() && cursor == self.cursor {
+            self.stats.skipped += 1;
+            std::mem::swap(&mut self.previous, &mut self.current);
+            return Ok(());
+        }
+        self.bytes.clear();
+        queue!(self.bytes, BeginSynchronizedUpdate)?;
+        if self.stale {
+            queue!(self.bytes, SetAttribute(Attribute::Reset))?;
+            for row in area.top()..area.bottom() {
+                queue!(self.bytes, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+            }
+        }
+        if !updates.is_empty() {
+            if self.cursor.is_some() {
+                queue!(self.bytes, Hide)?;
+            }
+            CrosstermBackend::new(&mut self.bytes).draw(updates.into_iter())?;
+        }
+        match cursor {
+            Some(position) => queue!(self.bytes, MoveTo(position.x, position.y), Show)?,
+            None if self.cursor.is_some() => queue!(self.bytes, Hide)?,
+            None => {}
+        }
+        queue!(self.bytes, EndSynchronizedUpdate)?;
+        self.output.write_all(&self.bytes)?;
+        self.output.flush()?;
+        self.stats.frames += 1;
+        self.stats.bytes += self.bytes.len() as u64;
+        if self.stale {
+            self.stats.full_repaints += 1;
+        }
+        self.stale = false;
+        self.cursor = cursor;
+        std::mem::swap(&mut self.previous, &mut self.current);
+        Ok(())
     }
 
-    pub fn clear(&mut self) -> io::Result<()> {
-        self.terminal.clear()
+    #[must_use]
+    pub const fn stats(&self) -> FrameStats {
+        self.stats
+    }
+
+    pub const fn clear(&mut self) -> io::Result<()> {
+        self.stale = true;
+        Ok(())
     }
 
     pub fn suspend(&mut self) -> io::Result<()> {
         if self.active {
-            restore(self.terminal.backend_mut());
+            restore(&mut self.output);
             self.active = false;
         }
         Ok(())
@@ -94,8 +198,9 @@ impl TerminalSession {
     pub fn resume(&mut self) -> io::Result<()> {
         if !self.active {
             enable_raw_mode()?;
-            activate(self.terminal.backend_mut(), self.options)?;
-            self.terminal.clear()?;
+            activate(&mut self.output, self.options)?;
+            self.stale = true;
+            self.cursor = None;
             self.active = true;
         }
         Ok(())
@@ -107,10 +212,10 @@ impl TerminalSession {
         }
         self.options.mouse_capture = enabled;
         if enabled {
-            execute!(self.terminal.backend_mut(), EnableMouseCapture)?;
+            execute!(self.output, EnableMouseCapture)?;
             MODES.fetch_or(MOUSE, Ordering::AcqRel);
         } else {
-            execute!(self.terminal.backend_mut(), DisableMouseCapture)?;
+            execute!(self.output, DisableMouseCapture)?;
             MODES.fetch_and(!MOUSE, Ordering::AcqRel);
         }
         Ok(())
@@ -118,7 +223,7 @@ impl TerminalSession {
 
     pub fn copy(&mut self, text: &str) -> io::Result<()> {
         execute!(
-            self.terminal.backend_mut(),
+            self.output,
             crossterm::clipboard::CopyToClipboard::to_clipboard_from(text)
         )
     }
@@ -127,27 +232,85 @@ impl TerminalSession {
     pub const fn mouse_capture(&self) -> bool {
         self.options.mouse_capture
     }
+
+    #[must_use]
+    pub const fn truecolor(&self) -> bool {
+        self.truecolor
+    }
 }
 
 impl Drop for TerminalSession {
     fn drop(&mut self) {
         if self.active {
-            drop(self.terminal.show_cursor());
-            restore(self.terminal.backend_mut());
+            restore(&mut self.output);
         }
+    }
+}
+
+fn truecolor() -> bool {
+    std::env::var("COLORTERM").is_ok_and(|value| {
+        let value = value.to_ascii_lowercase();
+        value.contains("truecolor") || value.contains("24bit")
+    })
+}
+
+fn downsample(buffer: &mut Buffer) {
+    for cell in &mut buffer.content {
+        if let Color::Rgb(red, green, blue) = cell.fg {
+            cell.fg = Color::Indexed(ansi256(red, green, blue));
+        }
+        if let Color::Rgb(red, green, blue) = cell.bg {
+            cell.bg = Color::Indexed(ansi256(red, green, blue));
+        }
+    }
+}
+
+const fn ansi256(red: u8, green: u8, blue: u8) -> u8 {
+    const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
+    const fn level(value: u8) -> u8 {
+        if value < 48 {
+            0
+        } else if value < 115 {
+            1
+        } else {
+            (value - 35) / 40
+        }
+    }
+    const fn distance(left: (u8, u8, u8), right: (u8, u8, u8)) -> u32 {
+        let red = left.0.abs_diff(right.0) as u32;
+        let green = left.1.abs_diff(right.1) as u32;
+        let blue = left.2.abs_diff(right.2) as u32;
+        red * red + green * green + blue * blue
+    }
+    let (r, g, b) = (level(red), level(green), level(blue));
+    let cube = (LEVELS[r as usize], LEVELS[g as usize], LEVELS[b as usize]);
+    let average = (red as u32 + green as u32 + blue as u32) / 3;
+    let gray_index = if average > 238 {
+        23
+    } else if average < 8 {
+        0
+    } else {
+        (average - 8) / 10
+    };
+    let gray_level = (8 + gray_index * 10) as u8;
+    let gray = (gray_level, gray_level, gray_level);
+    if distance((red, green, blue), gray) < distance((red, green, blue), cube) {
+        232 + gray_index as u8
+    } else {
+        16 + 36 * r + 6 * g + b
     }
 }
 
 fn activate(output: &mut impl Write, options: TerminalOptions) -> io::Result<()> {
     ACTIVE.store(true, Ordering::Release);
-    execute!(output, EnterAlternateScreen, EnableBracketedPaste)?;
+    queue!(output, EnterAlternateScreen, EnableBracketedPaste, Hide)?;
     let mut modes = 0;
     if options.mouse_capture {
-        execute!(output, EnableMouseCapture)?;
+        queue!(output, EnableMouseCapture)?;
         modes |= MOUSE;
     }
     if options.keyboard_enhancement
-        && execute!(
+        && queue!(
             output,
             PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
         )
@@ -155,6 +318,7 @@ fn activate(output: &mut impl Write, options: TerminalOptions) -> io::Result<()>
     {
         modes |= KEYBOARD;
     }
+    output.flush()?;
     MODES.store(modes, Ordering::Release);
     Ok(())
 }
@@ -164,18 +328,19 @@ fn restore(output: &mut impl Write) {
     let modes = MODES.swap(0, Ordering::AcqRel);
     drop(disable_raw_mode());
     if modes & KEYBOARD != 0 {
-        drop(execute!(output, PopKeyboardEnhancementFlags));
+        drop(queue!(output, PopKeyboardEnhancementFlags));
     }
     if modes & MOUSE != 0 {
-        drop(execute!(output, DisableMouseCapture));
+        drop(queue!(output, DisableMouseCapture));
     }
-    drop(execute!(
+    drop(queue!(
         output,
         EndSynchronizedUpdate,
         DisableBracketedPaste,
         LeaveAlternateScreen,
         Show
     ));
+    drop(output.flush());
 }
 
 fn install_panic_hook() {

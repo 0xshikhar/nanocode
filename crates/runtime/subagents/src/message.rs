@@ -2,21 +2,91 @@ use super::model::{
     AgentId, AgentMessage, AgentThread, MessageDisposition, MessageId, MessagePriority,
     MessagePurpose, MessageSender, ThreadId,
 };
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 
 pub(super) const MAX_MESSAGE_BYTES: usize = 64 * 1024;
-const MAX_RETAINED_MESSAGES: usize = 256;
 
 #[derive(Default)]
 pub(super) struct MessageThreads {
     next_message_id: u64,
     threads: HashMap<ThreadId, AgentThread>,
     thread_by_message: HashMap<MessageId, ThreadId>,
-    retained_order: VecDeque<MessageId>,
     pending: HashSet<MessageId>,
 }
 
 impl MessageThreads {
+    pub(super) fn persist(
+        &self,
+        records: &mut Vec<(std::sync::Arc<str>, std::sync::Arc<str>)>,
+    ) -> std::io::Result<super::durable::PersistedMessages> {
+        let mut messages = self
+            .threads
+            .values()
+            .flat_map(|thread| &thread.messages)
+            .collect::<Vec<_>>();
+        messages.sort_by_key(|message| message.id);
+        let mut keys = Vec::with_capacity(messages.len());
+        for message in messages {
+            let json: std::sync::Arc<str> = serde_json::to_string(message)
+                .map_err(std::io::Error::other)?
+                .into();
+            let key = super::durable::checkpoint_key(&json);
+            records.push((key.clone().into(), json));
+            keys.push(key);
+        }
+        let mut pending = self.pending.iter().copied().collect::<Vec<_>>();
+        pending.sort_unstable();
+        Ok(super::durable::PersistedMessages {
+            next_message_id: self.next_message_id,
+            records: keys,
+            pending,
+        })
+    }
+
+    pub(super) fn restore(
+        next_message_id: u64,
+        messages: Vec<AgentMessage>,
+        pending: Vec<MessageId>,
+    ) -> std::io::Result<Self> {
+        let mut restored = Self {
+            next_message_id,
+            ..Self::default()
+        };
+        for message in messages {
+            validate_body(&message.body)?;
+            validate_reply(message.purpose, message.in_reply_to)?;
+            if message.id.value() == 0
+                || message.id.value() > next_message_id
+                || restored.thread_by_message.contains_key(&message.id)
+            {
+                return Err(std::io::Error::other("invalid persisted message identity"));
+            }
+            let expected = match message.in_reply_to {
+                Some(previous) => restored.reference_thread(
+                    previous,
+                    message.from,
+                    message.to,
+                    message.purpose,
+                )?,
+                None => ThreadId::for_message(message.id),
+            };
+            if expected != message.thread_id {
+                return Err(std::io::Error::other("invalid persisted message thread"));
+            }
+            restored.commit(message);
+        }
+        if pending
+            .iter()
+            .any(|id| !restored.thread_by_message.contains_key(id))
+        {
+            return Err(std::io::Error::other(
+                "pending message is absent from the persisted thread",
+            ));
+        }
+        restored.pending = pending.into_iter().collect();
+        Ok(restored)
+    }
+
     pub(super) fn has_pending_for(&self, agent_id: AgentId) -> bool {
         self.pending.iter().any(|id| {
             self.message(*id)
@@ -67,7 +137,6 @@ impl MessageThreads {
                 messages: Vec::new(),
             });
         self.thread_by_message.insert(message.id, message.thread_id);
-        self.retained_order.push_back(message.id);
         self.pending.insert(message.id);
         thread.messages.push(message);
         thread.clone()
@@ -78,12 +147,10 @@ impl MessageThreads {
             return;
         }
         self.pending.remove(&id);
-        self.trim_history();
     }
 
     pub(super) fn mark_terminal(&mut self, id: MessageId) {
         self.pending.remove(&id);
-        self.trim_history();
     }
 
     pub(super) fn thread_for_message(&self, id: MessageId) -> Option<AgentThread> {
@@ -105,7 +172,6 @@ impl MessageThreads {
 
     pub(super) fn rollback(&mut self, id: MessageId) {
         self.pending.remove(&id);
-        self.retained_order.retain(|retained| *retained != id);
         self.remove_message(id);
     }
 
@@ -146,23 +212,6 @@ impl MessageThreads {
             )));
         }
         Ok(*thread_id)
-    }
-
-    fn trim_history(&mut self) {
-        while self.retained_order.len() > MAX_RETAINED_MESSAGES {
-            let Some(index) = self
-                .retained_order
-                .iter()
-                .position(|id| !self.pending.contains(id))
-            else {
-                return;
-            };
-            let id = self
-                .retained_order
-                .remove(index)
-                .expect("the retained message should still exist");
-            self.remove_message(id);
-        }
     }
 
     fn remove_message(&mut self, id: MessageId) {

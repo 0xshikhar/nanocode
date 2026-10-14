@@ -311,13 +311,30 @@ impl State {
         *conversation = snapshot.conversation;
         Ok(())
     }
+    async fn merge_developer_notices(
+        &self,
+        policy: &dyn ClaudeExecutionPolicy,
+        operation: &str,
+        selected: &mut HashSet<String>,
+    ) -> Result<()> {
+        let notices = policy.developer_notices(operation.to_owned()).await?;
+        let mut queued = self.developer_notices.lock().await;
+        for notice in notices {
+            selected.remove(&notice.0);
+            if !queued.iter().any(|(id, _)| id == &notice.0) {
+                queued.push(notice);
+            }
+        }
+        Ok(())
+    }
+
     pub(super) async fn cursor(
         &self,
         conversation: &mut Conversation,
         operation: Option<&str>,
         speed: Option<crate::Speed>,
         prompt: Option<&Prompt>,
-        developer_notice_ids: HashSet<String>,
+        mut developer_notice_ids: HashSet<String>,
     ) -> Result<Cursor> {
         let update = self.persistence_update.lock().await;
         if let (Some(policy), Some(operation)) = (&self.policy, operation)
@@ -339,7 +356,17 @@ impl State {
             self.restore_snapshot(conversation, std::mem::take(&mut cursor.snapshot))
                 .await
                 .map_err(recovery_error)?;
+            self.merge_developer_notices(
+                policy.as_ref(),
+                operation,
+                &mut cursor.developer_notice_ids,
+            )
+            .await?;
             return Ok(cursor);
+        }
+        if let (Some(policy), Some(operation)) = (&self.policy, operation) {
+            self.merge_developer_notices(policy.as_ref(), operation, &mut developer_notice_ids)
+                .await?;
         }
         drop(update);
         let template = self.request_template(speed);

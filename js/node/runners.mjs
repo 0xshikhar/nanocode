@@ -1,4 +1,4 @@
-import { isLoopback } from "../runtime/runners.mjs";
+import { isLoopback, runnerRevokedReason } from "../runtime/runners.mjs";
 import WebSocket, { WebSocketServer } from "ws";
 import { createServer } from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
@@ -27,7 +27,7 @@ export async function listenRunnerSockets({ address = "127.0.0.1:0", token = ran
   const bound = server.address();
   const host = bound.address.includes(":") ? "[" + bound.address + "]" : bound.address;
   let stopping;
-  return { address: host + ":" + bound.port, url: "ws://" + host + ":" + bound.port, token, stop() { return stopping ??= new Promise((resolve, reject) => { for (const socket of sockets.clients) socket.terminate(); sockets.close(); server.close(error => error ? reject(error) : resolve()); }); } };
+  return { address: host + ":" + bound.port, url: "ws://" + host + ":" + bound.port, token, stop() { return stopping ??= new Promise((resolve, reject) => { for (const socket of sockets.clients) socket.close(1008, runnerRevokedReason); sockets.close(); server.close(error => error ? reject(error) : resolve()); }); } };
 }
 
 export async function runnerProcessTools(workspace) {

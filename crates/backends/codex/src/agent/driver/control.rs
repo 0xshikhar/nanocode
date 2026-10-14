@@ -544,5 +544,7 @@ pub(super) fn handle_idle_command<S>(
 }
 
 pub(super) fn model_change_locked() -> NanocodexError {
-    NanocodexError::InvalidRequest("the model can only be changed between turns".to_owned())
+    NanocodexError::InvalidRequest(
+        "the model is fixed for this thread; start a new thread to use another model".to_owned(),
+    )
 }

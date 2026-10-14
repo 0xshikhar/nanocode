@@ -808,6 +808,9 @@ const hostBridge = Object.freeze({
   preemptCodeTurn(sessionId) {
     return hostSessions.get(sessionId)?.preemptCodeTurn?.(sessionId) ?? 0;
   },
+  settlePreemptCodeTurn(sessionId) {
+    hostSessions.get(sessionId)?.settlePreemptCodeTurn?.(sessionId);
+  },
   beginCodeTurn(sessionId) {
     hostSessions.get(sessionId)?.beginCodeTurn?.(sessionId);
   },

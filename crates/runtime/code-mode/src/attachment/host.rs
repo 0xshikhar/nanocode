@@ -187,6 +187,10 @@ impl RemoteRunner {
         self.inner.state().connection.is_some()
     }
 
+    pub(crate) fn runtime_id(&self) -> Option<Box<str>> {
+        self.inner.state().runtime_id.clone()
+    }
+
     pub(crate) fn connection_status(&self) -> watch::Receiver<bool> {
         self.inner.connected.subscribe()
     }

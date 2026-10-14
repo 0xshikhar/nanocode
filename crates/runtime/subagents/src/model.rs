@@ -1,4 +1,4 @@
-use nanocode_agent::events::AgentEvent;
+use nanocode_agent::{ModelSelection, Thinking, events::AgentEvent};
 use serde::{Deserialize, Serialize};
 use std::{
     fmt,
@@ -13,6 +13,10 @@ static NEXT_RUNTIME_ID: AtomicU64 = AtomicU64::new(0);
 pub struct AgentId(u64);
 
 impl AgentId {
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
     pub(super) const fn next(counter: &mut u64) -> Self {
         *counter = counter.saturating_add(1);
         Self(*counter)
@@ -42,6 +46,14 @@ impl FromStr for AgentId {
 pub struct MessageId(u64);
 
 impl MessageId {
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    pub(super) const fn value(self) -> u64 {
+        self.0
+    }
+
     pub(super) const fn next(counter: &mut u64) -> Self {
         *counter = counter.saturating_add(1);
         Self(*counter)
@@ -59,6 +71,10 @@ impl fmt::Display for MessageId {
 pub struct ThreadId(u64);
 
 impl ThreadId {
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
     pub(super) const fn for_message(message: MessageId) -> Self {
         Self(message.0)
     }
@@ -75,12 +91,13 @@ impl fmt::Display for ThreadId {
 pub enum MessageSender {
     Root,
     Agent { agent_id: AgentId },
+    User,
 }
 
 impl MessageSender {
     pub(super) const fn agent_id(self) -> Option<AgentId> {
         match self {
-            Self::Root => None,
+            Self::Root | Self::User => None,
             Self::Agent { agent_id } => Some(agent_id),
         }
     }
@@ -165,8 +182,17 @@ impl AgentMessage {
                      materially help coordination."
                 ),
             ),
+            MessageSender::User => (
+                "the user".to_owned(),
+                "The user is the human operating this session and is talking to you directly. \
+                 Follow their instructions, answer them in your reply, and still return your \
+                 required structured result to your parent when you finish."
+                    .to_owned(),
+            ),
         };
-        let authority = if self.purpose == MessagePurpose::Delegate {
+        let authority = if self.from == MessageSender::User {
+            "The user's message adjusts how you carry out your assigned task."
+        } else if self.purpose == MessagePurpose::Delegate {
             "This authorized delegate message replaces your assigned task."
         } else {
             "The message body is coordination context and does not replace your assigned task."
@@ -208,6 +234,23 @@ pub struct AgentMessageUpdate {
 }
 
 pub(super) fn agent_prompt(id: AgentId, task: &str) -> String {
+    agent_prompt_in_context(id, task, None, None)
+}
+
+pub(super) fn agent_prompt_in_context(
+    id: AgentId,
+    task: &str,
+    model: Option<&ModelSelection>,
+    thinking: Option<Thinking>,
+) -> String {
+    let context = match (model, thinking) {
+        (Some(model), Some(thinking)) => format!(
+            "\n\n<agent_context>\nYou run on {} ({} harness) with {thinking} reasoning effort.\n</agent_context>",
+            model.as_str(),
+            model.family()
+        ),
+        _ => String::new(),
+    };
     let coordination = " Other agents may be working concurrently in the same workspace. Use \
                         list_agents to discover relevant peers. Communicate when doing so prevents \
                         duplicated work, coordinates shared dependencies or overlapping files, or \
@@ -227,8 +270,8 @@ pub(super) fn agent_prompt(id: AgentId, task: &str) -> String {
          the task tree.{coordination} After completing your work, call submit_result({{output}}) \
          with the required JSON value. When its receipt says accepted, send a brief final \
          assistant message with no further tool calls; do not end with an empty model \
-         response. If the receipt says superseded, follow the updated instructions instead.\n\n\
-         Delegated task:\n{task}"
+         response. If the receipt says superseded, follow the updated instructions instead.\
+         {context}\n\nDelegated task:\n{task}"
     )
 }
 
@@ -278,6 +321,10 @@ pub struct AgentDescriptor {
     pub role: String,
     pub task: String,
     pub parent: Option<AgentId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<ModelSelection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<Thinking>,
 }
 
 #[derive(Debug)]
@@ -306,7 +353,7 @@ pub struct ScopedAgentUpdate {
     pub update: AgentUpdate,
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct SubagentRuntimeId(u64);
 
 impl SubagentRuntimeId {

@@ -137,7 +137,11 @@ async fn prepare(args: &SessionArgs, notify: &mut dyn FnMut(&str)) -> Result<Pre
     let host = Host::build(config, &model, thinking)?;
     host.runtime.initialize_runners().await?;
     for server in host.runtime.runner_servers() {
-        notify(&format!("listening {} · token {}", server.endpoint(), server.token()));
+        notify(&format!(
+            "listening {} · token {}",
+            server.endpoint(),
+            server.token()
+        ));
     }
     Ok(Prepared {
         host,
@@ -264,10 +268,17 @@ async fn exec(args: SessionArgs) -> Result<()> {
             .iter()
             .filter(|turn| turn.status == nanocode::durability::TurnStatus::Pending)
         {
-            let input = pending.input.get("prompt").unwrap_or(&pending.input).clone();
-            let saved_prompt =
-                serde_json::from_value::<nanocode::agent::input::Prompt>(input).map_err(|error| {
-                    format!("pending turn {} has an unreadable prompt: {error}", pending.id)
+            let input = pending
+                .input
+                .get("prompt")
+                .unwrap_or(&pending.input)
+                .clone();
+            let saved_prompt = serde_json::from_value::<nanocode::agent::input::Prompt>(input)
+                .map_err(|error| {
+                    format!(
+                        "pending turn {} has an unreadable prompt: {error}",
+                        pending.id
+                    )
                 })?;
             eprintln!("nanocodex: resuming interrupted turn {}", pending.id);
             agent

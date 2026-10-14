@@ -143,6 +143,10 @@ pub trait ClaudeExecutionPolicy: Send + Sync {
     fn shutdown(&self) -> PolicyFuture<'_, ()>;
     fn checkpoint(&self, state: Value) -> PolicyFuture<'_, ()>;
 
+    fn developer_notices(&self, _id: String) -> PolicyFuture<'_, Vec<(String, String)>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
     fn initial_checkpoint(
         &self,
         _state: Value,

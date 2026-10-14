@@ -511,6 +511,12 @@ impl EmbeddedToolRuntimeControl {
         }
     }
 
+    pub fn settle_preempt(&self) {
+        if let (Some(host), Some(session_id)) = (&self.host, &self.session_id) {
+            host.settle_preempt(session_id);
+        }
+    }
+
     pub async fn cancel_turn(&self) {
         if let (Some(host), Some(session_id)) = (&self.host, &self.session_id)
             && let Err(error) = host.cancel_turn(session_id).await

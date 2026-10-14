@@ -22,6 +22,8 @@ on the builder, or call `runtime.connect_runner(...)` on a live runtime. Use
 `runtime.listen_for_runners(...)` at runtime to accept multiple incoming runners.
 Incoming catalogs supply their names and workspaces; names must be unique among
 active connections. An omitted listener token is generated from 256 random bits.
+Explicit disconnect revokes that executor's runtime identity and stops automatic
+reconnection. A fresh runner process may attach again under the same name.
 `RunnerHandle` exposes status subscriptions and disconnect; `RunnerServer` exposes
 its endpoint, token, and stop operation. `list_runners` and `runner_events` expose
 runtime-wide status. The pool is shared by all built-in agents and subagents.
@@ -33,6 +35,12 @@ mount remains reserved; workspace calls record known mount names alongside durab
 process routes. Resuming without the runner produces an unavailable error instead
 of interpreting its logical root as a local path. Replacement is explicit and
 remains unavailable while its runner is disconnected.
+
+A static Code Mode tool named `runners` lets the model list, connect, listen,
+disconnect, or stop listening when requested. List and connect results omit
+credentials; listen returns the credential required to start an incoming runner.
+Hosts can disable this tool with `NanocodexBuilder::runner_management(false)` or
+`RunnerPool::with_model_management(false)` before constructing their tools.
 
 When composing Code Mode directly, install a shared pool with
 `Tools::with_runner_pool` or `ToolsBuilder::runner_pool`. Existing fixed-catalog

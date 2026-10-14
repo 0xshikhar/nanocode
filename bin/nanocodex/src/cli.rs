@@ -142,7 +142,10 @@ impl SessionArgs {
                 runner_connect: self.remote.runner_connect.or(root.remote.runner_connect),
                 runner_host: self.remote.runner_host.or(root.remote.runner_host),
                 runner_token: self.remote.runner_token.or(root.remote.runner_token),
-                runner_workspace: self.remote.runner_workspace.or(root.remote.runner_workspace),
+                runner_workspace: self
+                    .remote
+                    .runner_workspace
+                    .or(root.remote.runner_workspace),
                 runner_call_timeout_ms: self
                     .remote
                     .runner_call_timeout_ms

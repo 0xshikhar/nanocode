@@ -670,10 +670,16 @@ pub(super) async fn build_claude(
     if factory.is_none() {
         builder = builder.tools_factory(|agent| {
             let preempt_session = agent.session_id().to_owned();
-            Ok(ClaudeTools::new().code_turn_preempt(move || {
-                super::host_preempt_code_turn(&preempt_session);
-                async {}
-            }))
+            let settle_session = preempt_session.clone();
+            Ok(ClaudeTools::new()
+                .code_turn_preempt(move || {
+                    super::host_preempt_code_turn(&preempt_session);
+                    async {}
+                })
+                .code_turn_settle(move || {
+                    super::host_settle_preempt_code_turn(&settle_session);
+                    async {}
+                }))
         });
     }
     if let Some(factory) = factory {
@@ -702,17 +708,29 @@ pub(super) async fn build_claude(
                     agent,
                     registry.clone(),
                 )?;
-                let native = native.code_turn_preempt(move || {
-                    super::host_preempt_code_turn(&preempt_session);
-                    async {}
-                });
+                let settle_session = preempt_session.clone();
+                let native = native
+                    .code_turn_preempt(move || {
+                        super::host_preempt_code_turn(&preempt_session);
+                        async {}
+                    })
+                    .code_turn_settle(move || {
+                        super::host_settle_preempt_code_turn(&settle_session);
+                        async {}
+                    });
                 if direct {
                     return Ok(native);
                 }
-                let mut tools = ClaudeTools::new().code_turn_preempt(move || {
-                    super::host_preempt_code_turn(&code_session);
-                    async {}
-                });
+                let code_settle_session = code_session.clone();
+                let mut tools = ClaudeTools::new()
+                    .code_turn_preempt(move || {
+                        super::host_preempt_code_turn(&code_session);
+                        async {}
+                    })
+                    .code_turn_settle(move || {
+                        super::host_settle_preempt_code_turn(&code_settle_session);
+                        async {}
+                    });
                 for definition in &code_definitions {
                     let name = definition.name.clone();
                     let native = native.clone();
