@@ -5,7 +5,6 @@ use std::{future::Future, pin::Pin};
 pub struct OwnerId(String);
 
 impl OwnerId {
-
     pub fn new() -> Self {
         Self(uuid::Uuid::now_v7().to_string())
     }
@@ -28,7 +27,6 @@ pub struct OwnerToken {
 }
 
 impl OwnerToken {
-
     pub const fn new(owner_id: OwnerId, fence: u64) -> Self {
         Self { owner_id, fence }
     }
@@ -44,7 +42,6 @@ impl OwnerToken {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct StoredState {
-
     pub revision: u64,
 
     pub payload: Option<String>,
@@ -52,7 +49,6 @@ pub struct StoredState {
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct OwnedState {
-
     pub owner: OwnerToken,
 
     pub state: StoredState,
@@ -60,17 +56,11 @@ pub struct OwnedState {
 
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum StoreError {
-
     #[error("durability state owner was fenced")]
     Fenced,
 
     #[error("durability state revision conflict: expected {expected}, found {actual}")]
-    Conflict {
-
-        expected: u64,
-
-        actual: u64,
-    },
+    Conflict { expected: u64, actual: u64 },
 
     #[error("durability store operation was not committed: {0}")]
     NotCommitted(String),
@@ -87,7 +77,6 @@ pub type StoreFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct StoreRecord {
-
     pub key: String,
 
     pub value: String,
@@ -99,7 +88,6 @@ fn read_only_unsupported() -> StoreError {
 
 #[cfg(not(target_family = "wasm"))]
 pub trait StateStore: Send {
-
     fn read_record<'a>(
         &'a mut self,
         state_id: &'a str,
@@ -152,7 +140,6 @@ pub trait StateStore: Send {
 
 #[cfg(target_family = "wasm")]
 pub trait StateStore {
-
     fn read_record<'a>(
         &'a mut self,
         state_id: &'a str,

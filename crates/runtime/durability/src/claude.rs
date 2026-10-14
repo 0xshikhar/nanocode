@@ -35,7 +35,6 @@ impl DurableAgentExt for ClaudeBuilder {
             None => {
                 let imported = builder.configured_checkpoint()?;
                 if let Some(checkpoint) = &imported {
-
                     owner
                         .commit_checkpoint(EncodedPayload::encode(checkpoint).map_err(agent_error)?)
                         .await
@@ -121,7 +120,6 @@ fn branch_child(
     child: &nanocode_agent::SessionInfo,
 ) -> AgentResult<Option<Arc<dyn ClaudeExecutionPolicy>>> {
     if branches.record.is_none() {
-
         return Ok(None);
     }
     Ok(Some(Arc::new(LazyClaudeExecution::new(
@@ -495,7 +493,6 @@ impl ClaudeExecutionPolicy for ClaudeExecution {
 
     fn cancel_unstarted(&self, id: String) -> PolicyFuture<'_, bool> {
         Box::pin(async move {
-
             match self.owner.cancel(id, None).await {
                 Ok(()) => Ok(true),
                 Err(crate::Error::CancellationCheckpointRequired { .. }) => Ok(false),

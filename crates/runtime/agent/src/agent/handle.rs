@@ -190,18 +190,18 @@ impl AgentHandle {
         host_context: Option<Arc<str>>,
     ) -> Result<(Nanocodex, AgentEvents)> {
         self.native.ensure_available(self.clone()).await?;
-        let restored = if checkpoint.family() == self.harness_family() {
+        let restored = if let Some(factory) = &self.factory {
+            factory
+                .restore(self.clone(), checkpoint, host_context)
+                .await
+        } else if checkpoint.family() == self.harness_family() {
             self.native
                 .restore(self.clone(), checkpoint, host_context)
                 .await
         } else {
-            self.factory
-                .as_ref()
-                .ok_or(NanocodexError::UnsupportedCapability {
-                    capability: "cross_family_restore",
-                })?
-                .restore(self.clone(), checkpoint, host_context)
-                .await
+            return Err(NanocodexError::UnsupportedCapability {
+                capability: "cross_family_restore",
+            });
         };
         created(restored).await
     }

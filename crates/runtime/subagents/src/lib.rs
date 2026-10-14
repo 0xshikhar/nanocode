@@ -35,5 +35,4 @@ pub const DEFAULT_MAX_RESIDENT_SUBAGENTS: usize = 16;
 
 pub const DURABLE_MAX_RESIDENT_SUBAGENTS: usize = 2;
 
-#[cfg(feature = "claude")]
 pub use tools::install_claude_tools;

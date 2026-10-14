@@ -11,40 +11,31 @@
 "keywords" = { "workspace" = true }
 "categories" = { "workspace" = true }
 "description" = "Codex backend: Responses client, agent driver, prompts and tools"
-"metadata" = { "docs" = { "rs" = { "all-features" = true, "rustdoc-args" = ["-D", "warnings"] } } }
-
-["features"]
-"default" = ["openai", "client", "native"]
-"openai" = [ "dep:chrono", "dep:iana-time-zone", "nanocode-code-mode/code-mode", "dep:sha2", "dep:tower", "dep:web-time", "dep:uuid", "dep:wasm-bindgen-futures", "client"]
-"client" = ["dep:tokio-tungstenite", "events", "native-tls", "dep:getrandom", "dep:http", "dep:httpdate", "dep:rustls", "dep:sha2", "dep:tower", "dep:url", "dep:uuid"]
-"native-tls" = ["dep:rustls", "dep:rustls-native-certs", "dep:rustls-platform-verifier"]
-"events" = ["dep:web-time"]
-"realtime" = ["client", "dep:opusic-c", "dep:webrtc"]
-"native" = ["client"]
+"metadata" = { "docs" = { "rs" = {  "rustdoc-args" = ["-D", "warnings"] } } }
 
 ["dependencies"]
 "nanocode-home" = { "workspace" = true }
-"chrono" = { "workspace" = true, "optional" = true }
+"chrono" = { "workspace" = true  }
 "futures-util" = { "workspace" = true }
-"iana-time-zone" = { "workspace" = true, "optional" = true }
-"nanocode-code-mode" = { "workspace" = true, "optional" = true }
+"iana-time-zone" = { "workspace" = true  }
+"nanocode-code-mode" = { "workspace" = true  }
 "serde" = { "workspace" = true }
 "serde_json" = { "workspace" = true }
-"sha2" = { "workspace" = true, "optional" = true }
+"sha2" = { "workspace" = true  }
 "thiserror" = { "workspace" = true }
 "tokio" = { "workspace" = true, "features" = ["macros", "sync", "time"] }
-"tower" = { "workspace" = true, "optional" = true }
+"tower" = { "workspace" = true  }
 "tracing" = { "workspace" = true }
-"web-time" = { "workspace" = true, "optional" = true }
-"uuid" = { "workspace" = true, "optional" = true }
+"web-time" = { "workspace" = true  }
+"uuid" = { "workspace" = true  }
 "nanocode-media" = { "workspace" = true }
 "nanocode-types" = { "workspace" = true }
 "sha1" = { "workspace" = true }
 "image" = { "workspace" = true }
 "async-trait" = { "workspace" = true }
 "base64" = { "workspace" = true }
-"http" = { "workspace" = true, "optional" = true }
-"httpdate" = { "version" = "1.0.3", "optional" = true }
+"http" = { "workspace" = true  }
+"httpdate" = { "version" = "1.0.3"  }
 "smallvec" = { "workspace" = true }
 "reqwest" = { "workspace" = true }
 "nanocode-tools" = { "workspace" = true }
@@ -57,26 +48,26 @@
 
 ["target"."cfg(not(target_family = \"wasm\"))"."dependencies"]
 "tokio" = { "workspace" = true, "features" = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time", "rt"] }
-"getrandom" = { "workspace" = true, "optional" = true }
-"reqwest" = { "workspace" = true, "optional" = true }
-"rustls" = { "workspace" = true, "features" = ["std"], "optional" = true }
-"rustls-native-certs" = { "workspace" = true, "optional" = true }
-"tokio-tungstenite" = { "workspace" = true, "optional" = true }
-"url" = { "workspace" = true, "optional" = true }
-"opusic-c" = { "workspace" = true, "optional" = true }
-"webrtc" = { "workspace" = true, "optional" = true }
+"getrandom" = { "workspace" = true  }
+"reqwest" = { "workspace" = true  }
+"rustls" = { "workspace" = true, "features" = ["std"]  }
+"rustls-native-certs" = { "workspace" = true  }
+"tokio-tungstenite" = { "workspace" = true  }
+"url" = { "workspace" = true  }
+"opusic-c" = { "workspace" = true  }
+"webrtc" = { "workspace" = true  }
 "nanocode-tls" = { "workspace" = true }
 "async-trait" = { "workspace" = true }
 
 ["target"."cfg(all(target_family = \"wasm\", target_os = \"unknown\"))"]
 
 ["target"."cfg(all(target_family = \"wasm\", target_os = \"unknown\"))"."dependencies"]
-"wasm-bindgen-futures" = { "workspace" = true, "optional" = true }
+"wasm-bindgen-futures" = { "workspace" = true  }
 
 ["target"."cfg(target_os = \"macos\")"]
 
 ["target"."cfg(target_os = \"macos\")"."dependencies"]
-"rustls-platform-verifier" = { "version" = "0.7.0", "optional" = true }
+"rustls-platform-verifier" = { "version" = "0.7.0"  }
 
 ["lints"]
 "workspace" = true

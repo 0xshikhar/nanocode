@@ -1,5 +1,4 @@
 #![deny(rustdoc::broken_intra_doc_links)]
-#![cfg_attr(docsrs, feature(doc_cfg))]
 
 mod agent;
 mod branch;
@@ -11,31 +10,26 @@ pub use catalog::{
     BranchPoint, LIST_LIMIT, SessionStore, SessionSummary, StoredSession, StoredTurn,
     TranscriptItem, TurnStatus,
 };
-#[cfg(feature = "claude")]
+
 mod claude;
 mod context;
 mod memory;
-#[cfg(all(feature = "postgres", not(target_family = "wasm")))]
+#[cfg(not(target_family = "wasm"))]
 mod postgres;
 mod session;
 mod shared_store;
-#[cfg(all(feature = "sqlite", not(target_family = "wasm")))]
+#[cfg(not(target_family = "wasm"))]
 mod sqlite;
 mod state;
 mod store;
 
 pub use memory::MemoryStore;
-#[cfg(all(feature = "postgres", not(target_family = "wasm")))]
-#[cfg_attr(
-    docsrs,
-    doc(cfg(all(feature = "postgres", not(target_family = "wasm"))))
-)]
+#[cfg(not(target_family = "wasm"))]
 pub use postgres::PostgresStore;
 pub use session::{
     Admission, AutomaticAdmission, BeginStep, DurableOwner, DurableSession, StoredSteer,
 };
-#[cfg(all(feature = "sqlite", not(target_family = "wasm")))]
-#[cfg_attr(docsrs, doc(cfg(all(feature = "sqlite", not(target_family = "wasm")))))]
+#[cfg(not(target_family = "wasm"))]
 pub use sqlite::SqliteStore;
 pub use state::{
     DurableState, EncodedPayload, IdentifiedSteerReceipt, OperationState, OperationStatus,
@@ -49,28 +43,20 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-
     #[error("steering queue is full")]
     SteerQueueFull,
 
     #[error("steering message `{message_id}` already has different input")]
-    SteerConflict {
-
-        message_id: String,
-    },
+    SteerConflict { message_id: String },
 
     #[error("steering message `{message_id}` was withdrawn")]
-    SteerWithdrawn {
-
-        message_id: String,
-    },
+    SteerWithdrawn { message_id: String },
 
     #[error(transparent)]
     Store(#[from] StoreError),
 
     #[error("durability state at revision {revision} is invalid: {source}")]
     Decode {
-
         revision: u64,
 
         #[source]
@@ -81,14 +67,10 @@ pub enum Error {
     InvalidState(String),
 
     #[error("durable operation `{operation_id}` already has different input")]
-    OperationConflict {
-
-        operation_id: String,
-    },
+    OperationConflict { operation_id: String },
 
     #[error("durable operation `{operation_id}` is blocked by unfinished operation `{pending_id}`")]
     OperationBlocked {
-
         operation_id: String,
 
         pending_id: String,
@@ -96,23 +78,16 @@ pub enum Error {
 
     #[error("durable step `{step_id}` in operation `{operation_id}` was not started")]
     StepNotStarted {
-
         operation_id: String,
 
         step_id: String,
     },
 
     #[error("durable operation `{operation_id}` is already terminal")]
-    OperationTerminal {
-
-        operation_id: String,
-    },
+    OperationTerminal { operation_id: String },
 
     #[error("durable operation `{operation_id}` is already active")]
-    OperationActive {
-
-        operation_id: String,
-    },
+    OperationActive { operation_id: String },
 
     #[error("durability state has a live authoritative model owner")]
     ModelOwnerActive,
@@ -121,28 +96,16 @@ pub enum Error {
     ModelOwnerFenced,
 
     #[error("durable operation `{operation_id}` is not claimed by this owner")]
-    OperationNotClaimed {
-
-        operation_id: String,
-    },
+    OperationNotClaimed { operation_id: String },
 
     #[error("durable operation `{operation_id}` has not begun an attempt")]
-    AttemptNotStarted {
-
-        operation_id: String,
-    },
+    AttemptNotStarted { operation_id: String },
 
     #[error("durable operation `{operation_id}` already has an active attempt")]
-    AttemptActive {
-
-        operation_id: String,
-    },
+    AttemptActive { operation_id: String },
 
     #[error("active durable operation `{operation_id}` cancellation requires a checkpoint")]
-    CancellationCheckpointRequired {
-
-        operation_id: String,
-    },
+    CancellationCheckpointRequired { operation_id: String },
 
     #[error("durability requires an active Tokio runtime")]
     RuntimeUnavailable,
@@ -151,10 +114,7 @@ pub enum Error {
     DriverStopped,
 
     #[error("unknown session `{session_id}`")]
-    SessionNotFound {
-
-        session_id: String,
-    },
+    SessionNotFound { session_id: String },
 
     #[error("durability payload is invalid JSON: {0}")]
     InvalidPayload(#[from] serde_json::Error),

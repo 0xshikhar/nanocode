@@ -255,7 +255,6 @@ impl<F> NanocodexBuilder<F> {
     }
 
     #[cfg(not(target_family = "wasm"))]
-    #[cfg_attr(docsrs, doc(cfg(not(target_family = "wasm"))))]
     #[must_use]
     pub fn codex_home(mut self, codex_home: impl Into<PathBuf>) -> Self {
         self.codex.context.set_codex_home(codex_home.into());
@@ -263,7 +262,6 @@ impl<F> NanocodexBuilder<F> {
     }
 
     #[cfg(not(target_family = "wasm"))]
-    #[cfg_attr(docsrs, doc(cfg(not(target_family = "wasm"))))]
     #[must_use]
     pub fn claude_home(mut self, claude_home: impl Into<PathBuf>) -> Self {
         self.codex.context.set_claude_home(claude_home.into());

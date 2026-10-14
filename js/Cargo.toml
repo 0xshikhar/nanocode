@@ -27,7 +27,7 @@ js-sys.workspace = true
 nanocode.workspace = true
 nanocode-backend-claude.workspace = true
 reqwest.workspace = true
-nanocode-subagents = { workspace = true, features = ["claude"] }
+nanocode-subagents = { workspace = true  }
 nanocode-voice-protocol.workspace = true
 serde.workspace = true
 serde_json.workspace = true

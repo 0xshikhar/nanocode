@@ -11,7 +11,6 @@ pub struct SqliteStore {
 }
 
 impl SqliteStore {
-
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
         let connection = Connection::open(path).map_err(backend)?;
         Self::from_connection(connection)

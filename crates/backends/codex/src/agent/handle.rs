@@ -1,13 +1,12 @@
 use super::*;
 use nanocode_agent::backend::{created, created_batch};
-#[cfg(feature = "openai")]
+
 pub(super) struct OpenAiAgentFactory {
     pub(super) commands: mpsc::WeakSender<Command>,
     pub(super) shutdown: DriverShutdown,
     pub(super) conversation_id: Arc<str>,
 }
 
-#[cfg(feature = "openai")]
 impl super::backend::AgentFactory for OpenAiAgentFactory {
     fn ensure_available(&self, _parent: AgentHandle) -> super::backend::BackendFuture<Result<()>> {
         let available = self.shutdown.is_running()
@@ -124,7 +123,6 @@ impl super::backend::AgentFactory for OpenAiAgentFactory {
     }
 }
 
-#[cfg(feature = "openai")]
 pub(super) async fn request_fork(
     commands: &mpsc::Sender<Command>,
     shutdown: &DriverShutdown,
@@ -151,7 +149,6 @@ pub(super) async fn request_fork(
     .await
 }
 
-#[cfg(feature = "openai")]
 async fn request_spawn_with_host_context(
     commands: &mpsc::Sender<Command>,
     shutdown: &DriverShutdown,
@@ -167,7 +164,6 @@ async fn request_spawn_with_host_context(
     .await
 }
 
-#[cfg(feature = "openai")]
 async fn request_spawn_many(
     commands: &mpsc::Sender<Command>,
     shutdown: &DriverShutdown,
@@ -184,7 +180,6 @@ async fn request_spawn_many(
     .await
 }
 
-#[cfg(feature = "openai")]
 pub(super) async fn request_command<T>(
     commands: &mpsc::Sender<Command>,
     shutdown: &DriverShutdown,

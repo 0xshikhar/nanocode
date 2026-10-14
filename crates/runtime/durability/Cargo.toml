@@ -15,19 +15,12 @@ categories.workspace = true
 description = "Portable durable execution state and stores for Nanocodex"
 
 [package.metadata.docs.rs]
-all-features = true
 rustdoc-args = ["-D", "warnings"]
-
-[features]
-default = []
-claude = ["dep:nanocode-backend-claude"]
-sqlite = ["dep:rusqlite"]
-postgres = ["dep:tokio-postgres"]
 
 [dependencies]
 nanocode-agent.workspace = true
 nanocode-backend-codex.workspace = true
-nanocode-backend-claude = { workspace = true, optional = true }
+nanocode-backend-claude = { workspace = true  }
 sha2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -41,8 +34,8 @@ wasm-bindgen-futures.workspace = true
 web-time.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-rusqlite = { workspace = true, optional = true }
-tokio-postgres = { workspace = true, optional = true }
+rusqlite = { workspace = true  }
+tokio-postgres = { workspace = true  }
 
 [lints]
 workspace = true

@@ -1,9 +1,8 @@
 use super::*;
 #[derive(Clone, Copy, Eq, PartialEq)]
-#[cfg(feature = "openai")]
+
 pub(super) struct TurnKey(pub(super) u64);
 
-#[cfg(feature = "openai")]
 pub(super) enum Command {
     Prompt {
         key: TurnKey,
@@ -94,7 +93,6 @@ pub(super) enum Command {
     Shutdown,
 }
 
-#[cfg(feature = "openai")]
 pub(super) enum ForkFrom {
     Latest,
 
@@ -103,7 +101,6 @@ pub(super) enum ForkFrom {
     Snapshot(Box<SessionSnapshot>),
 }
 
-#[cfg(feature = "openai")]
 #[derive(Clone)]
 pub(super) enum ExecutionOperation {
     Caller(String),
@@ -112,7 +109,6 @@ pub(super) enum ExecutionOperation {
     Recovered(String),
 }
 
-#[cfg(feature = "openai")]
 impl ExecutionOperation {
     pub(super) fn into_id(self) -> String {
         match self {
@@ -137,13 +133,11 @@ impl ExecutionOperation {
     }
 }
 
-#[cfg(feature = "openai")]
 pub(super) enum PromptRouteKind {
     Started { request_id: Option<String> },
     Steered,
 }
 
-#[cfg(feature = "openai")]
 pub(super) enum QueuedTurn {
     Pending {
         key: TurnKey,

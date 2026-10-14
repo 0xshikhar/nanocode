@@ -20,24 +20,13 @@ const RELEASE_BURST_LIMIT: usize = 32;
 
 #[derive(Clone, Debug)]
 pub enum Admission<C = EncodedPayload, O = EncodedPayload> {
-
     Accepted,
 
     Pending,
 
-    Completed {
+    Completed { checkpoint: C, output: O },
 
-        checkpoint: C,
-
-        output: O,
-    },
-
-    Failed {
-
-        checkpoint: C,
-
-        error: String,
-    },
+    Failed { checkpoint: C, error: String },
 
     Cancelled,
 }
@@ -49,7 +38,6 @@ pub struct AutomaticAdmission<C = EncodedPayload, O = EncodedPayload> {
 }
 
 impl<C, O> AutomaticAdmission<C, O> {
-
     #[must_use]
     pub fn operation_id(&self) -> &str {
         &self.operation_id
@@ -63,7 +51,6 @@ impl<C, O> AutomaticAdmission<C, O> {
 
 #[derive(Clone, Debug)]
 pub enum BeginStep<O = EncodedPayload> {
-
     Execute,
 
     Replay(O),
@@ -122,7 +109,6 @@ enum StoredBeginStep {
 
 #[derive(Clone)]
 pub struct StoredSteer {
-
     pub index: u32,
 
     pub state: SteerState,
@@ -1500,7 +1486,6 @@ impl Drop for DurableSession {
 }
 
 impl DurableSession {
-
     pub async fn open<S>(store: S, state_id: impl Into<String>) -> Result<Self>
     where
         S: StateStore + 'static,
@@ -2040,7 +2025,6 @@ pub struct DurableOwner {
 }
 
 impl DurableOwner {
-
     pub async fn load_payloads(
         &self,
         payloads: Vec<EncodedPayload>,

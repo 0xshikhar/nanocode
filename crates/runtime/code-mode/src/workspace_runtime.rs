@@ -40,7 +40,6 @@ impl WorkspaceToolRuntime {
         Self::with_optional_view_image_wire_limit(workspace, None, Arc::new(session.os_variables()))
     }
 
-    #[cfg(feature = "attachment")]
     pub(crate) fn unbound(workspace: PathBuf) -> Self {
         Self::with_optional_view_image_wire_limit(workspace, None, Arc::default())
     }

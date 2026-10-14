@@ -22,7 +22,7 @@ pub struct HarnessRequest {
 
     pub checkpoint: Option<SessionCheckpoint>,
 
-    #[cfg(all(feature = "durability", not(target_family = "wasm")))]
+    #[cfg(not(target_family = "wasm"))]
     pub durable_state: Option<crate::durability::DurableSession>,
 
     pub spawn_factory: Arc<dyn AgentFactory>,
@@ -38,12 +38,12 @@ pub struct HarnessBuilder {
     recipes: HashMap<HarnessFamily, Recipe>,
     defaults: HashMap<HarnessFamily, ModelSelection>,
     thinking_defaults: HashMap<HarnessFamily, Thinking>,
-    #[cfg(feature = "durability")]
+
     recovery_store: Option<crate::durability::SessionStore>,
 }
 
 impl HarnessBuilder {
-    #[cfg(all(feature = "durability", not(target_family = "wasm")))]
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn recovery_store(mut self, store: crate::durability::SessionStore) -> Self {
         self.recovery_store = Some(store);
         self
@@ -94,7 +94,7 @@ impl HarnessBuilder {
                 recipes: self.recipes,
                 defaults: self.defaults,
                 thinking_defaults: self.thinking_defaults,
-                #[cfg(feature = "durability")]
+
                 recovery_store: self.recovery_store,
                 #[cfg(not(target_family = "wasm"))]
                 children: None,
@@ -112,7 +112,7 @@ impl HarnessBuilder {
                 recipes: self.recipes,
                 defaults: self.defaults,
                 thinking_defaults: self.thinking_defaults,
-                #[cfg(feature = "durability")]
+
                 recovery_store: self.recovery_store,
                 children: Some(children),
             }),
@@ -174,7 +174,7 @@ impl Harness {
             .await
     }
 
-    #[cfg(all(feature = "durability", not(target_family = "wasm")))]
+    #[cfg(not(target_family = "wasm"))]
     pub async fn open(
         &self,
         store: &crate::durability::SessionStore,
@@ -219,14 +219,14 @@ impl Harness {
 #[derive(Default)]
 struct Reopen {
     checkpoint: Option<SessionCheckpoint>,
-    #[cfg(all(feature = "durability", not(target_family = "wasm")))]
+    #[cfg(not(target_family = "wasm"))]
     durable_state: Option<crate::durability::DurableSession>,
 }
 impl Reopen {
     fn checkpoint(checkpoint: SessionCheckpoint) -> Self {
         Self {
             checkpoint: Some(checkpoint),
-            #[cfg(all(feature = "durability", not(target_family = "wasm")))]
+            #[cfg(not(target_family = "wasm"))]
             durable_state: None,
         }
     }
@@ -236,7 +236,7 @@ struct Router {
     recipes: HashMap<HarnessFamily, Recipe>,
     defaults: HashMap<HarnessFamily, ModelSelection>,
     thinking_defaults: HashMap<HarnessFamily, Thinking>,
-    #[cfg(feature = "durability")]
+
     recovery_store: Option<crate::durability::SessionStore>,
 
     #[cfg(not(target_family = "wasm"))]
@@ -348,7 +348,7 @@ impl Router {
             parent,
             host_context,
             checkpoint: reopen.checkpoint,
-            #[cfg(all(feature = "durability", not(target_family = "wasm")))]
+            #[cfg(not(target_family = "wasm"))]
             durable_state: reopen.durable_state,
             spawn_factory,
         })
@@ -449,7 +449,7 @@ impl AgentFactory for RoutedFactory {
                 .tracked_one(async move {
                     parent.ensure_available().await?;
                     checkpoint.validate()?;
-                    #[cfg(feature = "durability")]
+
                     let checkpoint = match &inner.recovery_store {
                         Some(store) => {
                             store
@@ -486,7 +486,7 @@ impl AgentFactory for RoutedFactory {
     }
 }
 
-#[cfg(all(feature = "durability", not(target_family = "wasm")))]
+#[cfg(not(target_family = "wasm"))]
 fn catalog_error(error: crate::durability::Error) -> NanocodexError {
     match error {
         crate::durability::Error::SessionNotFound { .. } => {

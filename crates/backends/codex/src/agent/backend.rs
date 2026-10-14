@@ -3,7 +3,6 @@ use super::*;
 pub use nanocode_agent::backend::AgentFactory;
 pub use nanocode_agent::backend::*;
 
-#[cfg(feature = "openai")]
 pub(super) fn resolve_fork_point(
     point: crate::session::ForkPoint,
     conversation_id: &str,
@@ -41,7 +40,6 @@ pub(super) fn resolve_fork_point(
     }
 }
 
-#[cfg(feature = "openai")]
 pub(super) struct LocalLifecycle {
     pub(super) child_handle: AgentHandle,
     pub(super) commands: mpsc::Sender<Command>,
@@ -52,7 +50,6 @@ pub(super) struct LocalLifecycle {
     pub(super) initial_ready: Arc<std::sync::Mutex<Option<oneshot::Receiver<Result<()>>>>>,
 }
 
-#[cfg(feature = "openai")]
 const CODEX_CAPABILITIES: Capabilities = {
     let mut capabilities = Capabilities::NONE;
     capabilities.checkpoint = true;
@@ -73,7 +70,6 @@ const CODEX_CAPABILITIES: Capabilities = {
     capabilities
 };
 
-#[cfg(feature = "openai")]
 impl LifecycleBackend for LocalLifecycle {
     fn harness_family(&self) -> crate::HarnessFamily {
         crate::HarnessFamily::Codex

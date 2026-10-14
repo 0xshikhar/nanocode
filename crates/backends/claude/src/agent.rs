@@ -164,7 +164,7 @@ impl std::fmt::Debug for ClaudeToolProgress {
         formatter.write_str("ClaudeToolProgress")
     }
 }
-#[cfg(all(feature = "tools", not(target_family = "wasm")))]
+#[cfg(not(target_family = "wasm"))]
 impl ClaudeToolInvocation {
     #[must_use]
     pub fn session_environment(&self) -> crate::tools::SessionEnvironment {
@@ -198,14 +198,14 @@ pub struct ClaudeTools {
     custom_tool_search: bool,
     adapter_cleanup: Vec<ToolCleanup>,
     adapter_shutdown: Vec<ToolCleanup>,
-    #[cfg(all(feature = "tools", not(target_family = "wasm")))]
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) shared_catalog: Option<(nanocode_code_mode::Tools, std::path::PathBuf, AgentHandle)>,
 }
 impl nanocode_tools::ToolCollection for ClaudeTools {
     type Error = NanocodexError;
 
     fn add_shared_tool(mut self, tool: Arc<dyn nanocode_tools::Tool>) -> Result<Self> {
-        #[cfg(all(feature = "tools", not(target_family = "wasm")))]
+        #[cfg(not(target_family = "wasm"))]
         if let Some((catalog, workspace, handle)) = self.shared_catalog.take() {
             let catalog = catalog.add_shared_tool(tool)?;
             let replacement = crate::claude_tools::install(&catalog, workspace, &handle)?;
@@ -489,7 +489,7 @@ pub struct ClaudeBuilder {
     restored: Option<Snapshot>,
     lineage: Option<Lineage>,
     conversation_id: Option<String>,
-    #[cfg(all(feature = "tools", not(target_family = "wasm")))]
+    #[cfg(not(target_family = "wasm"))]
     task_board: Option<Arc<crate::tools::tasks::ClaudeTasks>>,
 }
 impl ClaudeBuilder {
@@ -534,7 +534,7 @@ impl ClaudeBuilder {
             restored: None,
             lineage: None,
             conversation_id: None,
-            #[cfg(all(feature = "tools", not(target_family = "wasm")))]
+            #[cfg(not(target_family = "wasm"))]
             task_board: None,
         }
     }
@@ -889,7 +889,7 @@ impl ClaudeBuilder {
         self
     }
 
-    #[cfg(all(feature = "tools", not(target_family = "wasm")))]
+    #[cfg(not(target_family = "wasm"))]
     pub fn host_tools<H: crate::tools::host::ClaudeHost + 'static>(
         mut self,
         host: Arc<crate::tools::host::ClaudeHostTools<H>>,
@@ -918,7 +918,7 @@ impl ClaudeBuilder {
         self
     }
 
-    #[cfg(all(feature = "tools", not(target_family = "wasm")))]
+    #[cfg(not(target_family = "wasm"))]
     pub fn workspace_files(mut self, files: Arc<crate::tools::ClaudeWorkspaceFiles>) -> Self {
         for schema in crate::tools::ClaudeWorkspaceFiles::definitions() {
             let definition: ToolDefinition = serde_json::from_value(schema)
@@ -941,7 +941,7 @@ impl ClaudeBuilder {
         self
     }
 
-    #[cfg(all(feature = "tools", not(target_family = "wasm")))]
+    #[cfg(not(target_family = "wasm"))]
     pub fn tasks(mut self, tasks: Arc<crate::tools::tasks::ClaudeTasks>) -> Self {
         self.task_board = Some(tasks.clone());
         for schema in crate::tools::tasks::ClaudeTasks::definitions() {
@@ -958,7 +958,7 @@ impl ClaudeBuilder {
         self
     }
 
-    #[cfg(all(feature = "tools", not(target_family = "wasm")))]
+    #[cfg(not(target_family = "wasm"))]
     pub fn notebook(mut self, notebook: Arc<crate::tools::notebook::ClaudeNotebook>) -> Self {
         for schema in crate::tools::notebook::ClaudeNotebook::definitions() {
             let definition: ToolDefinition = serde_json::from_value(schema)
@@ -974,7 +974,7 @@ impl ClaudeBuilder {
         self
     }
 
-    #[cfg(all(feature = "tools", not(target_family = "wasm")))]
+    #[cfg(not(target_family = "wasm"))]
     pub fn sandbox_bash<E>(mut self, bash: Arc<crate::tools::bash::ClaudeBash<E>>) -> Self
     where
         E: crate::tools::bash::SandboxBashExecutor + 'static,
@@ -997,7 +997,7 @@ impl ClaudeBuilder {
         self
     }
 
-    #[cfg(all(feature = "tools", not(target_family = "wasm")))]
+    #[cfg(not(target_family = "wasm"))]
     pub fn approved_web<P>(mut self, web: Arc<crate::tools::web::ClaudeWeb<P>>) -> Self
     where
         P: crate::tools::web::ApprovedWebProvider + 'static,
@@ -1016,7 +1016,7 @@ impl ClaudeBuilder {
         self
     }
 
-    #[cfg(all(feature = "tools", not(target_family = "wasm")))]
+    #[cfg(not(target_family = "wasm"))]
     pub fn web_fetch_with_source<P>(mut self, source: Arc<P>, deferred: bool) -> Self
     where
         P: crate::tools::web::ApprovedWebFetchSource + 'static,
@@ -1311,7 +1311,7 @@ impl ClaudeBuilder {
                 custom_tool_search: false,
                 adapter_cleanup: Vec::new(),
                 adapter_shutdown: Vec::new(),
-                #[cfg(all(feature = "tools", not(target_family = "wasm")))]
+                #[cfg(not(target_family = "wasm"))]
                 shared_catalog: None,
             };
             let adapted = adapter(catalog)?;
@@ -1360,7 +1360,7 @@ impl ClaudeBuilder {
                 || !restored.conversation.recovery_notices.is_empty()
                 || restored.conversation.previous_message_id.is_some(),
         );
-        #[cfg(all(feature = "tools", not(target_family = "wasm")))]
+        #[cfg(not(target_family = "wasm"))]
         if let Some(tasks) = &restored.tasks {
             self.task_board
                 .as_ref()
@@ -1368,7 +1368,7 @@ impl ClaudeBuilder {
                 .restore(tasks.clone())
                 .map_err(provider_error)?;
         }
-        #[cfg(not(all(feature = "tools", not(target_family = "wasm"))))]
+        #[cfg(not(not(target_family = "wasm")))]
         if restored.tasks.is_some() {
             return Err(unsupported(
                 "Claude task restoration requires a native target with tools and a task board",
@@ -1438,7 +1438,7 @@ impl ClaudeBuilder {
             admission_order: AtomicU64::new(0),
             waiters: std::sync::Mutex::new(std::collections::BTreeSet::new()),
             compaction_cancel: Mutex::new(None),
-            #[cfg(all(feature = "tools", not(target_family = "wasm")))]
+            #[cfg(not(target_family = "wasm"))]
             task_board: self.task_board,
             cancellations: Mutex::new(HashMap::new()),
             stopped: AtomicBool::new(false),
@@ -1688,7 +1688,7 @@ fn top_level_event_fields(
     fields
 }
 
-#[cfg(all(feature = "tools", not(target_family = "wasm")))]
+#[cfg(not(target_family = "wasm"))]
 fn host_reply(output: crate::tools::ToolOutput) -> std::result::Result<ClaudeToolReply, String> {
     use crate::tools::{ImageSource, ToolContent, ToolResultBlock};
     let content = match output.content {
@@ -1891,7 +1891,7 @@ async fn nested_web_search(
     }
 }
 
-#[cfg(all(feature = "tools", not(target_family = "wasm")))]
+#[cfg(not(target_family = "wasm"))]
 async fn web_fetch_with_source<P: crate::tools::web::ApprovedWebFetchSource>(
     client: &ClaudeClient,
     source: &P,
@@ -2330,9 +2330,9 @@ impl ClaudeNativeFactory {
     }
     fn recipe(&self) -> ClaudeBuilder {
         let recipe = self.recipe.clone();
-        #[cfg(all(feature = "tools", not(target_family = "wasm")))]
+        #[cfg(not(target_family = "wasm"))]
         let mut recipe = recipe;
-        #[cfg(all(feature = "tools", not(target_family = "wasm")))]
+        #[cfg(not(target_family = "wasm"))]
         if recipe.task_board.is_some() {
             let names = crate::tools::tasks::ClaudeTasks::definitions()
                 .into_iter()
@@ -2624,7 +2624,7 @@ struct State {
 
     waiters: std::sync::Mutex<std::collections::BTreeSet<u64>>,
     compaction_cancel: Mutex<Option<Arc<Cancellation>>>,
-    #[cfg(all(feature = "tools", not(target_family = "wasm")))]
+    #[cfg(not(target_family = "wasm"))]
     task_board: Option<Arc<crate::tools::tasks::ClaudeTasks>>,
     cancellations: Mutex<HashMap<BackendTurnKey, Arc<Cancellation>>>,
     stopped: AtomicBool,
@@ -6317,7 +6317,7 @@ impl ClaudeBuilder {
         }
         #[allow(unused_mut)]
         let mut additive = request.additive_tools;
-        #[cfg(all(feature = "tools", not(target_family = "wasm")))]
+        #[cfg(not(target_family = "wasm"))]
         if builder.tools_factory.is_none() {
             let workspace = request.workspace;
             let defaults_additive = std::mem::take(&mut additive);

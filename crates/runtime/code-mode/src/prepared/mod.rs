@@ -9,25 +9,20 @@ pub(crate) use runtime::{PreparedToolCall, PreparedToolError, PreparedToolRuntim
 
 pub(crate) struct PreparedTools {
     entries: Vec<PreparedToolEntry>,
-    #[cfg(feature = "mcp")]
+
     mcps: Vec<Arc<crate::mcp::Mcp>>,
-    #[cfg(feature = "workspace-runtime")]
+
     workspaces: Vec<Arc<crate::workspace_runtime::WorkspaceToolRuntime>>,
 }
 
 impl PreparedTools {
     pub(crate) fn prepare(tools: &Tools) -> Result<Self, PreparedToolError> {
         if tools.workspace_enabled() {
-            #[cfg(feature = "workspace-runtime")]
             if tools.workspace_tools.is_none() {
                 return Err(PreparedToolError::NonAttachable(
                     "enabled workspace tools require a pinned WorkspaceTools source".into(),
                 ));
             }
-            #[cfg(not(feature = "workspace-runtime"))]
-            return Err(PreparedToolError::NonAttachable(
-                "enabled workspace tools require the workspace-runtime feature and a pinned WorkspaceTools source".into(),
-            ));
         }
         if tools.web_search_enabled() {
             return Err(PreparedToolError::NonAttachable(
@@ -61,9 +56,9 @@ impl PreparedTools {
                 ))
             })
             .collect::<Result<Vec<_>, PreparedToolError>>()?;
-        #[cfg(feature = "workspace-runtime")]
+
         let mut workspaces = Vec::new();
-        #[cfg(feature = "workspace-runtime")]
+
         if tools.workspace_enabled()
             && let Some(workspace) = tools.workspace_tools.as_ref()
         {
@@ -99,9 +94,9 @@ impl PreparedTools {
 
         Ok(Self {
             entries,
-            #[cfg(feature = "mcp")]
+
             mcps: tools.attachment_mcps.clone(),
-            #[cfg(feature = "workspace-runtime")]
+
             workspaces,
         })
     }

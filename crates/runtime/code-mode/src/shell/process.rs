@@ -482,7 +482,6 @@ fn normalize_environment(environment: &mut Vec<(OsString, OsString)>) {
     }
 }
 
-#[cfg(feature = "code-mode")]
 #[must_use]
 pub fn ambient_sensitive_environment() -> Vec<(OsString, OsString)> {
     env::vars_os()

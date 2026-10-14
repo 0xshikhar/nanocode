@@ -48,7 +48,6 @@ impl ChildJournalStore for SharedJournal {
     fn save(&self, payload: String, records: Vec<Arc<str>>) -> BackendFuture<std::io::Result<()>> {
         let inner = Arc::clone(&self.0);
         Box::pin(async move {
-
             let mut staged = Vec::new();
             for json in records {
                 EncodedPayload::from_json(json).stage(&mut staged);

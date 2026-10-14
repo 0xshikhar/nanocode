@@ -14,10 +14,6 @@ keywords.workspace = true
 categories.workspace = true
 description = "Composable task-tree subagents for Nanocodex"
 
-[features]
-default = []
-claude = []
-
 [dependencies]
 nanocode-agent.workspace = true
 async-trait.workspace = true

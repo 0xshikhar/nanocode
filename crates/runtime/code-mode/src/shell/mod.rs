@@ -5,9 +5,8 @@ mod process;
 mod selection;
 mod tool;
 
-#[cfg(feature = "mcp")]
 pub(crate) use process::ProcessGroupGuard;
-#[cfg(feature = "code-mode")]
+
 pub use process::ambient_sensitive_environment;
 pub(crate) use tool::{ExecCommandHandler, WriteStdinHandler};
 
@@ -122,7 +121,6 @@ impl ShellSessions {
         }
     }
 
-    #[cfg(feature = "code-mode")]
     pub(crate) const fn default_shell_name(&self) -> &'static str {
         self.default_shell.name()
     }

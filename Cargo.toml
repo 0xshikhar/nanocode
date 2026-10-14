@@ -65,7 +65,7 @@ nanocode-durability = { version = "0.6.7", path = "crates/runtime/durability" }
 nanocode-voice-protocol = { version = "0.6.7", path = "crates/integrations/voice-protocol" }
 nanocode-observability = { version = "0.6.7", path = "crates/integrations/observability" }
 nanocode-subagents = { version = "0.6.7", path = "crates/runtime/subagents" }
-nanocode-code-mode = { version = "0.6.7", path = "crates/runtime/code-mode", default-features = false }
+nanocode-code-mode = { version = "0.6.7", path = "crates/runtime/code-mode"  }
 nanocode-tools-macros = { version = "0.6.7", path = "crates/core/tools-macros" }
 image = { version = "0.25.9", default-features = false, features = ["bmp", "gif", "jpeg", "png", "pnm", "webp"] }
 iana-time-zone = "0.1.64"

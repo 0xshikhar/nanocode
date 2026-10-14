@@ -216,32 +216,29 @@ impl State {
             })
             .collect();
     }
-    #[cfg_attr(
-        not(all(feature = "tools", not(target_family = "wasm"))),
-        allow(clippy::missing_const_for_fn)
-    )]
+    #[cfg_attr(not(not(target_family = "wasm")), allow(clippy::missing_const_for_fn))]
     fn task_snapshot(&self) -> Result<Option<Value>> {
-        #[cfg(all(feature = "tools", not(target_family = "wasm")))]
+        #[cfg(not(target_family = "wasm"))]
         {
             self.task_board
                 .as_ref()
                 .map(|tasks| tasks.snapshot().map_err(provider_error))
                 .transpose()
         }
-        #[cfg(not(all(feature = "tools", not(target_family = "wasm"))))]
+        #[cfg(not(not(target_family = "wasm")))]
         {
             Ok(None)
         }
     }
     fn restore_tasks(&self, tasks: Option<Value>) -> Result<()> {
         if let Some(tasks) = tasks {
-            #[cfg(all(feature = "tools", not(target_family = "wasm")))]
+            #[cfg(not(target_family = "wasm"))]
             self.task_board
                 .as_ref()
                 .ok_or_else(|| unsupported("Claude task checkpoint requires a task board"))?
                 .restore(tasks)
                 .map_err(provider_error)?;
-            #[cfg(not(all(feature = "tools", not(target_family = "wasm"))))]
+            #[cfg(not(not(target_family = "wasm")))]
             {
                 let _ = tasks;
                 return Err(unsupported(
@@ -358,7 +355,7 @@ impl State {
             output_continuations: 0,
         };
 
-        #[cfg(all(feature = "tools", not(target_family = "wasm")))]
+        #[cfg(not(target_family = "wasm"))]
         if self.policy.is_some() && self.task_board.is_some() {
             cursor.parallel = false;
         }

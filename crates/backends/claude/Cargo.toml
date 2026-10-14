@@ -9,19 +9,13 @@ license.workspace = true
 publish.workspace = true
 description = "Typed Anthropic Messages protocol and streaming transport"
 
-[features]
-default = []
-tools = ["nanocode-code-mode/code-mode", "dep:nanocode-home", "dep:schemars", "dep:ignore", "dep:globset", "dep:tempfile", "dep:serde_yaml_ng", "dep:nix"]
-
-workspace-files = ["tools"]
-
 [dependencies]
 nanocode-agent.workspace = true
 nanocode-types.workspace = true
 nanocode-tools.workspace = true
 nanocode-media.workspace = true
-nanocode-home = { workspace = true, optional = true }
-schemars = { workspace = true, optional = true }
+nanocode-home = { workspace = true  }
+schemars = { workspace = true  }
 base64.workspace = true
 getrandom = { workspace = true, features = ["wasm_js"] }
 sha2.workspace = true
@@ -31,7 +25,7 @@ url.workspace = true
 futures-util.workspace = true
 httpdate = "1.0.3"
 image.workspace = true
-nanocode-code-mode = { path = "../../runtime/code-mode", version = "0.6.7", default-features = false, features = ["image-processing"] }
+nanocode-code-mode = { path = "../../runtime/code-mode", version = "0.6.7"   }
 tokio = { workspace = true, features = ["macros", "sync", "time"] }
 web-time.workspace = true
 uuid.workspace = true
@@ -42,14 +36,14 @@ thiserror.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
-nix = { workspace = true, features = ["fs"], optional = true }
+nix = { workspace = true, features = ["fs"]  }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread"] }
-ignore = { workspace = true, optional = true }
-globset = { version = "0.4.19", optional = true }
-tempfile = { workspace = true, optional = true }
-serde_yaml_ng = { workspace = true, optional = true }
+ignore = { workspace = true  }
+globset = { version = "0.4.19"  }
+tempfile = { workspace = true  }
+serde_yaml_ng = { workspace = true  }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 wasm-bindgen-futures.workspace = true

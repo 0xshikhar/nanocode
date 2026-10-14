@@ -1,5 +1,4 @@
 #![deny(rustdoc::broken_intra_doc_links)]
-#![cfg_attr(docsrs, feature(doc_cfg))]
 
 #[cfg(all(target_family = "wasm", not(target_os = "unknown")))]
 compile_error!(
@@ -13,18 +12,16 @@ mod agent;
 mod error;
 mod harness;
 mod reasoning;
-#[cfg(feature = "openai")]
+
 mod registration;
-#[cfg(feature = "openai")]
+
 mod service_tier_serde;
 pub use harness::{ClaudeModel, HarnessFamily, ModelCapabilities, ModelSelection, ModelTransport};
-#[cfg(feature = "openai")]
+
 mod model;
-#[cfg(feature = "openai")]
+
 mod prompt_cache;
 
-#[cfg(feature = "openai")]
-#[cfg_attr(docsrs, doc(cfg(feature = "openai")))]
 pub mod execution {
     pub use crate::agent::execution::*;
 }
@@ -41,24 +38,20 @@ pub mod backend {
 }
 
 pub use crate::client::{Model, ReasoningMode, Thinking, events::AgentEvents};
-#[cfg(feature = "openai")]
-#[cfg_attr(docsrs, doc(cfg(feature = "openai")))]
+
 pub use crate::client::{OpenAi, ResponseError, ResponseErrorKind};
 pub use agent::{
     AgentHandle, AgentSessionContext, BuilderBackend, Nanocodex, PromptRequest, PromptRoute,
     SpawnOptions, Turn, TurnControl, TurnResult, WeakAgent,
 };
-#[cfg(feature = "openai")]
-#[cfg_attr(docsrs, doc(cfg(feature = "openai")))]
+
 pub use agent::{ExecutionEnvironment, NanocodexBuilder};
-#[cfg(feature = "openai")]
+
 pub use error::CompactionRecovery;
 pub use error::{ExecutionPolicyDisposition, NanocodexError, Result};
-#[cfg(all(feature = "openai", not(target_family = "wasm")))]
-#[cfg_attr(docsrs, doc(cfg(all(feature = "openai", not(target_family = "wasm")))))]
+#[cfg(not(target_family = "wasm"))]
 pub use nanocode_code_mode::tool;
-#[cfg(feature = "openai")]
-#[cfg_attr(docsrs, doc(cfg(feature = "openai")))]
+
 pub use nanocode_code_mode::{Tool, Tools};
 pub use session::{
     Capabilities, ForkPoint, ForkRequest, Lineage, Mutability, Origin, Persistence,
@@ -69,7 +62,7 @@ pub use usage::{
 };
 
 pub mod events {
-    #[cfg(feature = "openai")]
+
     pub use crate::client::events::OpenAiEvent;
     pub use crate::client::events::{
         AcceptedInput, AgentEventData, AssistantDelta, AssistantEvent, AssistantMessage,
@@ -93,8 +86,8 @@ pub mod input {
     };
 }
 
-#[cfg(all(feature = "openai", not(target_family = "wasm")))]
-#[cfg_attr(docsrs, doc(cfg(all(feature = "openai", not(target_family = "wasm")))))]
+#[cfg(not(target_family = "wasm"))]
+
 pub mod transport {
     pub use crate::client::{
         responses::RequestProfile,
@@ -107,14 +100,12 @@ pub mod transport {
     pub use crate::error::ResponsesError;
 }
 
-#[cfg(feature = "openai")]
-#[cfg_attr(docsrs, doc(cfg(feature = "openai")))]
 pub mod tools {
     #[doc(inline)]
     pub use nanocode_code_mode::*;
 }
 
-#[cfg(all(feature = "openai", not(target_family = "wasm")))]
+#[cfg(not(target_family = "wasm"))]
 #[doc(hidden)]
 pub mod __private {
     pub use nanocode_code_mode::__private::*;
@@ -125,8 +116,6 @@ pub mod client;
 pub mod builtin_tools;
 pub use error::ErrorExt;
 
-#[cfg(feature = "openai")]
 pub use agent::checkpoint::CodexCheckpointExt;
 
-#[cfg(feature = "openai")]
 pub use crate::client::OpenAi as Codex;

@@ -51,11 +51,7 @@ where
         self.config.auth.mode()
     }
 
-    #[cfg(all(feature = "realtime", not(target_family = "wasm")))]
-    #[cfg_attr(
-        docsrs,
-        doc(cfg(all(feature = "realtime", not(target_family = "wasm"))))
-    )]
+    #[cfg(not(target_family = "wasm"))]
     #[must_use]
     pub fn realtime(
         &self,
@@ -68,11 +64,7 @@ where
         )
     }
 
-    #[cfg(all(feature = "realtime", not(target_family = "wasm")))]
-    #[cfg_attr(
-        docsrs,
-        doc(cfg(all(feature = "realtime", not(target_family = "wasm"))))
-    )]
+    #[cfg(not(target_family = "wasm"))]
     #[must_use]
     pub fn attach_realtime_call(
         &self,
@@ -237,7 +229,6 @@ impl<F> OpenAiBuilder<F> {
     }
 
     #[cfg(any(target_family = "wasm", docsrs))]
-    #[cfg_attr(docsrs, doc(cfg(target_family = "wasm")))]
     #[must_use]
     pub fn host_transport(
         mut self,
@@ -277,7 +268,6 @@ impl OpenAiBuilder<StandardServiceFactory> {
     }
 
     #[cfg(not(target_family = "wasm"))]
-    #[cfg_attr(docsrs, doc(cfg(not(target_family = "wasm"))))]
     #[must_use]
     pub fn http_client(mut self, client: reqwest::Client) -> Self {
         self.factory.platform.set_http_client(client);

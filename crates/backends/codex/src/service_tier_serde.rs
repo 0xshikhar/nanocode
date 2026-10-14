@@ -16,7 +16,6 @@ pub(crate) fn serialize<S: Serializer>(
     map.end()
 }
 
-#[cfg(feature = "openai")]
 pub(crate) fn serialize_admission<S: Serializer>(
     tier: &ServiceTier,
     serializer: S,

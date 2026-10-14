@@ -24,7 +24,6 @@ pub struct PostgresStore {
 }
 
 impl PostgresStore {
-
     pub async fn new(client: Client) -> Result<Self, StoreError> {
         let mut store = Self { client };
         let transaction = store.client.transaction().await.map_err(backend)?;

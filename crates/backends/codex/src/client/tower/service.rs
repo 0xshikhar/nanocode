@@ -214,7 +214,6 @@ impl ResponsesService {
     }
 
     #[cfg(not(target_family = "wasm"))]
-    #[cfg_attr(docsrs, doc(cfg(not(target_family = "wasm"))))]
     #[must_use]
     pub(crate) fn new_with_http_client(
         config: Arc<ModelConfig>,
@@ -246,7 +245,6 @@ impl ResponsesService {
     }
 
     #[cfg(not(target_family = "wasm"))]
-    #[cfg_attr(docsrs, doc(cfg(not(target_family = "wasm"))))]
     #[must_use]
     pub(crate) fn standard_with_http_client_and_max_attempts(
         config: Arc<ModelConfig>,

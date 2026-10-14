@@ -7,13 +7,13 @@ pub mod contract {
     pub use nanocode_tools::*;
 }
 pub use nanocode_media::image;
-#[cfg(feature = "native")]
+
 mod runtime_config;
-#[cfg(feature = "native")]
+
 pub use runtime_config::{ImageGenerationConfig, WebSearchConfig};
-#[cfg(all(feature = "native", not(target_family = "wasm")))]
+#[cfg(not(target_family = "wasm"))]
 pub mod image_generation;
-#[cfg(all(feature = "native", not(target_family = "wasm")))]
+#[cfg(not(target_family = "wasm"))]
 pub mod web_search;
 
 pub use nanocode_tools::tool;
@@ -21,7 +21,6 @@ pub use nanocode_tools::tool;
 #[doc(hidden)]
 pub use nanocode_tools::__private;
 
-#[cfg(feature = "native")]
 pub fn handlers(
     web: Option<WebSearchConfig>,
     image: Option<ImageGenerationConfig>,

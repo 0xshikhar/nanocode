@@ -261,7 +261,7 @@ mod store {
                     .map(Some)
                     .map_err(|error| Error::InvalidState(error.to_string()))
                 }
-                #[cfg(feature = "claude")]
+
                 family if family == HarnessFamily::Claude => {
                     nanocode_backend_claude::session_checkpoint(
                         &record.session_id,
@@ -271,11 +271,6 @@ mod store {
                     .map(Some)
                     .map_err(|error| Error::InvalidState(error.to_string()))
                 }
-                #[cfg(not(feature = "claude"))]
-                family if family == HarnessFamily::Claude => Err(Error::InvalidState(
-                    "portable Claude checkpoints require the claude feature of nanocode-durability"
-                        .into(),
-                )),
                 family => Err(Error::InvalidState(format!(
                     "portable checkpoints for {family} require the owning backend adapter"
                 ))),
@@ -309,13 +304,13 @@ mod store {
             })
         }
 
-        #[cfg(all(feature = "sqlite", not(target_family = "wasm")))]
+        #[cfg(not(target_family = "wasm"))]
         #[must_use]
         pub fn path(codex_home: &std::path::Path) -> PathBuf {
             codex_home.join("sessions.sqlite")
         }
 
-        #[cfg(all(feature = "sqlite", not(target_family = "wasm")))]
+        #[cfg(not(target_family = "wasm"))]
         pub fn open(codex_home: &std::path::Path) -> Result<Self> {
             std::fs::create_dir_all(codex_home).map_err(|error| {
                 Error::Store(crate::StoreError::NotCommitted(format!(
@@ -326,7 +321,7 @@ mod store {
             Self::open_path(Self::path(codex_home))
         }
 
-        #[cfg(all(feature = "sqlite", not(target_family = "wasm")))]
+        #[cfg(not(target_family = "wasm"))]
         pub fn open_path(path: impl AsRef<std::path::Path>) -> Result<Self> {
             Self::new(crate::SqliteStore::open(path)?)
         }

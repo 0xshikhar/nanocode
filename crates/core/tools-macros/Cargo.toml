@@ -15,7 +15,6 @@ categories.workspace = true
 description = "Shared typed-tool procedural macros for Codex and Claude"
 
 [package.metadata.docs.rs]
-all-features = true
 rustdoc-args = ["-D", "warnings"]
 
 [lib]

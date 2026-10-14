@@ -2,7 +2,6 @@
 
 extern crate self as nanocode_observability;
 
-#[cfg(feature = "cli")]
 mod cli;
 
 use std::{fs::OpenOptions, io, path::PathBuf};
@@ -22,7 +21,6 @@ use tracing_subscriber::{
     EnvFilter, Layer, fmt::format::FmtSpan, layer::SubscriberExt, util::SubscriberInitExt,
 };
 
-#[cfg(feature = "cli")]
 pub use cli::ObservabilityOutputArgs;
 
 const DEPLOYMENT_ENVIRONMENT_NAME: &str = "deployment.environment.name";

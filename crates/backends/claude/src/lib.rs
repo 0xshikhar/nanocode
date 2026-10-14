@@ -1964,16 +1964,15 @@ pub use agent::{
 
 pub mod execution;
 
-#[cfg(all(feature = "tools", not(target_family = "wasm")))]
+#[cfg(not(target_family = "wasm"))]
 mod claude_bash;
-#[cfg(all(feature = "tools", not(target_family = "wasm")))]
+#[cfg(not(target_family = "wasm"))]
 mod claude_files;
-#[cfg(all(feature = "tools", not(target_family = "wasm")))]
+#[cfg(not(target_family = "wasm"))]
 mod claude_tools;
-#[cfg(all(feature = "tools", not(target_family = "wasm")))]
+#[cfg(not(target_family = "wasm"))]
 mod defaults;
-#[cfg(all(feature = "tools", not(target_family = "wasm")))]
+#[cfg(not(target_family = "wasm"))]
 pub use defaults::install_default_tools;
 
-#[cfg(feature = "tools")]
 pub mod tools;

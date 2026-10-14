@@ -3,7 +3,7 @@ use nanocode_types::responses::CustomToolFormat;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-#[cfg(all(feature = "code-mode", not(target_family = "wasm")))]
+#[cfg(not(target_family = "wasm"))]
 pub use crate::plan::UpdatePlanTool;
 
 const APPLY_PATCH_GRAMMAR: &str = include_str!("apply_patch/apply_patch.lark");

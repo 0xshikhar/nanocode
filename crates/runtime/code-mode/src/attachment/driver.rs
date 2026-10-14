@@ -753,17 +753,11 @@ fn start_call(
 }
 
 const EXECUTION_DEADLINE_MARGIN_MS: u64 = 1_000;
-#[cfg(not(feature = "workspace-runtime"))]
-fn clamp_shell_yield(_name: &str, input: Value, _remaining_ms: u64) -> Value {
-    input
-}
 
-#[cfg(feature = "workspace-runtime")]
 const SHELL_YIELD_DEADLINE_MARGIN_MS: u64 = 3_000;
-#[cfg(feature = "workspace-runtime")]
+
 const MIN_SHELL_YIELD_MS: u64 = 250;
 
-#[cfg(feature = "workspace-runtime")]
 fn clamp_shell_yield(name: &str, mut input: Value, remaining_ms: u64) -> Value {
     let exec = name == crate::StandardTool::ExecCommand.name();
     if !exec && name != crate::StandardTool::WriteStdin.name() {

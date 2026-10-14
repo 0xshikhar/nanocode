@@ -43,7 +43,6 @@ pub struct MemoryStore {
 }
 
 impl MemoryStore {
-
     pub fn new() -> crate::Result<Self> {
         let (commands, mut receiver) = mpsc::channel(COMMAND_CAPACITY);
         let driver = async move {

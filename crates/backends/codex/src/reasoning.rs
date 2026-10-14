@@ -25,7 +25,6 @@ enum ReasoningPin {
     },
 }
 
-#[cfg(feature = "openai")]
 impl ReasoningState {
     pub(crate) fn validate(
         &self,

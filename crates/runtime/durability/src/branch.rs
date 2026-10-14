@@ -7,7 +7,6 @@ use serde::Serialize;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct BranchTurn {
-
     pub id: String,
 
     pub input: serde_json::Value,
@@ -23,7 +22,6 @@ pub struct CheckpointBranch<S> {
     state: DurableState,
 }
 impl<S: StateStore> CheckpointBranch<S> {
-
     pub async fn open(mut store: S, source_id: impl Into<String>) -> Result<Self> {
         let source_id = source_id.into();
         let acquired = store.acquire(&source_id, OwnerId::new()).await?;

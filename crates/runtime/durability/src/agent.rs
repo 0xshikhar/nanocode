@@ -20,7 +20,6 @@ use crate::{
 };
 
 pub trait DurableAgentExt: Sized {
-
     fn durability(self, state: DurableSession) -> impl Future<Output = AgentResult<Self>>;
 }
 
@@ -71,7 +70,6 @@ impl<F> DurableAgentExt for NanocodexBuilder<F> {
             known_records = keys;
             builder = builder.resume_native_snapshot(restored);
         } else if let Some(snapshot) = builder.resume_snapshot() {
-
             let prepared = crate::context::prepare_snapshot(snapshot.clone(), &known_records)
                 .map_err(agent_error)?;
             owner
@@ -80,7 +78,6 @@ impl<F> DurableAgentExt for NanocodexBuilder<F> {
                 .map_err(agent_error)?;
             known_records = prepared.keys;
         } else {
-
             if let Some((model, initial)) = initial {
                 builder = builder.initial_settings(model, initial.thinking, initial.service_tier);
             }
@@ -119,7 +116,6 @@ pub(crate) struct Branches {
 }
 
 impl Branches {
-
     pub(crate) fn child_record(
         &self,
         child: &nanocode_agent::SessionInfo,
@@ -178,7 +174,6 @@ impl ExecutionPolicy for DurableExecution {
         &self,
         child: &nanocode_agent::SessionInfo,
     ) -> AgentResult<Option<Arc<dyn ExecutionPolicy>>> {
-
         let Some(branches) = self
             .branches
             .as_ref()
@@ -607,7 +602,6 @@ impl LazyExecution {
                 let mut record = self.record.clone();
                 if let Some(settings) = self.created_with.lock().ok().and_then(|settings| *settings)
                 {
-
                     record.model = nanocode_agent::ModelSelection::new(
                         nanocode_agent::BackendId::Codex,
                         settings.model.as_str(),

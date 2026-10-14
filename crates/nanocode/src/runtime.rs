@@ -3,7 +3,7 @@ use crate::{
     Agent, AgentEvents, HarnessFamily, ModelSelection, NanocodexError, SessionCheckpoint, Thinking,
     harness::{AgentResult, Harness, HarnessRequest},
 };
-#[cfg(feature = "openai")]
+
 use crate::{CodexBuilder, OpenAi};
 use nanocode_agent::AgentHandle;
 use nanocode_agent::{
@@ -19,13 +19,11 @@ use std::{
 };
 
 type Result<T> = nanocode_agent::Result<T>;
-#[cfg(not(feature = "durability"))]
-use crate::Backend as RegisteredBackend;
-#[cfg(feature = "durability")]
+
 use crate::durability::DurableBackendRegistration as RegisteredBackend;
 
 type Recipe = Arc<dyn Fn(AgentSpec) -> BackendFuture<AgentResult> + Send + Sync>;
-#[cfg(feature = "openai")]
+
 type CodexHook = Arc<dyn Fn(CodexBuilder) -> Result<CodexBuilder> + Send + Sync>;
 type ClaudeHook = Arc<dyn Fn(ClaudeBuilder) -> Result<ClaudeBuilder> + Send + Sync>;
 type ToolsFactory = Arc<
@@ -101,8 +99,6 @@ macro_rules! tool_methods {
     };
 }
 
-#[cfg(feature = "openai")]
-#[cfg_attr(docsrs, doc(cfg(feature = "openai")))]
 #[derive(Clone)]
 pub struct CodexHarness {
     client: OpenAi,
@@ -110,7 +106,6 @@ pub struct CodexHarness {
     configure: Option<CodexHook>,
 }
 
-#[cfg(feature = "openai")]
 impl CodexHarness {
     #[must_use]
     pub fn new(client: OpenAi) -> Self {
@@ -134,7 +129,6 @@ impl CodexHarness {
     }
 }
 
-#[cfg(feature = "openai")]
 impl From<OpenAi> for CodexHarness {
     fn from(client: OpenAi) -> Self {
         Self::new(client)
@@ -182,9 +176,9 @@ pub struct Unselected;
 pub struct NanocodexBuilder<B = Unselected> {
     selection: PhantomData<fn() -> B>,
     backends: Vec<Arc<dyn RegisteredBackend>>,
-    #[cfg(feature = "durability")]
+
     durability: Option<crate::durability::SessionStore>,
-    #[cfg(feature = "openai")]
+
     codex: Option<CodexHarness>,
     claude: Option<ClaudeHarness>,
     harness: Option<HarnessFamily>,
@@ -203,15 +197,12 @@ impl<B> NanocodexBuilder<B> {
         self
     }
 
-    #[cfg(feature = "durability")]
     #[must_use]
     pub fn durability(mut self, store: crate::durability::SessionStore) -> Self {
         self.durability = Some(store);
         self
     }
 
-    #[cfg(feature = "openai")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "openai")))]
     #[must_use]
     pub fn openai(mut self, harness: impl Into<CodexHarness>) -> Self {
         self.codex = Some(harness.into());
@@ -254,7 +245,7 @@ impl<B> NanocodexBuilder<B> {
 
     pub fn build(self) -> Result<Nanocodex> {
         let mut configured = Vec::new();
-        #[cfg(feature = "openai")]
+
         if self.codex.is_some() {
             configured.push(HarnessFamily::Codex);
         }
@@ -348,7 +339,7 @@ impl<B> NanocodexBuilder<B> {
             })
             .collect();
         let mut recipes: Vec<(HarnessFamily, Recipe)> = Vec::new();
-        #[cfg(feature = "openai")]
+
         if let Some(codex) = self.codex {
             recipes.push((
                 HarnessFamily::Codex,
@@ -370,14 +361,14 @@ impl<B> NanocodexBuilder<B> {
                 registered_recipe(backend, &self.settings, &workspace, cua.clone()),
             ));
         }
-        #[cfg(feature = "durability")]
+
         if let Some(store) = &self.durability {
             for (_, recipe) in &mut recipes {
                 *recipe = persistent_recipe(recipe.clone(), store.clone(), workspace.clone());
             }
         }
         let mut router = Harness::builder();
-        #[cfg(feature = "durability")]
+
         if let Some(store) = &self.durability {
             router = router.recovery_store(store.clone());
         }
@@ -397,7 +388,7 @@ impl<B> NanocodexBuilder<B> {
                 model,
                 thinking,
                 ownership,
-                #[cfg(feature = "durability")]
+
                 durability: self.durability,
             }),
         })
@@ -410,9 +401,9 @@ impl NanocodexBuilder<Unselected> {
         NanocodexBuilder {
             selection: PhantomData,
             backends: self.backends,
-            #[cfg(feature = "durability")]
+
             durability: self.durability,
-            #[cfg(feature = "openai")]
+
             codex: self.codex,
             claude: self.claude,
             harness: Some(B::backend_id().into()),
@@ -477,7 +468,7 @@ fn registered_recipe(
                 host_context: spec.host_context,
                 checkpoint: spec.checkpoint,
             };
-            #[cfg(feature = "durability")]
+
             if let Some(state) = spec.durable_state {
                 return backend.build_durable(request, state).await;
             }
@@ -486,7 +477,6 @@ fn registered_recipe(
     })
 }
 
-#[cfg(feature = "durability")]
 fn persistent_recipe(
     recipe: Recipe,
     store: crate::durability::SessionStore,
@@ -575,7 +565,7 @@ struct Runtime {
     model: ModelSelection,
     thinking: Thinking,
     ownership: Arc<Ownership>,
-    #[cfg(feature = "durability")]
+
     durability: Option<crate::durability::SessionStore>,
 }
 
@@ -624,7 +614,6 @@ impl Nanocodex {
         let model = checkpoint.model();
         let thinking = checkpoint.thinking();
         self.construct(AgentSpec {
-            #[cfg(feature = "durability")]
             parent: None,
             options: SpawnOptions::new()
                 .harness_model(model.clone())
@@ -635,13 +624,12 @@ impl Nanocodex {
             spawn_factory: self.spawn_factory(),
             host_context: None,
             checkpoint: Some(checkpoint),
-            #[cfg(feature = "durability")]
+
             durable_state: None,
         })
         .await
     }
 
-    #[cfg(feature = "durability")]
     pub async fn open_session(&self, session_id: &str) -> AgentResult {
         let store = self.inner.durability.as_ref().ok_or_else(|| {
             NanocodexError::InvalidRequest("runtime durability is not configured".into())
@@ -649,8 +637,6 @@ impl Nanocodex {
         self.open(store, session_id).await
     }
 
-    #[cfg(feature = "durability")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "durability")))]
     pub async fn open(
         &self,
         store: &crate::durability::SessionStore,
@@ -676,7 +662,6 @@ impl Nanocodex {
         self.inner.recipe(model.family())?;
         let durable_state = store.resume(session_id).await.map_err(catalog_error)?;
         self.construct(AgentSpec {
-            #[cfg(feature = "durability")]
             parent: None,
             options: SpawnOptions::new()
                 .harness_model(model.clone())
@@ -745,7 +730,6 @@ impl<B> SpawnBuilder<'_, B> {
         let thinking = resolved.selected_thinking().unwrap_or(runtime.thinking);
         self.runtime
             .construct(AgentSpec {
-                #[cfg(feature = "durability")]
                 parent: None,
                 options: resolved,
                 model,
@@ -754,7 +738,7 @@ impl<B> SpawnBuilder<'_, B> {
                 spawn_factory: self.runtime.spawn_factory(),
                 host_context: None,
                 checkpoint: None,
-                #[cfg(feature = "durability")]
+
                 durable_state: None,
             })
             .await
@@ -785,13 +769,13 @@ struct AgentSpec {
     model: ModelSelection,
     thinking: Thinking,
     options: SpawnOptions,
-    #[cfg(feature = "durability")]
+
     parent: Option<AgentHandle>,
     settings: Settings,
     spawn_factory: Arc<dyn AgentFactory>,
     host_context: Option<Arc<str>>,
     checkpoint: Option<SessionCheckpoint>,
-    #[cfg(feature = "durability")]
+
     durable_state: Option<crate::durability::DurableSession>,
 }
 
@@ -801,18 +785,18 @@ impl AgentSpec {
             model: request.model,
             thinking: request.thinking,
             options: request.options,
-            #[cfg(feature = "durability")]
+
             parent: request.parent,
             settings: Settings::default(),
             spawn_factory: request.spawn_factory,
             host_context: request.host_context,
             checkpoint: request.checkpoint,
-            #[cfg(feature = "durability")]
+
             durable_state: request.durable_state,
         }
     }
 }
-#[cfg(feature = "openai")]
+
 fn exposed(
     tools: crate::Tools,
     cua: Option<&crate::ComputerTools>,
@@ -828,7 +812,6 @@ fn exposed(
     builder.build()
 }
 
-#[cfg(feature = "openai")]
 fn codex_recipe(
     harness: CodexHarness,
     runtime: &Settings,
@@ -893,7 +876,7 @@ fn codex_recipe(
             if let Some(checkpoint) = spec.checkpoint {
                 builder = builder.resume(checkpoint)?;
             }
-            #[cfg(feature = "durability")]
+
             if let Some(state) = spec.durable_state {
                 use crate::DurableAgentExt as _;
                 let session_id = state.state_id().parse().map_err(|error| {
@@ -986,7 +969,7 @@ fn claude_recipe(
             if let Some(checkpoint) = spec.checkpoint {
                 builder = builder.resume(checkpoint)?;
             }
-            #[cfg(feature = "durability")]
+
             if let Some(state) = spec.durable_state {
                 use crate::DurableAgentExt as _;
                 builder = builder.durability(state).await?;
@@ -1016,7 +999,6 @@ fn not_configured(family: HarnessFamily) -> NanocodexError {
     ))
 }
 
-#[cfg(feature = "durability")]
 fn catalog_error(error: crate::durability::Error) -> NanocodexError {
     match error {
         crate::durability::Error::SessionNotFound { .. } => {

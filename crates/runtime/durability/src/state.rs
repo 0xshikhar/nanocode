@@ -19,7 +19,6 @@ const MANIFEST_PREFIX: char = '#';
 const GEAR: [u64; 256] = gear_table();
 
 const fn gear_table() -> [u64; 256] {
-
     let mut table = [0_u64; 256];
     let mut state: u64 = 0x6e61_6e6f_636f_6465;
     let mut index = 0;
@@ -294,23 +293,19 @@ impl Eq for EncodedPayload {}
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Transition {
-
     ExecutionAdvanced {
-
         operation_id: String,
 
         continuation: EncodedPayload,
     },
 
     OperationAccepted {
-
         operation_id: String,
 
         input: EncodedPayload,
     },
 
     StepStarted {
-
         operation_id: String,
 
         step_id: String,
@@ -321,7 +316,6 @@ pub enum Transition {
     },
 
     StepCompleted {
-
         operation_id: String,
 
         step_id: String,
@@ -330,7 +324,6 @@ pub enum Transition {
     },
 
     SteerAccepted {
-
         #[serde(default, skip_serializing_if = "Option::is_none")]
         message_id: Option<String>,
 
@@ -344,14 +337,12 @@ pub enum Transition {
     },
 
     SteerWithdrawn {
-
         operation_id: String,
 
         steer_index: u32,
     },
 
     SteerBound {
-
         operation_id: String,
 
         steer_index: u32,
@@ -360,7 +351,6 @@ pub enum Transition {
     },
 
     OperationCompleted {
-
         operation_id: String,
 
         checkpoint: EncodedPayload,
@@ -369,7 +359,6 @@ pub enum Transition {
     },
 
     OperationFailed {
-
         operation_id: String,
 
         checkpoint: EncodedPayload,
@@ -378,7 +367,6 @@ pub enum Transition {
     },
 
     OperationCancelled {
-
         operation_id: String,
 
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -386,7 +374,6 @@ pub enum Transition {
     },
 
     CheckpointCommitted {
-
         checkpoint: EncodedPayload,
     },
 }
@@ -394,31 +381,26 @@ pub enum Transition {
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum OperationStatus {
-
     Pending,
 
     Completed {
-
         checkpoint: EncodedPayload,
 
         output: EncodedPayload,
     },
 
     Failed {
-
         checkpoint: EncodedPayload,
 
         error: String,
     },
 
     Cancelled {
-
         checkpoint: Option<EncodedPayload>,
     },
 }
 
 impl OperationStatus {
-
     #[must_use]
     pub const fn is_terminal(&self) -> bool {
         matches!(
@@ -431,7 +413,6 @@ impl OperationStatus {
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StepStatus {
-
     EffectPending,
 
     Completed(EncodedPayload),
@@ -440,7 +421,6 @@ pub enum StepStatus {
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct StepState {
-
     pub kind: String,
 
     pub input: EncodedPayload,
@@ -453,7 +433,6 @@ pub struct StepState {
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SteerState {
-
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message_id: Option<String>,
 
@@ -467,7 +446,6 @@ pub struct SteerState {
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct IdentifiedSteerReceipt {
-
     pub input_key: String,
 
     pub index: u32,
@@ -478,7 +456,6 @@ pub struct IdentifiedSteerReceipt {
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct OperationState {
-
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub steer_receipts: BTreeMap<String, IdentifiedSteerReceipt>,
 
@@ -696,7 +673,6 @@ impl DurableState {
         Self::retain_terminal_operations(&mut self.operations, limit);
         let mut changed = self.operations.len() != before;
         if changed && let Some(session) = &mut self.session {
-
             session.history_pruned = true;
         }
         for operation in self
@@ -704,7 +680,6 @@ impl DurableState {
             .values_mut()
             .filter(|operation| operation.status.is_terminal())
         {
-
             changed |= !operation.steps.is_empty() || !operation.steers.is_empty();
             operation.steps.clear();
             changed |= operation.continuation.take().is_some();

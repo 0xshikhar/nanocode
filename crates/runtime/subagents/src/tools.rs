@@ -1091,7 +1091,6 @@ pub fn install_tools<T: ToolCollection>(
     Ok(tools)
 }
 
-#[cfg(feature = "claude")]
 pub fn install_claude_tools<T: nanocode_tools::ToolCollection>(
     mut tools: T,
     parent: AgentHandle,
@@ -1103,10 +1102,8 @@ pub fn install_claude_tools<T: nanocode_tools::ToolCollection>(
     Ok(tools)
 }
 
-#[cfg(feature = "claude")]
 struct TurnAuthority(Arc<dyn Tool>);
 
-#[cfg(feature = "claude")]
 #[async_trait]
 impl Tool for TurnAuthority {
     fn definition(&self) -> ToolDefinition {

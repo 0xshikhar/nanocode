@@ -5,7 +5,6 @@ use nanocode_agent::{
 use crate::DurableSession;
 
 pub trait DurableBackendRegistration: BackendRegistration {
-
     fn build_durable(
         &self,
         request: BackendRequest,
@@ -83,7 +82,6 @@ where
     }
 }
 
-#[cfg(feature = "claude")]
 impl DurableBackendRegistration for nanocode_backend_claude::ClaudeBuilder {
     fn build_durable(
         &self,
@@ -95,7 +93,6 @@ impl DurableBackendRegistration for nanocode_backend_claude::ClaudeBuilder {
     }
 }
 
-#[cfg(feature = "claude")]
 impl DurableBackendRegistration for nanocode_backend_claude::Claude {
     fn build_durable(
         &self,

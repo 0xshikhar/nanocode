@@ -1,5 +1,5 @@
 use std::fmt;
-#[cfg(feature = "openai")]
+
 use std::sync::Arc;
 
 mod contract;
@@ -8,25 +8,19 @@ pub use contract::{
     SessionCheckpoint, SessionInfo, TurnBoundary,
 };
 
-#[cfg(feature = "openai")]
 use crate::client::Model;
-#[cfg(feature = "openai")]
+
 use crate::client::responses::MessageRole;
 use crate::client::responses::{ResponseItem, Usage};
 
-#[cfg(feature = "openai")]
 pub use crate::client::session::SessionId;
 
-#[cfg(feature = "openai")]
 use crate::model::run::ModelCheckpoint;
-#[cfg(feature = "openai")]
+
 use crate::{NanocodexError, Result};
 
-#[cfg(feature = "openai")]
 const SESSION_SNAPSHOT_VERSION: u32 = 1;
 
-#[cfg_attr(not(feature = "openai"), allow(dead_code))]
-#[cfg(feature = "openai")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SessionStart {
     New(Origin),
@@ -36,8 +30,6 @@ pub(crate) enum SessionStart {
     Restore,
 }
 
-#[cfg_attr(not(feature = "openai"), allow(dead_code))]
-#[cfg(feature = "openai")]
 impl SessionStart {
     pub(crate) const fn kind(self) -> &'static str {
         match self {
@@ -82,7 +74,7 @@ pub(crate) struct EnvironmentSnapshot {
 }
 
 #[derive(Clone)]
-#[cfg(feature = "openai")]
+
 pub(crate) struct CommittedSession {
     lineage_id: Arc<str>,
     selected_model: Model,
@@ -94,7 +86,6 @@ pub(crate) struct CommittedSession {
     service_tier: crate::ServiceTier,
 }
 
-#[cfg(feature = "openai")]
 impl CommittedSession {
     pub(crate) const fn new(
         lineage_id: Arc<str>,
@@ -257,19 +248,16 @@ impl SessionSnapshot {
         &self.workspace
     }
 
-    #[cfg(feature = "openai")]
     pub(crate) fn lineage_id(&self) -> &str {
         &self.lineage_id
     }
 
-    #[cfg(feature = "openai")]
     pub(crate) fn model(&self) -> Result<Model> {
         self.model.parse::<Model>().map_err(|error| {
             NanocodexError::InvalidCheckpoint(format!("snapshot model is unsupported: {error}"))
         })
     }
 
-    #[cfg(feature = "openai")]
     pub(crate) fn into_resume(self) -> Result<SessionResume> {
         if self.version != SESSION_SNAPSHOT_VERSION {
             return Err(NanocodexError::InvalidCheckpoint(format!(
@@ -353,7 +341,6 @@ impl SessionSnapshot {
     }
 }
 
-#[cfg(feature = "openai")]
 pub(crate) struct SessionResume {
     pub(crate) model: Model,
     pub(crate) lineage_id: Arc<str>,
