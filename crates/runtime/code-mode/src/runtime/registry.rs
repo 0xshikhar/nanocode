@@ -261,8 +261,9 @@ impl ToolRegistry {
         &mut self,
         routes: &[crate::attachment::routing::Route],
         store: Option<Arc<dyn crate::attachment::ProcessRouteStore>>,
+        pool: Option<crate::attachment::RunnerPool>,
     ) {
-        if routes.is_empty() {
+        if routes.is_empty() && pool.is_none() {
             return;
         }
         for remote in routes.iter().flat_map(|route| route.tools.iter()) {
@@ -283,20 +284,35 @@ impl ToolRegistry {
             if matches!(
                 name.as_str(),
                 "exec_command" | "write_stdin" | "apply_patch" | "view_image"
-            ) || routes.iter().any(|route| {
-                route
-                    .tools
-                    .iter()
-                    .any(|remote| remote.remote_name() == name)
-            }) {
+            ) || (pool.is_some()
+                && (name.starts_with("mcp__")
+                    || matches!(name.as_str(), "Read" | "Write" | "Edit" | "Glob" | "Grep")))
+                || routes.iter().any(|route| {
+                    route
+                        .tools
+                        .iter()
+                        .any(|remote| remote.remote_name() == name)
+                })
+            {
                 *tool = Arc::new(crate::attachment::routing::RoutedTool {
                     local: Arc::clone(tool),
                     routes: Arc::clone(&routes),
+                    pool: pool.clone(),
                     sessions: Arc::clone(&sessions),
                     local_runtime_id: Arc::clone(&local_runtime_id),
                 });
                 self.definitions[index] = tool.definition();
             }
+        }
+        if let Some(pool) = pool {
+            let provider = Arc::new(crate::attachment::routing::RunnerProvider {
+                pool,
+                routes,
+                sessions,
+                local_runtime_id,
+                providers: self.providers.clone(),
+            });
+            self.providers.insert(0, provider);
         }
     }
 
@@ -343,7 +359,7 @@ impl ToolRegistry {
 
     pub(crate) fn code_mode_tool_names(&self) -> Vec<(String, String)> {
         let mut names = self
-            .code_mode_definitions()
+            .model_code_mode_definitions()
             .into_iter()
             .map(|definition| {
                 (
@@ -384,6 +400,17 @@ impl ToolRegistry {
             .collect::<Vec<_>>();
         summaries.sort_by(|left, right| left.0.cmp(&right.0));
         summaries
+    }
+
+    fn model_code_mode_definitions(&self) -> Vec<ToolDefinition> {
+        first_normalized_definitions(
+            self.registered_code_mode_definitions().into_iter().chain(
+                self.providers
+                    .iter()
+                    .filter(|provider| provider.model_catalog_visible())
+                    .flat_map(|provider| provider.available_definitions()),
+            ),
+        )
     }
 
     pub(crate) fn code_mode_definitions(&self) -> Vec<ToolDefinition> {

@@ -19,6 +19,24 @@ pub fn install_default_tools_with_process_routes(
     additive: Vec<Arc<dyn Tool>>,
     process_routes: Option<Arc<dyn nanocode_code_mode::attachment::ProcessRouteStore>>,
 ) -> Result<crate::ClaudeTools> {
+    install_default_tools_with_runner_pool(
+        workspace,
+        handle,
+        selected,
+        additive,
+        process_routes,
+        None,
+    )
+}
+
+pub fn install_default_tools_with_runner_pool(
+    workspace: PathBuf,
+    handle: &AgentHandle,
+    selected: Option<Tools>,
+    additive: Vec<Arc<dyn Tool>>,
+    process_routes: Option<Arc<dyn nanocode_code_mode::attachment::ProcessRouteStore>>,
+    runner_pool: Option<nanocode_code_mode::attachment::RunnerPool>,
+) -> Result<crate::ClaudeTools> {
     let jobs = Arc::new(crate::claude_bash::Jobs::default());
     let selected = match selected {
         Some(tools) => tools,
@@ -40,6 +58,10 @@ pub fn install_default_tools_with_process_routes(
     };
     let selected = match process_routes {
         Some(store) => selected.with_default_process_route_store(store),
+        None => selected,
+    };
+    let selected = match runner_pool {
+        Some(pool) => selected.with_runner_pool(pool),
         None => selected,
     };
     let mut selected = selected

@@ -145,6 +145,7 @@ pub struct Registry {
     status_queues: std::sync::Mutex<HashMap<(String, AgentId), mpsc::UnboundedSender<OrderedJob>>>,
 
     completion_retries: std::sync::Mutex<HashMap<(String, AgentId), (u32, bool)>>,
+    completion_dispatch: std::sync::Mutex<HashMap<(String, AgentId), Arc<tokio::sync::Mutex<()>>>>,
 
     parent_resolver: std::sync::RwLock<Option<ParentResolver>>,
 }
@@ -1191,6 +1192,7 @@ impl Registry {
             this: std::sync::OnceLock::new(),
             status_queues: std::sync::Mutex::new(HashMap::new()),
             completion_retries: std::sync::Mutex::new(HashMap::new()),
+            completion_dispatch: std::sync::Mutex::new(HashMap::new()),
             parent_resolver: std::sync::RwLock::new(None),
         }
     }
@@ -1272,13 +1274,13 @@ impl Registry {
             registry
                 .announce_restored_completions(&root, &completed)
                 .await;
-            let _ = ready.send(Some(Ok(())));
             registry.changed();
             for (id, result) in registry.resume_interrupted(&root).await {
                 if let Err(error) = result {
                     tracing::warn!(%id, %error, "could not resume restored subagent");
                 }
             }
+            let _ = ready.send(Some(Ok(())));
         }));
     }
 
@@ -2034,7 +2036,7 @@ impl Registry {
                 message = format!("{message}\n\nDelegated task:\n{task}");
             }
             let result = self
-                .send_message(
+                .send_message_restored(
                     root_session_id,
                     id,
                     MessagePriority::Deferred,
@@ -2880,25 +2882,48 @@ impl Registry {
                 "subagent completion parent is not the root session",
             ));
         }
-        let Some(status) = self.take_completion(root_session_id, id, revision).await else {
+        let dispatch = lock_unpoisoned(&self.completion_dispatch)
+            .entry((root_session_id.to_owned(), id))
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone();
+        let _dispatch = dispatch.lock().await;
+        if self
+            .peek_completion(root_session_id, id, revision)
+            .await
+            .is_none()
+        {
             return Ok(false);
-        };
+        }
         if self.store_for(root_session_id).is_some()
             && let Err(error) = self.persist_durably(root_session_id).await
         {
-            self.restore_completion(root_session_id, id, revision).await;
             self.retry_completion(root_session_id, id, revision);
             return Err(error);
         }
+        let Some((status, session_id)) = self.peek_completion(root_session_id, id, revision).await
+        else {
+            return Ok(false);
+        };
         match parent
-            .route_prompt(nanocode_agent::input::Prompt::new(
-                completion_continuation_prompt(id, &status),
-            ))
+            .route_prompt_request(
+                nanocode_agent::PromptRequest::new(completion_continuation_prompt(id, &status))
+                    .request_id(format!("subagent-completion:{session_id}:{revision}")),
+            )
             .await
         {
-            Ok(_) => Ok(true),
+            Ok(_) => {
+                self.acknowledge_completion(root_session_id, id, revision)
+                    .await;
+                if self.store_for(root_session_id).is_some()
+                    && let Err(error) = self.persist_durably(root_session_id).await
+                {
+                    self.restore_completion(root_session_id, id, revision).await;
+                    self.retry_completion(root_session_id, id, revision);
+                    return Err(error);
+                }
+                Ok(true)
+            }
             Err(error) => {
-                self.restore_completion(root_session_id, id, revision).await;
                 if !matches!(
                     error,
                     NanocodexError::AgentStopped | NanocodexError::TurnStopped
@@ -2910,34 +2935,26 @@ impl Registry {
         }
     }
 
-    async fn take_completion(
+    async fn peek_completion(
         &self,
         root_session_id: &str,
         id: AgentId,
         revision: u64,
-    ) -> Option<AgentStatus> {
-        let taken = {
-            let mut state = self.state.lock().await;
-            match state
-                .scopes
-                .get_mut(root_session_id)
-                .and_then(|scope| scope.sessions.get_mut(&id))
-            {
-                Some(session)
-                    if session.pending_completion == Some(revision)
-                        && session.status.wakes_parent() =>
-                {
-                    session.pending_completion = None;
-                    Some(session.status.clone())
-                }
-                _ => None,
-            }
-        };
-        if taken.is_some() {
-            lock_unpoisoned(&self.completion_retries).remove(&(root_session_id.to_owned(), id));
-            self.changed();
-        }
-        taken
+    ) -> Option<(AgentStatus, String)> {
+        let state = self.state.lock().await;
+        state
+            .scopes
+            .get(root_session_id)
+            .and_then(|scope| scope.sessions.get(&id))
+            .filter(|session| {
+                session.pending_completion == Some(revision) && session.status.wakes_parent()
+            })
+            .map(|session| {
+                (
+                    session.status.clone(),
+                    session.descriptor.session_id.clone(),
+                )
+            })
     }
 
     async fn restore_completion(&self, root_session_id: &str, id: AgentId, revision: u64) {
@@ -3153,6 +3170,19 @@ impl Registry {
         body: String,
     ) -> std::io::Result<MessageReceipt> {
         self.await_restored(session_id).await?;
+        self.send_message_restored(session_id, to, priority, purpose, in_reply_to, body)
+            .await
+    }
+
+    async fn send_message_restored(
+        self: &Arc<Self>,
+        session_id: &str,
+        to: AgentId,
+        priority: MessagePriority,
+        purpose: MessagePurpose,
+        in_reply_to: Option<MessageId>,
+        body: String,
+    ) -> std::io::Result<MessageReceipt> {
         let _residency_guard = self.residency_lock.lock().await;
         let _message_guard = self.message_lock.lock().await;
         self.rehydrate(session_id, to, purpose).await?;

@@ -16,9 +16,16 @@ pub use nanocode_agent::{
 pub use nanocode_backend_codex::NanocodexBuilder as CodexBuilder;
 mod harness;
 pub use harness::{Harness, HarnessBuilder, HarnessRequest};
+#[cfg(not(target_family = "wasm"))]
+pub mod runners;
 mod runtime;
 pub use nanocode_agent::{Model, ReasoningMode, Thinking};
 pub use nanocode_backend_claude::{Claude, ClaudeClient};
+#[cfg(not(target_family = "wasm"))]
+pub use runners::{
+    AttachmentError, Runner, RunnerEvent, RunnerHandle, RunnerInfo, RunnerPool, RunnerServer,
+    RunnerServerConfig, RunnerStatus,
+};
 
 pub use nanocode_backend_codex::{Codex, client::OpenAi};
 pub use nanocode_code_mode::Tool;

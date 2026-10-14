@@ -4,10 +4,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+use clap::Parser;
 use futures_util::StreamExt;
 use nanocode::{
-    AgentStatus, HarnessFamily, ModelSelection, PromptRequest, PromptRoute, ScopedAgentUpdate,
-    ServiceTier, Thinking, TurnControl, TurnResult,
+    AgentStatus, HarnessFamily, ModelSelection, PromptRequest, PromptRoute, Runner, RunnerEvent,
+    RunnerInfo, RunnerServer, RunnerServerConfig, RunnerStatus, ScopedAgentUpdate, ServiceTier,
+    Thinking, TurnControl, TurnResult,
     agent::{
         Agent, AgentEvents,
         events::{AgentEvent, AgentEventKind},
@@ -78,6 +80,7 @@ pub enum AppEvent {
         id: String,
         result: std::result::Result<(), String>,
     },
+    RunnerListening(std::result::Result<RunnerServer, String>),
     AgentReady(Box<Ready>),
     AgentFailed(String),
     Sessions(std::result::Result<Vec<SessionSummary>, String>),
@@ -155,7 +158,6 @@ pub struct Launch {
     pub resume: Option<String>,
     pub pick_session: bool,
     pub prompt: Option<String>,
-    pub remote_label: Option<String>,
     pub history_path: Option<PathBuf>,
     pub home: PathBuf,
     pub thinking_override: Option<Thinking>,
@@ -180,7 +182,6 @@ pub struct App {
     pub theme: Theme,
     pub status: Option<(String, Instant)>,
     pub starting: bool,
-    pub remote_label: Option<String>,
     pub pending_switch: Option<(ModelSelection, Thinking, ServiceTier)>,
     pub spinner: Spinner,
     toggle_mouse: bool,
@@ -238,7 +239,6 @@ pub async fn run(launch: Launch, mut terminal: TerminalSession) -> Result<()> {
         theme: Theme::default(),
         status: None,
         starting: true,
-        remote_label: launch.remote_label.clone(),
         pending_switch: None,
         spinner: Spinner::new(Instant::now(), SPINNER_FRAME),
         toggle_mouse: false,
@@ -267,6 +267,10 @@ pub async fn run(launch: Launch, mut terminal: TerminalSession) -> Result<()> {
         next_local: 0,
         history_path: launch.history_path.clone(),
     };
+    for server in app.host.runtime.runner_servers() {
+        app.notice(NoticeLevel::Info, listener_notice(&server));
+    }
+    forward_runners(&app.host.runtime, app.tx.clone());
     if let Some(updates) = app.host.runtime.take_subagent_updates() {
         forward_subagents(updates, app.tx.clone());
     }
@@ -295,6 +299,58 @@ pub async fn run(launch: Launch, mut terminal: TerminalSession) -> Result<()> {
         );
     }
     outcome
+}
+
+fn runner_status_label(status: &RunnerStatus) -> String {
+    match status {
+        RunnerStatus::Connecting => "connecting".to_owned(),
+        RunnerStatus::Ready => "connected".to_owned(),
+        RunnerStatus::Disconnected => "disconnected".to_owned(),
+        RunnerStatus::Failed(error) => format!("failed: {error}"),
+    }
+}
+
+fn runner_info(info: &RunnerInfo) -> String {
+    let workspace = info
+        .workspace
+        .as_ref()
+        .map(|workspace| workspace.display().to_string())
+        .unwrap_or_else(|| "pending workspace".into());
+    format!(
+        "{} {} ({}, {:?}, {} tools, {workspace})",
+        info.name,
+        runner_status_label(&info.status),
+        info.endpoint,
+        info.mode,
+        info.tool_count
+    )
+}
+
+fn listener_notice(server: &RunnerServer) -> String {
+    format!(
+        "listening {} · token {}\nStart a runner: nc runner --connect {} --token {}",
+        server.endpoint(),
+        server.token(),
+        server.endpoint(),
+        server.token()
+    )
+}
+
+fn forward_runners(runtime: &nanocode::Nanocodex, tx: UnboundedSender<AppEvent>) {
+    let mut events = runtime.runner_events();
+    tokio::spawn(async move {
+        while let Some(event) = events.recv().await {
+            let (level, message) = match event {
+                RunnerEvent::StatusChanged { info } => (NoticeLevel::Info, runner_info(&info)),
+                RunnerEvent::Failed { name, error } => {
+                    (NoticeLevel::Error, format!("runner {name}: {error}"))
+                }
+            };
+            if tx.send(AppEvent::Notice(level, message)).is_err() {
+                break;
+            }
+        }
+    });
 }
 
 fn forward_subagents(mut updates: nanocode::SubagentUpdates, tx: UnboundedSender<AppEvent>) {
@@ -610,6 +666,15 @@ impl App {
             AppEvent::Subagent(update) => {
                 self.subagent(update);
                 false
+            }
+            AppEvent::RunnerListening(result) => {
+                match result {
+                    Ok(server) => {
+                        self.notice(NoticeLevel::Info, listener_notice(&server));
+                    }
+                    Err(error) => self.notice(NoticeLevel::Error, error),
+                }
+                true
             }
             AppEvent::Notice(level, text) => {
                 self.notice(level, text);
@@ -1431,6 +1496,7 @@ impl App {
             "new" | "clear" => self.new_session(),
             "agents" => self.show_tree = !self.show_tree,
             "compact" => self.compact(),
+            "runner" => self.runner_command(argument),
             "session" | "status" => {
                 let session = self.session_id().unwrap_or_else(|| "not started".into());
                 let store = if self.host.config.store.is_some() {
@@ -1438,14 +1504,7 @@ impl App {
                 } else {
                     "ephemeral"
                 };
-                let remote = self
-                    .host
-                    .config
-                    .remote
-                    .as_ref()
-                    .map(|remote| remote.status_label())
-                    .or_else(|| self.remote_label.clone())
-                    .unwrap_or_else(|| "local tools".into());
+                let remote = self.runner_status();
                 self.notice(
                     NoticeLevel::Info,
                     format!(
@@ -1476,6 +1535,143 @@ impl App {
                 NoticeLevel::Warning,
                 format!("unknown command /{other}; try /help"),
             ),
+        }
+    }
+
+    pub fn runner_status(&self) -> String {
+        let runners = self.host.runtime.list_runners();
+        if runners.is_empty() && self.host.runtime.runner_servers().is_empty() {
+            return "local tools".into();
+        }
+        let mut lines = runners
+            .into_iter()
+            .map(|runner| format!("{} {}", runner.name, runner_status_label(&runner.status)))
+            .collect::<Vec<_>>();
+        lines.extend(
+            self.host
+                .runtime
+                .runner_servers()
+                .iter()
+                .map(|server| format!("listening {}", server.endpoint())),
+        );
+        lines.join(" · ")
+    }
+
+    fn runner_command(&mut self, argument: &str) {
+        let Some(words) = shlex_words(argument) else {
+            self.notice(NoticeLevel::Error, "unterminated quote in /runner command");
+            return;
+        };
+        let parsed = crate::commands::RunnerCommand::try_parse_from(
+            std::iter::once("/runner".to_owned()).chain(words),
+        );
+        let action = match parsed {
+            Ok(command) => command
+                .action
+                .unwrap_or(crate::commands::RunnerAction::List),
+            Err(error) => {
+                self.notice(NoticeLevel::Error, error.to_string());
+                return;
+            }
+        };
+        let runtime = self.host.runtime.clone();
+        let tx = self.tx.clone();
+        match action {
+            crate::commands::RunnerAction::List => {
+                let mut lines = runtime
+                    .list_runners()
+                    .iter()
+                    .map(runner_info)
+                    .collect::<Vec<_>>();
+                lines.extend(
+                    runtime
+                        .runner_servers()
+                        .iter()
+                        .map(|server| format!("listening {}", server.endpoint())),
+                );
+                self.notice(
+                    NoticeLevel::Info,
+                    if lines.is_empty() {
+                        "no runners or listeners".into()
+                    } else {
+                        lines.join("\n")
+                    },
+                );
+            }
+            crate::commands::RunnerAction::Connect {
+                url,
+                token,
+                name,
+                replace,
+            } => {
+                let mut runner = Runner::connect(url);
+                if let Some(token) = token {
+                    runner = runner.token(token);
+                }
+                if let Some(name) = name {
+                    runner = runner.name(name);
+                }
+                runner = if replace {
+                    runner.replace()
+                } else {
+                    runner.alongside()
+                };
+                tokio::spawn(async move {
+                    let (level, message) = match runtime.connect_runner(runner).await {
+                        Ok(handle) => (
+                            NoticeLevel::Info,
+                            format!("connected runner {}", runner_info(&handle.info())),
+                        ),
+                        Err(error) => (
+                            NoticeLevel::Error,
+                            format!("runner connection failed: {error}"),
+                        ),
+                    };
+                    drop(tx.send(AppEvent::Notice(level, message)));
+                });
+                self.flash("connecting runner…");
+            }
+            crate::commands::RunnerAction::Listen { address, token } => {
+                let mut config = RunnerServerConfig::listen(address.to_string());
+                if let Some(token) = token {
+                    config = config.token(token);
+                }
+                tokio::spawn(async move {
+                    let result = runtime
+                        .listen_for_runners(config)
+                        .await
+                        .map_err(|error| error.to_string());
+                    drop(tx.send(AppEvent::RunnerListening(result)));
+                });
+                self.flash("opening runner listener…");
+            }
+            crate::commands::RunnerAction::Disconnect { name } => {
+                tokio::spawn(async move {
+                    let (level, message) = match runtime.disconnect_runner(&name).await {
+                        Ok(_) => (NoticeLevel::Info, format!("disconnected runner {name}")),
+                        Err(error) => (
+                            NoticeLevel::Error,
+                            format!("runner disconnect failed: {error}"),
+                        ),
+                    };
+                    drop(tx.send(AppEvent::Notice(level, message)));
+                });
+            }
+            crate::commands::RunnerAction::StopListening => {
+                let servers = runtime.runner_servers();
+                tokio::spawn(async move {
+                    for server in servers {
+                        if let Err(error) = server.stop().await {
+                            drop(tx.send(AppEvent::Notice(NoticeLevel::Error, error.to_string())));
+                            return;
+                        }
+                    }
+                    drop(tx.send(AppEvent::Notice(
+                        NoticeLevel::Info,
+                        "stopped runner listeners".into(),
+                    )));
+                });
+            }
         }
     }
 

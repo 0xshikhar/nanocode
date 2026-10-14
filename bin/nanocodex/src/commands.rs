@@ -1,4 +1,4 @@
-pub const COMMANDS: [(&str, &str); 21] = [
+pub const COMMANDS: [(&str, &str); 22] = [
     ("/model", "switch harness, model, thinking and speed"),
     ("/thinking", "open the thinking dial"),
     ("/effort", "open the thinking dial"),
@@ -18,12 +18,44 @@ pub const COMMANDS: [(&str, &str); 21] = [
     ("/image", "attach an image from the clipboard"),
     ("/detach", "remove pending image attachments"),
     ("/session", "show session, model and tool details"),
+    ("/runner", "list, connect, listen or disconnect runners"),
     ("/expand", "expand or collapse tools and reasoning"),
     ("/mouse", "toggle mouse capture for native text selection"),
     ("/help", "show key bindings"),
     ("/clear", "start a new session"),
     ("/quit", "exit nanocodex"),
 ];
+
+#[derive(clap::Parser)]
+#[command(name = "/runner", disable_help_subcommand = true)]
+pub struct RunnerCommand {
+    #[command(subcommand)]
+    pub action: Option<RunnerAction>,
+}
+
+#[derive(clap::Subcommand)]
+pub enum RunnerAction {
+    #[command(alias = "status")]
+    List,
+    Connect {
+        url: String,
+        #[arg(long)]
+        token: Option<String>,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        replace: bool,
+    },
+    Listen {
+        address: std::net::SocketAddr,
+        #[arg(long)]
+        token: Option<String>,
+    },
+    Disconnect {
+        name: String,
+    },
+    StopListening,
+}
 
 pub fn matching(prefix: &str) -> impl Iterator<Item = (&'static str, &'static str)> + '_ {
     COMMANDS

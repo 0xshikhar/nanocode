@@ -31,6 +31,7 @@ export type AgentSummary = Readonly<{
   parent_agent_id: AgentId | null;
   status: AgentStatus;
   last_output?: unknown;
+  completion_revision?: number;
 }>;
 export type JsonSchema = boolean | Readonly<Record<string, unknown>>;
 export type SpawnOptions<B extends BackendName = BackendName> = Readonly<{
@@ -63,6 +64,7 @@ export type LifecycleReport = Readonly<{ agents: readonly AgentSummary[] }>;
 export type DirectoryEntry = AgentSummary & Readonly<{
   can_message: boolean;
   can_manage: boolean;
+  resuming?: true;
 }>;
 export type DirectoryOptions = Readonly<{
   includeCompleted?: boolean | undefined;

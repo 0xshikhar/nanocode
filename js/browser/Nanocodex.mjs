@@ -1,3 +1,4 @@
+import { connectRunnerSocket } from "./runners.mjs";
 import { create as createAgent } from "./Agent.mjs";
 import { create as createInlineAgent } from "./InlineAgent.mjs";
 import { open as openWorkspace } from "./workspace.mjs";
@@ -9,9 +10,10 @@ import { createNanocodexFactory } from "../runtime/nanocodex.mjs";
 
 
 export const create = createNanocodexFactory({
+  connectRunnerSocket,
   placement: "browser",
   createAgent(options) {
-    return options.filesystem ? createInlineAgent(options) : createAgent(options);
+    return options.filesystem || options.tools ? createInlineAgent(options) : createAgent(options);
   },
   async prepareWorkspace({ workspace, filesystem, needsFiles }) {
     if (filesystem || !needsFiles) return { workspace, filesystem };

@@ -1,3 +1,4 @@
+import { connectRunnerSocket, listenRunnerSockets, runnerProcessTools } from "./runners.mjs";
 import { connect as connectCua } from "./cua.mjs";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
@@ -8,6 +9,7 @@ import { createNanocodexFactory } from "../runtime/nanocodex.mjs";
 
 
 export const create = createNanocodexFactory({
+  connectRunnerSocket, listenRunnerSockets, runnerProcessTools,
   placement: "node",
   connectCua,
   createAgent,

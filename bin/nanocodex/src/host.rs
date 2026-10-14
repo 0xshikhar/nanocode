@@ -1,16 +1,11 @@
-use std::{
-    any::Any,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::path::{Path, PathBuf};
 
 use nanocode::{
     Claude, ClaudeHarness, ClaudeModel, Codex, CodexHarness, Model, ModelSelection, Nanocodex,
-    OpenAi, ServiceTier, Thinking, Tools,
+    OpenAi, Runner, RunnerServerConfig, ServiceTier, Thinking,
     agent::{Agent, AgentEvents},
     claude::ClaudeClient,
     durability::SessionStore,
-    tools::attachment::{AttachmentTarget, RemoteMode, RemoteRunner, RunnerHost},
 };
 
 use crate::cli::{RemoteArgs, RunnerModeArg};
@@ -19,33 +14,12 @@ pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Clone)]
-pub struct Remote {
-    pub tools: Tools,
-    pub label: String,
-    runner: RemoteRunner,
-    _guard: Arc<dyn Any + Send + Sync>,
-}
-
-impl Remote {
-    pub fn status_label(&self) -> String {
-        format!(
-            "{} {}",
-            if self.runner.is_connected() {
-                "connected"
-            } else {
-                "disconnected"
-            },
-            self.label
-        )
-    }
-}
-
-#[derive(Clone)]
 pub struct HostConfig {
     pub workspace: PathBuf,
     pub store: Option<SessionStore>,
     pub subagents: bool,
-    pub remote: Option<Remote>,
+    pub runners: Vec<Runner>,
+    pub runner_servers: Vec<RunnerServerConfig>,
 }
 
 #[derive(Clone)]
@@ -56,16 +30,18 @@ pub struct Host {
 
 impl Host {
     pub fn build(config: HostConfig, model: &ModelSelection, thinking: Thinking) -> Result<Self> {
-        let mut codex = CodexHarness::new(OpenAi::default());
-        let mut claude = ClaudeHarness::new(ClaudeClient::default());
-        if let Some(remote) = &config.remote {
-            codex = codex.tools(remote.tools.clone());
-            claude = claude.tools(remote.tools.clone());
-        }
+        let codex = CodexHarness::new(OpenAi::default());
+        let claude = ClaudeHarness::new(ClaudeClient::default());
         let mut builder = Nanocodex::builder()
             .openai(codex)
             .claude(claude)
             .workspace(config.workspace.clone());
+        for runner in &config.runners {
+            builder = builder.runner(runner.clone());
+        }
+        for server in &config.runner_servers {
+            builder = builder.runner_server(server.clone());
+        }
         builder = match &config.store {
             Some(store) => builder.durability(store.clone()),
             None => builder.durability(nanocode::durability::MemoryStore::new()?),
@@ -174,71 +150,49 @@ pub fn open_store(home: &Path) -> Result<SessionStore> {
     Ok(nanocode::session_store(store)?)
 }
 
-pub async fn attach_remote(
-    args: &RemoteArgs,
-    _workspace: &Path,
-    notify: &mut dyn FnMut(&str),
-) -> Result<Option<Remote>> {
-    let mode = match args.runner_mode {
-        RunnerModeArg::Alongside => RemoteMode::Alongside,
-        RunnerModeArg::Replace => RemoteMode::Replace,
-    };
-    let (runner, guard, label): (RemoteRunner, Arc<dyn Any + Send + Sync>, String) =
-        match (&args.runner_connect, args.runner_host) {
-            (Some(url), _) => {
-                let token = args
-                    .runner_token
-                    .clone()
-                    .ok_or("--runner-connect requires --runner-token or NANOCODEX_RUNNER_TOKEN")?;
-                let runner = call_timeout(RemoteRunner::new(args.runner_name.clone())?, args)?;
-                let connection = runner.connect(AttachmentTarget::new(url, token)?)?;
-                (
-                    runner,
-                    Arc::new(connection),
-                    format!("runner endpoint {url}"),
-                )
+pub fn runner_configs(args: &RemoteArgs) -> Result<(Vec<Runner>, Vec<RunnerServerConfig>)> {
+    let mut runners = Vec::new();
+    let mut servers = Vec::new();
+    match (&args.runner_connect, args.runner_host) {
+        (Some(url), _) => {
+            let token = args
+                .runner_token
+                .as_ref()
+                .ok_or("--runner-connect requires --runner-token or NANOCODEX_RUNNER_TOKEN")?;
+            let mut runner = Runner::connect(url).token(token).name(&args.runner_name);
+            runner = match args.runner_mode {
+                RunnerModeArg::Alongside => runner.alongside(),
+                RunnerModeArg::Replace => runner.replace(),
+            };
+            if let Some(workspace) = &args.runner_workspace {
+                runner = runner.workspace(workspace.clone());
             }
-            (None, Some(address)) => {
-                let token = args
-                    .runner_token
-                    .clone()
-                    .ok_or("--runner-host requires --runner-token or NANOCODEX_RUNNER_TOKEN")?;
-                let host = RunnerHost::bind(address).await?;
-                let runner = call_timeout(host.runner(args.runner_name.clone(), token)?, args)?;
-                let label = format!("waiting for runner at {}", host.endpoint());
-                notify(&label);
-                let label = format!("agent endpoint {}", host.endpoint());
-                (runner, Arc::new(host), label)
+            if let Some(ms) = args.runner_call_timeout_ms {
+                runner = runner.call_timeout(std::time::Duration::from_millis(ms));
             }
-            (None, None) if mode == RemoteMode::Replace => {
-                return Err("replace mode requires --runner-connect or --runner-host".into());
+            runners.push(runner);
+        }
+        (None, Some(address)) => {
+            let mut server = RunnerServerConfig::listen(address.to_string());
+            if let Some(token) = &args.runner_token {
+                server = server.token(token);
             }
-            (None, None) => return Ok(None),
-        };
-    let remote = runner.tools().await?;
-    let tools = match &args.runner_workspace {
-        Some(workspace) => Tools::builder().remote_runner(remote, workspace.clone(), mode)?,
-        None => Tools::builder().remote_runner_discovered(remote, mode)?,
+            server = match args.runner_mode {
+                RunnerModeArg::Alongside => server.alongside(),
+                RunnerModeArg::Replace => server.replace(),
+            };
+            if let Some(workspace) = &args.runner_workspace {
+                server = server.workspace(workspace.clone());
+            }
+            if let Some(ms) = args.runner_call_timeout_ms {
+                server = server.call_timeout(std::time::Duration::from_millis(ms));
+            }
+            servers.push(server);
+        }
+        (None, None) if matches!(args.runner_mode, RunnerModeArg::Replace) => {
+            return Err("replace mode requires --runner-connect or --runner-host".into());
+        }
+        (None, None) => {}
     }
-    .build()?;
-    Ok(Some(Remote {
-        tools,
-        label: format!(
-            "{} ({label}, {})",
-            args.runner_name,
-            match args.runner_mode {
-                RunnerModeArg::Alongside => "alongside local tools",
-                RunnerModeArg::Replace => "replacing local tools",
-            }
-        ),
-        runner: runner.clone(),
-        _guard: Arc::new((guard, runner)),
-    }))
-}
-
-fn call_timeout(runner: RemoteRunner, args: &RemoteArgs) -> Result<RemoteRunner> {
-    Ok(match args.runner_call_timeout_ms {
-        Some(ms) => runner.with_call_timeout(std::time::Duration::from_millis(ms))?,
-        None => runner,
-    })
+    Ok((runners, servers))
 }

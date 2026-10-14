@@ -1,5 +1,9 @@
 mod driver;
 mod host;
+#[cfg(not(target_family = "wasm"))]
+mod pool;
+#[cfg(not(target_family = "wasm"))]
+pub use pool::{Runner, RunnerEvent, RunnerHandle, RunnerInfo, RunnerPool, RunnerServer, RunnerServerConfig, RunnerStatus};
 pub(crate) mod process_routes;
 mod protocol;
 pub use process_routes::ProcessRouteStore;

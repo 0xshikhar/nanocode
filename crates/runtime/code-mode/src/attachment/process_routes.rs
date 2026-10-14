@@ -2,7 +2,10 @@ use crate::contract::ToolError;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 use tokio::sync::Mutex;
 
 #[async_trait]
@@ -22,6 +25,8 @@ pub(crate) struct SessionMapping {
 struct RouteSession {
     next_id: i32,
     handles: HashMap<i32, SessionMapping>,
+    #[serde(default)]
+    mounts: HashSet<String>,
 }
 
 pub(crate) struct ProcessRoutes {
@@ -54,6 +59,10 @@ impl ProcessRoutes {
                 RouteSession::default()
             };
             if state.next_id < 0
+                || state
+                    .mounts
+                    .iter()
+                    .any(|name| super::RemoteRunner::new(name).is_err())
                 || state.handles.iter().any(|(id, mapping)| {
                     *id <= 0
                         || *id > state.next_id
@@ -66,6 +75,53 @@ impl ProcessRoutes {
             sessions.insert(session_id.to_owned(), state);
         }
         Ok(())
+    }
+
+    pub async fn remember_mounts(
+        &self,
+        session_id: &str,
+        mounts: &[String],
+    ) -> Result<(), ToolError> {
+        let mut sessions = self.sessions.lock().await;
+        self.load(session_id, &mut sessions).await?;
+        let state = sessions
+            .get_mut(session_id)
+            .ok_or("process route session missing")?;
+        let previous = state.mounts.clone();
+        state.mounts.extend(mounts.iter().cloned());
+        if previous != state.mounts {
+            if let Some(store) = &self.store {
+                if let Err(error) = store.save(session_id, serde_json::to_value(&*state)?).await {
+                    state.mounts = previous;
+                    return Err(error);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn known_mount(
+        &self,
+        session_id: &str,
+        path: &std::path::Path,
+    ) -> Result<Option<String>, ToolError> {
+        let mut sessions = self.sessions.lock().await;
+        self.load(session_id, &mut sessions).await?;
+        let state = sessions
+            .get(session_id)
+            .ok_or("process route session missing")?;
+        Ok(state
+            .mounts
+            .iter()
+            .map(String::as_str)
+            .chain(
+                state
+                    .handles
+                    .values()
+                    .filter_map(|mapping| mapping.namespace.as_deref()),
+            )
+            .find(|name| path.starts_with(format!("/{name}")))
+            .map(str::to_owned))
     }
 
     pub async fn get(&self, session_id: &str, id: i32) -> Result<SessionMapping, ToolError> {

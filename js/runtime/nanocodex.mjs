@@ -4,6 +4,7 @@
 
 import {
   createSessionId,
+  appendDeveloperMessage,
   observeAgentRelease,
   retainAgentForOwner,
   inheritance as agentInheritance,
@@ -18,8 +19,10 @@ import { claudeWorkspaceTools } from "./claude-workspace-tools.mjs";
 
 import { toolRouterBrand, toolRouterRuntime, toolMapSource } from "./tool-router.mjs";
 
+import { createRunnerPool, unavailableProcessTools } from "./runners.mjs";
+
 const FAMILIES = Object.freeze(["codex", "claude"]);
-const RUNTIME_KEYS = new Set(["backends", "harness", "model", "thinking", "instructions", "workspace", "filesystem", "codeEvaluator", "module", "cua", "durability"]);
+const RUNTIME_KEYS = new Set(["backends", "harness", "model", "thinking", "instructions", "workspace", "filesystem", "codeEvaluator", "module", "cua", "durability", "runners", "runnerServer"]);
 const RUNTIME_REJECTED = Object.freeze({
   tools: "tools belong to each backend: backends.codex.tools / backends.claude.tools",
   codeMode: "Code Mode is always enabled",
@@ -133,6 +136,8 @@ function snapshotRuntime(options, platform) {
     cua: snapshotCua(options.cua),
     codeEvaluator: options.codeEvaluator,
     module: options.module,
+    runners: options.runners,
+    runnerServer: options.runnerServer,
   });
 }
 
@@ -393,9 +398,18 @@ async function prepareWorkspace(config, platform) {
 }
 
 
-function withFilesystemTools(tools, filesystem, family, cua) {
+function withFilesystemTools(tools, filesystem, family, cua, runnerPool, processTools) {
   if (tools === undefined) tools = family === "claude" ? claudeWorkspaceTools(filesystem)
     : Object.entries(workspaceTools(filesystem)).map(([name, tool]) => ({ name, ...tool }));
+  if (runnerPool) {
+    if (tools?.[toolRouterBrand]) {
+      tools = runnerPool.wrapTools(tools, processTools);
+    } else if (Array.isArray(tools)) {
+      const names = new Set(tools.map(tool => tool.name));
+      tools = [...tools, ...Object.entries(processTools).filter(([name]) => !names.has(name)).map(([name, tool]) => ({ name, ...tool }))];
+    } else tools = { ...processTools, ...tools };
+    if (!tools?.[toolRouterBrand]) tools = runnerPool.wrapTools(tools);
+  }
   return withCua(tools, cua);
 }
 
@@ -404,7 +418,7 @@ async function codexChild(config, catalog, defaults, created) {
   const { model, thinking } = childSelection(catalog, defaults, "codex");
   const workspace = config.workspace;
   const recipe = { transport: backend.transport, model, thinking, toolMode: toolMode(backend),
-    tools: withFilesystemTools(await materializeTools(backend.tools, { harness: "codex", role: "child" }, created), config.filesystem, "codex", config.cua) };
+    tools: withFilesystemTools(await materializeTools(backend.tools, { harness: "codex", role: "child" }, created), config.filesystem, "codex", config.cua, config.runnerPool, config.processTools) };
   if (workspace !== undefined) recipe.workspace = workspace;
   if (config.codeEvaluator !== undefined) recipe.codeEvaluator = config.codeEvaluator;
   for (const key of CODEX_CHILD_KEYS) if (backend.extras[key] !== undefined) recipe[key] = backend.extras[key];
@@ -416,7 +430,7 @@ async function claudeChild(config, catalog, defaults, created) {
   const { model, thinking } = childSelection(catalog, defaults, "claude");
   const workspace = config.workspace;
   const recipe = { ...backend.auth, model, toolMode: toolMode(backend),
-    tools: withFilesystemTools(await materializeTools(backend.tools, { harness: "claude", role: "child" }, created), config.filesystem, "claude", config.cua) ?? [] };
+    tools: withFilesystemTools(await materializeTools(backend.tools, { harness: "claude", role: "child" }, created), config.filesystem, "claude", config.cua, config.runnerPool, config.processTools) ?? [] };
   if (thinking !== undefined) recipe.thinking = thinking;
   if (workspace !== undefined) recipe.workspace = workspace;
   if (config.codeEvaluator !== undefined) recipe.codeEvaluator = config.codeEvaluator;
@@ -448,18 +462,18 @@ async function agentOptions(config, catalog, defaults, family, settings, created
   if (family === "codex") {
     const workspace = config.workspace;
     const options = { ...backend.extras, ...shared, transport: backend.transport, toolMode: toolMode(backend),
-      tools: withCua(await materializeTools(backend.tools, { harness: "codex", role: "root" }, created), config.cua) };
+      tools: config.runnerPool ? withFilesystemTools(await materializeTools(backend.tools, { harness: "codex", role: "root" }, created), config.filesystem, "codex", config.cua, config.runnerPool, config.processTools) : withCua(await materializeTools(backend.tools, { harness: "codex", role: "root" }, created), config.cua) };
     if (settings.model !== undefined) options.model = settings.model;
     if (settings.thinking !== undefined) options.thinking = settings.thinking;
     if (workspace !== undefined) options.workspace = workspace;
-    if (backend.tools === undefined && config.filesystem !== undefined) options.filesystem = config.filesystem;
+    if (!config.runnerPool && backend.tools === undefined && config.filesystem !== undefined) options.filesystem = config.filesystem;
     if (config.backends.claude !== undefined) options.harnesses = { claude: await claudeChild(config, catalog, defaults, created) };
     return options;
   }
   const workspace = config.workspace;
   const options = { ...backend.extras, ...backend.auth, ...shared, harness: "claude", model: settings.model,
     toolMode: toolMode(backend), subagents: backend.extras.subagents ?? {},
-    tools: withFilesystemTools(await materializeTools(backend.tools, { harness: "claude", role: "root" }, created), config.filesystem, "claude", config.cua) ?? [] };
+    tools: withFilesystemTools(await materializeTools(backend.tools, { harness: "claude", role: "root" }, created), config.filesystem, "claude", config.cua, config.runnerPool, config.processTools) ?? [] };
   if (settings.thinking !== undefined) options.thinking = settings.thinking;
   if (workspace !== undefined) options.workspace = workspace;
   if (config.backends.codex !== undefined) options.harnesses = { codex: await codexChild(config, catalog, defaults, created) };
@@ -480,10 +494,24 @@ function closedError() {
   return new Error("the Nanocodex runtime has shut down");
 }
 
-function createRuntime(config, catalog, defaults, platform) {
+async function createRuntime(config, catalog, defaults, platform) {
   const owned = new Set();
   const admissions = new Set();
   let closing;
+  const runnerPool = createRunnerPool(platform, config.workspace, async message => {
+    const results = await Promise.allSettled([...owned].map(agent => appendDeveloperMessage(agent, message)));
+    const errors = results.filter(result => result.status === "rejected").map(result => result.reason);
+    if (errors.length) throw new AggregateError(errors, "runner mount message delivery failed");
+  }, config.durability);
+  const process = await platform.runnerProcessTools?.(config.workspace);
+  config = { ...config, runnerPool, processTools: process?.tools ?? unavailableProcessTools() };
+  try {
+    if (config.runnerServer !== undefined) await runnerPool.listenForRunners(config.runnerServer);
+    if (config.runners !== undefined) {
+      if (!Array.isArray(config.runners)) throw new TypeError("runners must be an array");
+      for (const runner of config.runners) await runnerPool.connectRunner(runner);
+    }
+  } catch (error) { await runnerPool.close(); await process?.close(); await config.closeCua?.(); throw error; }
 
 
   const owner = Object.freeze({ admit: (start) => admit(start) });
@@ -494,6 +522,13 @@ function createRuntime(config, catalog, defaults, platform) {
     const admission = (async () => {
       const agent = await start();
       own(agent);
+      if (runnerPool.listRunners().length) {
+        try { await appendDeveloperMessage(agent, runnerPool.mountMessage()); }
+        catch (error) {
+          if (error.code !== "unsupported_capability" || error.capability !== "developer_messages") { await shutdownOwnedAgent(agent); throw error; }
+          globalThis.process?.emitWarning?.("runner mount messages unavailable on this backend", { code: "NANOCODEX_RUNNER_NOTICE_UNAVAILABLE" });
+        }
+      }
       if (closing) {
         await shutdownOwnedAgent(agent).catch(() => {});
         throw closedError();
@@ -587,7 +622,7 @@ function createRuntime(config, catalog, defaults, platform) {
       try {
         next = await agent.session.fork();
       } catch (error) {
-        if (!/completed turn/i.test(error?.message ?? "")) throw error;
+        if (error?.code !== "fork_before_completed_turn") throw error;
       }
       if (next !== undefined) {
         own(next);
@@ -610,6 +645,7 @@ function createRuntime(config, catalog, defaults, platform) {
       await Promise.allSettled([...admissions]);
       const results = await Promise.allSettled([...owned].map((agent) => shutdownOwnedAgent(agent)));
       const errors = results.filter((result) => result.status === "rejected").map((result) => result.reason);
+      try { await runnerPool.close(); await process?.close(); } catch (error) { errors.push(error); }
       try { await config.closeCua?.(); } catch (error) { errors.push(error); }
       if (errors.length) throw new AggregateError(errors, "one or more Nanocodex agents failed to shut down");
     })();
@@ -620,6 +656,12 @@ function createRuntime(config, catalog, defaults, platform) {
     defaults,
     backends: Object.freeze(Object.keys(config.backends)),
     computerUseUnavailable: config.computerUseUnavailable,
+    connectRunner: options => closing ? Promise.reject(closedError()) : runnerPool.connectRunner(options),
+    listenForRunners: options => closing ? Promise.reject(closedError()) : runnerPool.listenForRunners(options),
+    listRunners: runnerPool.listRunners,
+    disconnectRunner: runnerPool.disconnectRunner,
+    stopRunnerListeners: runnerPool.stopRunnerListeners,
+    onRunnerEvent: runnerPool.onRunnerEvent,
     spawn,
     forBackend,
     resume,

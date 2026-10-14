@@ -177,6 +177,14 @@ pub trait ExecutionPolicy: Send + Sync {
         false
     }
 
+    fn identified_steer_accepted<'a>(
+        &'a self,
+        _message_id: String,
+        _input_json: String,
+    ) -> ExecutionFuture<'a, Result<bool>> {
+        Box::pin(async { Ok(false) })
+    }
+
     fn accept_identified_steer<'a>(
         &'a self,
         operation_id: String,
@@ -369,6 +377,14 @@ pub trait ExecutionPolicy: Send + Sync {
 
     fn supports_steer_receipts(&self) -> bool {
         false
+    }
+
+    fn identified_steer_accepted<'a>(
+        &'a self,
+        _message_id: String,
+        _input_json: String,
+    ) -> ExecutionFuture<'a, Result<bool>> {
+        Box::pin(async { Ok(false) })
     }
 
     fn accept_identified_steer<'a>(
@@ -676,6 +692,17 @@ impl Execution {
         Ok(map_admission(
             policy.admit(operation_id.to_owned(), input).await?,
         ))
+    }
+
+    pub(crate) async fn identified_steer_accepted<T: Serialize + ?Sized>(
+        &self,
+        message_id: String,
+        input: &T,
+    ) -> Result<bool> {
+        match &self.policy {
+            Some(policy) => policy.identified_steer_accepted(message_id, encode(input)?).await,
+            None => Ok(false),
+        }
     }
 
     pub(crate) async fn admit_automatic<T: Serialize + ?Sized>(

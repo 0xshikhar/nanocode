@@ -54,6 +54,14 @@ pub trait ClaudeExecutionPolicy: Send + Sync {
         false
     }
 
+    fn identified_steer_accepted(
+        &self,
+        _message_id: String,
+        _input_json: String,
+    ) -> PolicyFuture<'_, bool> {
+        Box::pin(async { Ok(false) })
+    }
+
     fn accept_steer(
         &self,
         _id: String,

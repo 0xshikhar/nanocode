@@ -1434,7 +1434,7 @@ struct WasmConfig {
     reasoning_mode: String,
     #[serde(default)]
     fast_mode: bool,
-    #[serde(default)]
+    #[serde(default = "default_instant_tool_steering")]
     instant_tool_steering: bool,
     #[serde(default)]
     websocket_warmup: bool,
@@ -3479,6 +3479,7 @@ fn turn_failure(error: &NanocodexError) -> TurnFailure {
         NanocodexError::UnsupportedCapability { .. } => "unsupported_capability",
         NanocodexError::CheckpointFamilyMismatch { .. } => "checkpoint_family_mismatch",
         NanocodexError::InvalidCheckpoint(_) => "invalid_checkpoint",
+        NanocodexError::ForkBeforeCompletedTurn => "fork_before_completed_turn",
         _ => "failed",
     };
     let capability = match error {
@@ -4071,6 +4072,10 @@ fn parse_revision(revision: &str) -> Result<u64, StoreError> {
 }
 
 const fn default_raw_api_events() -> bool {
+    true
+}
+
+const fn default_instant_tool_steering() -> bool {
     true
 }
 

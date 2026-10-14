@@ -48,7 +48,7 @@ pub(super) struct PromptCacheConfig {
     pub(super) shared: Option<SharedPromptCache>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(super) struct CodexCompatibility {
     pub(super) instant_tool_steering: bool,
     pub(super) context: ContextSourceConfig,
@@ -57,6 +57,20 @@ pub(super) struct CodexCompatibility {
     pub(super) spawn_factory: Option<Arc<dyn backend::AgentFactory>>,
     pub(super) host_context: Option<Arc<str>>,
     pub(super) child_journal: Option<backend::ChildJournal>,
+}
+
+impl Default for CodexCompatibility {
+    fn default() -> Self {
+        Self {
+            instant_tool_steering: true,
+            context: ContextSourceConfig::default(),
+            execution: ExecutionConfig::default(),
+            before_compaction: None,
+            spawn_factory: None,
+            host_context: None,
+            child_journal: None,
+        }
+    }
 }
 
 impl<F> NanocodexBuilder<F> {

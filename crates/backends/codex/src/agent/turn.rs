@@ -35,6 +35,8 @@ pub(super) enum Command {
     RoutePrompt {
         key: TurnKey,
         prompt: Prompt,
+        request_id: Option<String>,
+        cancel_on_admission: bool,
         parent: Option<tracing::Span>,
         events: EventSink,
         turn_result: oneshot::Sender<Result<TurnResult>>,

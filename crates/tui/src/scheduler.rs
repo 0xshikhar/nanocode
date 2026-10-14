@@ -18,13 +18,14 @@ impl RenderScheduler {
     }
 
     pub fn request_streaming(&mut self, now: Instant) {
-        if self.deadline.is_some() {
-            return;
-        }
         let next_frame = self
             .last_presented
             .map_or(now, |presented| presented + self.frame_interval);
-        self.deadline = Some(next_frame.max(now));
+        let deadline = next_frame.max(now);
+        self.deadline = Some(
+            self.deadline
+                .map_or(deadline, |current| current.min(deadline)),
+        );
     }
 
     pub fn request_immediate(&mut self, now: Instant) {

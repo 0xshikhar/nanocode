@@ -123,14 +123,19 @@ async fn prepare(args: &SessionArgs, notify: &mut dyn FnMut(&str)) -> Result<Pre
             tokio::task::spawn_blocking(move || host::open_store(&home)).await??
         })
     };
-    let remote = host::attach_remote(&args.remote, &workspace, notify).await?;
+    let (runners, runner_servers) = host::runner_configs(&args.remote)?;
     let config = HostConfig {
         workspace,
         store,
         subagents: !args.no_subagents,
-        remote,
+        runners,
+        runner_servers,
     };
     let host = Host::build(config, &model, thinking)?;
+    host.runtime.initialize_runners().await?;
+    for server in host.runtime.runner_servers() {
+        notify(&format!("listening {} · token {}", server.endpoint(), server.token()));
+    }
     Ok(Prepared {
         host,
         model,
@@ -190,12 +195,6 @@ async fn interactive(args: SessionArgs) -> Result<()> {
         drop(terminal);
         return Err("--resume and --continue require durability; remove --ephemeral".into());
     }
-    let remote_label = prepared
-        .host
-        .config
-        .remote
-        .as_ref()
-        .map(|remote| remote.label.clone());
     app::run(
         app::Launch {
             host: prepared.host,
@@ -205,7 +204,6 @@ async fn interactive(args: SessionArgs) -> Result<()> {
             resume,
             pick_session,
             prompt: args.prompt,
-            remote_label,
             history_path: Some(prepared.home.join("history.jsonl")),
             home: prepared.home.clone(),
             thinking_override: args
@@ -256,6 +254,26 @@ async fn exec(args: SessionArgs) -> Result<()> {
         eprintln!("nanocodex: computer use unavailable, continuing without it: {reason}");
     }
     tokio::spawn(async move { while events.recv().await.is_some() {} });
+    if let Some(store) = &host.config.store {
+        let stored = store.load(agent.session_id()).await?;
+        for pending in stored
+            .turns
+            .iter()
+            .filter(|turn| turn.status == nanocode::durability::TurnStatus::Pending)
+        {
+            let input = pending.input.get("prompt").unwrap_or(&pending.input).clone();
+            let saved_prompt =
+                serde_json::from_value::<nanocode::agent::input::Prompt>(input).map_err(|error| {
+                    format!("pending turn {} has an unreadable prompt: {error}", pending.id)
+                })?;
+            eprintln!("nanocodex: resuming interrupted turn {}", pending.id);
+            agent
+                .prompt(nanocode::PromptRequest::new(saved_prompt).request_id(&pending.id))
+                .await?
+                .result()
+                .await?;
+        }
+    }
     let mut turn = agent.prompt(prompt.as_str()).await?;
     let mut stderr = std::io::stderr();
     while let Some(event) = turn.next().await {

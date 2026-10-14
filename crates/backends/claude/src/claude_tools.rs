@@ -29,6 +29,11 @@ pub(super) fn install(
     let mut native = ClaudeTools::new();
     let nested = Arc::clone(&runtime);
     native.nested_tools = Some(Arc::new(move |name| nested.contains(name)));
+    let preempt = Arc::clone(&guard);
+    native.code_turn_preempt.push(Arc::new(move || {
+        let guard = Arc::clone(&preempt);
+        Box::pin(async move { guard.0.preempt_turn().await })
+    }));
     native.code_turn_cleanup.push(Arc::new(move |progress| {
         let guard = Arc::clone(&guard);
         Box::pin(async move {

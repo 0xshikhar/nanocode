@@ -158,7 +158,13 @@ impl LifecycleBackend for LocalLifecycle {
     fn route(&self, request: BackendPrompt) -> BackendFuture<Result<BackendPromptRoute>> {
         let commands = self.commands.clone();
         let shutdown = self.shutdown.clone();
+        let execution = self.execution.clone();
         Box::pin(async move {
+            if let Some(id) = &request.request_id
+                && execution.identified_steer_accepted(id.clone(), &request.prompt).await?
+            {
+                return Ok(BackendPromptRoute::Steered);
+            }
             let parent = tracing::Span::current();
             let parent = (!parent.is_disabled()).then_some(parent);
             let (turn_result, turn_receiver) = oneshot::channel();
@@ -167,6 +173,8 @@ impl LifecycleBackend for LocalLifecycle {
                 .send(Command::RoutePrompt {
                     key: TurnKey(request.key.0),
                     prompt: request.prompt,
+                    request_id: request.request_id,
+                    cancel_on_admission: request.cancel_on_admission,
                     parent,
                     events: EventSink::from_publisher(request.events),
                     turn_result,

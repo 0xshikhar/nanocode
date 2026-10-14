@@ -1519,13 +1519,16 @@ async fn accept_runner(
         stream.set_nodelay(true)?;
         let authenticate =
             |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
-             response: tokio_tungstenite::tungstenite::handshake::server::Response| {
-                if request
-                    .headers()
-                    .get(http::header::AUTHORIZATION)
-                    .and_then(|value| value.to_str().ok())
-                    == Some(authorization)
-                {
+             mut response: tokio_tungstenite::tungstenite::handshake::server::Response| {
+                let header = request.headers().get(http::header::AUTHORIZATION).and_then(|value| value.to_str().ok());
+                let protocol = request.headers().get(http::header::SEC_WEBSOCKET_PROTOCOL).and_then(|value| value.to_str().ok()).and_then(|value| {
+                    let mut values = value.split(',').map(str::trim);
+                    if values.next() == Some("bearer") { values.next() } else { None }
+                });
+                if header == Some(authorization) || protocol.is_some_and(|token| authorization.strip_prefix("Bearer ") == Some(token)) {
+                    if protocol.is_some() {
+                        response.headers_mut().insert(http::header::SEC_WEBSOCKET_PROTOCOL, http::HeaderValue::from_static("bearer"));
+                    }
                     Ok(response)
                 } else {
                     emit(

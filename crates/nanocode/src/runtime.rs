@@ -200,9 +200,27 @@ pub struct NanocodexBuilder<B = Unselected> {
     max_subagents: Option<usize>,
     subagents_disabled: bool,
     subagent_continuation_disabled: bool,
+    #[cfg(not(target_family = "wasm"))]
+    runners: Vec<crate::Runner>,
+    #[cfg(not(target_family = "wasm"))]
+    runner_servers: Vec<crate::RunnerServerConfig>,
 }
 
 impl<B> NanocodexBuilder<B> {
+    #[cfg(not(target_family = "wasm"))]
+    #[must_use]
+    pub fn runner(mut self, runner: crate::Runner) -> Self {
+        self.runners.push(runner);
+        self
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[must_use]
+    pub fn runner_server(mut self, config: crate::RunnerServerConfig) -> Self {
+        self.runner_servers.push(config);
+        self
+    }
+
     #[must_use]
     pub fn backend(mut self, backend: impl RegisteredBackend + 'static) -> Self {
         self.backends.push(Arc::new(backend));
@@ -310,6 +328,19 @@ impl<B> NanocodexBuilder<B> {
     }
 
     fn assemble(self, preferred: Option<HarnessFamily>) -> Result<Nanocodex> {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            for runner in &self.runners {
+                runner
+                    .validate()
+                    .map_err(|error| NanocodexError::InvalidRequest(error.to_string()))?;
+            }
+            for server in &self.runner_servers {
+                server
+                    .validate()
+                    .map_err(|error| NanocodexError::InvalidRequest(error.to_string()))?;
+            }
+        }
         let mut configured = Vec::new();
 
         if self.codex.is_some() {
@@ -394,6 +425,16 @@ impl<B> NanocodexBuilder<B> {
         #[cfg(target_family = "wasm")]
         let cua: computer::Cell = None;
         let ownership = Arc::new(Ownership::default());
+        #[cfg(not(target_family = "wasm"))]
+        let runner_pool = crate::RunnerPool::new();
+        #[cfg(not(target_family = "wasm"))]
+        let runner_agents = crate::runners::RunnerAgents::new(
+            runner_pool.clone(),
+            self.runners,
+            self.runner_servers,
+        );
+        #[cfg(not(target_family = "wasm"))]
+        runner_agents.activate();
         let backend_defaults: Vec<_> = self
             .backends
             .iter()
@@ -450,6 +491,8 @@ impl<B> NanocodexBuilder<B> {
                     &workspace,
                     cua.clone(),
                     subagents.clone(),
+                    #[cfg(not(target_family = "wasm"))]
+                    runner_pool.clone(),
                 ),
             ));
         }
@@ -462,6 +505,8 @@ impl<B> NanocodexBuilder<B> {
                     &workspace,
                     cua.clone(),
                     subagents.clone(),
+                    #[cfg(not(target_family = "wasm"))]
+                    runner_pool.clone(),
                 ),
             ));
         }
@@ -494,6 +539,10 @@ impl<B> NanocodexBuilder<B> {
                 *recipe = unclaimed_updates_recipe(recipe.clone(), subagent_updates.clone());
             }
         }
+        #[cfg(not(target_family = "wasm"))]
+        for (_, recipe) in &mut recipes {
+            *recipe = runner_recipe(recipe.clone(), runner_agents.clone());
+        }
         let mut router = Harness::builder();
 
         if let Some(store) = &durability {
@@ -515,6 +564,10 @@ impl<B> NanocodexBuilder<B> {
                 model,
                 thinking,
                 ownership,
+                #[cfg(not(target_family = "wasm"))]
+                runner_pool,
+                #[cfg(not(target_family = "wasm"))]
+                runner_agents,
 
                 durability,
                 subagents: subagent_control,
@@ -548,6 +601,10 @@ impl NanocodexBuilder<Unselected> {
             max_subagents: self.max_subagents,
             subagents_disabled: self.subagents_disabled,
             subagent_continuation_disabled: self.subagent_continuation_disabled,
+            #[cfg(not(target_family = "wasm"))]
+            runners: self.runners,
+            #[cfg(not(target_family = "wasm"))]
+            runner_servers: self.runner_servers,
         }
     }
 }
@@ -716,6 +773,10 @@ struct Runtime {
     model: ModelSelection,
     thinking: Thinking,
     ownership: Arc<Ownership>,
+    #[cfg(not(target_family = "wasm"))]
+    runner_pool: crate::RunnerPool,
+    #[cfg(not(target_family = "wasm"))]
+    runner_agents: Arc<crate::runners::RunnerAgents>,
 
     durability: Option<crate::durability::SessionStore>,
     subagents: Option<nanocode_subagents::SubagentControl>,
@@ -727,6 +788,17 @@ impl Nanocodex {
     #[must_use]
     pub fn builder() -> NanocodexBuilder {
         NanocodexBuilder::default()
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn runner_agents_ref(&self) -> &Arc<crate::runners::RunnerAgents> {
+        &self.inner.runner_agents
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn runner_pool_ref(&self) -> &crate::RunnerPool {
+        self.inner.runner_agents.activate();
+        &self.inner.runner_pool
     }
 
     pub fn spawn(&self) -> SpawnBuilder<'_> {
@@ -884,7 +956,10 @@ impl Nanocodex {
                 Ok((switched, events)) => {
                     let configured = async {
                         switched.set_harness_model(model).await?;
-                        switched.set_thinking(thinking).await
+                        switched.set_thinking(thinking).await?;
+                        #[cfg(not(target_family = "wasm"))]
+                        self.inner.runner_agents.register(&switched, true).await?;
+                        Ok(())
                     }
                     .await;
                     return match configured {
@@ -947,7 +1022,16 @@ impl Nanocodex {
     }
 
     pub async fn shutdown(&self) -> Result<()> {
-        self.inner.ownership.shutdown().await
+        computer::close(&self.inner.cua);
+        #[cfg(not(target_family = "wasm"))]
+        let runner_result = self.inner.runner_pool.shutdown().await;
+        let ownership_result = self.inner.ownership.shutdown().await;
+        #[cfg(not(target_family = "wasm"))]
+        runner_result.map_err(|error| NanocodexError::Backend {
+            backend: "runners",
+            source: Arc::new(error),
+        })?;
+        ownership_result
     }
 
     async fn construct(&self, spec: AgentSpec) -> AgentResult {
@@ -1082,6 +1166,7 @@ fn codex_recipe(
     workspace: &Arc<Path>,
     cua: computer::Cell,
     subagents: Option<Arc<nanocode_subagents::Registry>>,
+    #[cfg(not(target_family = "wasm"))] runner_pool: crate::RunnerPool,
 ) -> Recipe {
     let CodexHarness {
         client,
@@ -1097,6 +1182,8 @@ fn codex_recipe(
         let configure = configure.clone();
         let workspace = Arc::clone(&workspace);
         let subagents = subagents.clone();
+        #[cfg(not(target_family = "wasm"))]
+        let runner_pool = runner_pool.clone();
         Box::pin(async move {
             let cua = computer::connect(cua).await?;
             let Some(model) = spec.model.as_codex() else {
@@ -1126,6 +1213,10 @@ fn codex_recipe(
                 });
                 builder = builder.tools_factory(move |handle| {
                     let mut selected = tools.materialize(handle.clone())?;
+                    #[cfg(not(target_family = "wasm"))]
+                    {
+                        selected = selected.with_runner_pool(runner_pool.clone());
+                    }
                     #[cfg(not(target_family = "wasm"))]
                     if let Some(store) = &process_routes {
                         selected = selected.with_default_process_route_store(store.clone());
@@ -1166,6 +1257,7 @@ fn claude_recipe(
     workspace: &Arc<Path>,
     cua: computer::Cell,
     subagents: Option<Arc<nanocode_subagents::Registry>>,
+    #[cfg(not(target_family = "wasm"))] runner_pool: crate::RunnerPool,
 ) -> Recipe {
     let ClaudeHarness {
         client,
@@ -1181,6 +1273,8 @@ fn claude_recipe(
         let configure = configure.clone();
         let workspace = Arc::clone(&workspace);
         let subagents = subagents.clone();
+        #[cfg(not(target_family = "wasm"))]
+        let runner_pool = runner_pool.clone();
         Box::pin(async move {
             let cua = computer::connect(cua).await?;
             if spec.model.family() != HarnessFamily::Claude {
@@ -1222,7 +1316,7 @@ fn claude_recipe(
                 }
                 #[cfg(not(target_family = "wasm"))]
                 {
-                    nanocode_backend_claude::install_default_tools_with_process_routes(
+                    nanocode_backend_claude::install_default_tools_with_runner_pool(
                         root.clone(),
                         &handle,
                         selected,
@@ -1230,6 +1324,7 @@ fn claude_recipe(
                         process_routes.clone().map(|store| {
                             store as Arc<dyn nanocode_code_mode::attachment::ProcessRouteStore>
                         }),
+                        Some(runner_pool.clone()),
                     )
                 }
                 #[cfg(target_family = "wasm")]
@@ -1513,4 +1608,21 @@ fn default_durability()
     #[cfg(target_family = "wasm")]
     let store = crate::durability::MemoryStore::new().and_then(crate::session_store);
     store.map_err(Arc::new)
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn runner_recipe(recipe: Recipe, runners: Arc<crate::runners::RunnerAgents>) -> Recipe {
+    Arc::new(move |spec| {
+        let recipe = recipe.clone();
+        let runners = runners.clone();
+        Box::pin(async move {
+            let await_initial = spec.checkpoint.is_none() && spec.durable_state.is_none();
+            let (agent, events) = recipe(spec).await?;
+            if let Err(error) = runners.register(&agent, await_initial).await {
+                let _ = agent.shutdown().await;
+                return Err(error);
+            }
+            Ok((agent, events))
+        })
+    })
 }

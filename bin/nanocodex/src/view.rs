@@ -16,7 +16,7 @@ use crate::app::{App, Overlay, TurnState};
 
 pub const STATUS_VISIBLE: Duration = Duration::from_secs(4);
 
-pub const BINDINGS: [Binding; 26] = [
+pub const BINDINGS: [Binding; 27] = [
     Binding {
         keys: "enter",
         action: "send · queue while a turn runs",
@@ -116,6 +116,10 @@ pub const BINDINGS: [Binding; 26] = [
     Binding {
         keys: "/theme /copy /context /skills",
         action: "theme, copy reply, usage, skills",
+    },
+    Binding {
+        keys: "/runner",
+        action: "list, connect, listen, disconnect, stop-listening",
     },
     Binding {
         keys: "F1 · /help",
@@ -405,9 +409,10 @@ fn footer(app: &App) -> Line<'static> {
             Style::default().fg(theme.muted()),
         ));
     }
-    if let Some(remote) = &app.host.config.remote {
+    let runner_status = app.runner_status();
+    if runner_status != "local tools" {
         spans.push(Span::styled(
-            format!(" · runner {}", remote.status_label()),
+            format!(" · {runner_status}"),
             Style::default().fg(theme.muted()),
         ));
     }

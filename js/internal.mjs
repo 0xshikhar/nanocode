@@ -174,7 +174,8 @@ export function getTurnHostId(turn) {
 }
 
 export function getTurnResult(turn) {
-  const state = turnState(turn);
+  let state;
+  try { state = turnState(turn); } catch (error) { return Promise.reject(error); }
   if (!state.result) {
     try {
       state.result = Promise.resolve(state.raw.result()).then(createTurnResult);
@@ -186,7 +187,8 @@ export function getTurnResult(turn) {
 }
 
 export function awaitTurnAcceptance(turn) {
-  const state = turnState(turn);
+  let state;
+  try { state = turnState(turn); } catch (error) { return Promise.reject(error); }
   if (!state.acceptance) {
     try {
       state.acceptance = typeof state.raw.accepted === "function"
@@ -223,20 +225,33 @@ export function getEncodedTurnUsage(result) {
 }
 
 export function steer(turn, options) {
-  const state = turnState(turn);
-  const input = actionInput(options);
-  return typeof input === "string"
-    ? state.raw.steer(input, options.messageId)
-    : state.raw.steerContent(JSON.stringify(input), options.messageId);
+  try {
+    const state = turnState(turn);
+    const input = actionInput(options);
+    return Promise.resolve(typeof input === "string"
+      ? state.raw.steer(input, options.messageId)
+      : state.raw.steerContent(JSON.stringify(input), options.messageId));
+  } catch (error) {
+    return Promise.reject(error);
+  }
 }
 
-export function withdrawSteer(turn, { messageId }) {
-  if (typeof messageId !== "string" || !messageId) throw new TypeError("messageId must be a non-empty string");
-  return turnState(turn).raw.withdrawSteer(messageId);
+export function withdrawSteer(turn, options) {
+  try {
+    const messageId = options?.messageId;
+    if (typeof messageId !== "string" || !messageId) throw new TypeError("messageId must be a non-empty string");
+    return Promise.resolve(turnState(turn).raw.withdrawSteer(messageId));
+  } catch (error) {
+    return Promise.reject(error);
+  }
 }
 
 export function cancel(turn) {
-  return turnState(turn).raw.cancel();
+  try {
+    return Promise.resolve(turnState(turn).raw.cancel());
+  } catch (error) {
+    return Promise.reject(error);
+  }
 }
 
 export async function fork(agent, options) {

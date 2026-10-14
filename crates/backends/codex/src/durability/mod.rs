@@ -346,6 +346,19 @@ impl ExecutionPolicy for DurableExecution {
         true
     }
 
+    fn identified_steer_accepted<'a>(
+        &'a self,
+        message_id: String,
+        input_json: String,
+    ) -> ExecutionFuture<'a, AgentResult<bool>> {
+        Box::pin(async move {
+            self.owner
+                .identified_steer_accepted(message_id, &raw(input_json)?)
+                .await
+                .map_err(agent_error)
+        })
+    }
+
     fn accept_identified_steer<'a>(
         &'a self,
         operation_id: String,
@@ -780,6 +793,16 @@ impl ExecutionPolicy for LazyExecution {
 
     fn supports_steer_receipts(&self) -> bool {
         true
+    }
+
+    fn identified_steer_accepted<'a>(
+        &'a self,
+        message_id: String,
+        input_json: String,
+    ) -> ExecutionFuture<'a, AgentResult<bool>> {
+        Box::pin(async move {
+            self.get().await?.identified_steer_accepted(message_id, input_json).await
+        })
     }
 
     fn accept_identified_steer<'a>(

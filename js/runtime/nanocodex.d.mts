@@ -1,3 +1,5 @@
+import type { RunnerOptions, RunnerServerOptions, RunnerHandle, RunnerServer, RunnerEvent } from "./runners.mjs";
+export type { RunnerOptions, RunnerServerOptions, RunnerHandle, RunnerServer, RunnerEvent } from "./runners.mjs";
 import type {
   Agent,
   BeforeCompactionRequest,
@@ -73,6 +75,8 @@ export type Options<Transport> = Readonly<{
 
   cua?: Readonly<{ tools: readonly import("../types.mjs").NamedTool[] }> | false | undefined;
 
+  runners?: readonly RunnerOptions[] | undefined;
+  runnerServer?: RunnerServerOptions | undefined;
   durability?: DurabilityStore | undefined;
   codeEvaluator?: CodeEvaluator | undefined;
 
@@ -117,5 +121,11 @@ export type Runtime = Readonly<{
 
   switch<B extends BackendName>(agent: Agent<object>, options: SpawnOptions<B>): Promise<DefaultAgent<B>>;
 
+  connectRunner(options: RunnerOptions): Promise<RunnerHandle>;
+  listenForRunners(options?: RunnerServerOptions): Promise<RunnerServer>;
+  listRunners(): readonly RunnerHandle[];
+  disconnectRunner(name: string): Promise<void>;
+  stopRunnerListeners(): Promise<void>;
+  onRunnerEvent(observer: (event: RunnerEvent) => void): () => void;
   shutdown(): Promise<void>;
 }>;

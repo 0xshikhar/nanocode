@@ -43,6 +43,7 @@ struct Inner {
     namespace: Box<str>,
     catalog: watch::Sender<Option<Arc<[Arc<RemoteSpec>]>>>,
     failure: watch::Sender<Option<AttachmentError>>,
+    connected: watch::Sender<bool>,
     state: Mutex<State>,
 }
 
@@ -158,6 +159,7 @@ impl RemoteRunner {
                 namespace: namespace.into(),
                 catalog: watch::channel(None).0,
                 failure: watch::channel(None).0,
+                connected: watch::channel(false).0,
                 state: Mutex::default(),
             }),
         })
@@ -183,6 +185,28 @@ impl RemoteRunner {
     #[must_use]
     pub fn is_connected(&self) -> bool {
         self.inner.state().connection.is_some()
+    }
+
+    pub(crate) fn connection_status(&self) -> watch::Receiver<bool> {
+        self.inner.connected.subscribe()
+    }
+
+    pub(crate) fn failure_status(&self) -> watch::Receiver<Option<AttachmentError>> {
+        self.inner.failure.subscribe()
+    }
+
+    pub(crate) fn tools_snapshot(&self) -> Option<RemoteTools> {
+        let specs = self.inner.catalog.borrow().clone()?;
+        Some(RemoteTools {
+            workspace: self.inner.state().workspace.clone(),
+            tools: specs
+                .iter()
+                .map(|spec| RemoteTool {
+                    runner: Arc::clone(&self.inner),
+                    spec: Arc::clone(spec),
+                })
+                .collect(),
+        })
     }
 
     pub async fn tools(&self) -> Result<RemoteTools, AttachmentError> {
@@ -230,6 +254,18 @@ impl RemoteRunner {
                 ));
             }
         };
+        self.serve_catalog(first, transport).await
+    }
+
+    pub(crate) async fn serve_catalog<T, E>(
+        &self,
+        first: String,
+        mut transport: T,
+    ) -> Result<(), AttachmentError>
+    where
+        T: Stream<Item = Result<String, E>> + Sink<String, Error = E> + Unpin,
+        E: fmt::Display,
+    {
         let RunnerFrame::Catalog {
             runtime_id,
             tools,
@@ -359,6 +395,11 @@ impl Inner {
     ) -> Result<(u64, mpsc::UnboundedReceiver<Outbound>, Vec<String>), AttachmentError> {
         let specs = parse_catalog(&self.namespace, &tools)?;
         let mut state = self.state();
+        if state.connection.is_some() {
+            return Err(AttachmentError::Catalog(
+                "runner already has a live connection".into(),
+            ));
+        }
         if state.catalog.is_some() && state.workspace != workspace {
             return Err(AttachmentError::Catalog(
                 "runner workspace differs from its pinned catalog".into(),
@@ -430,6 +471,8 @@ impl Inner {
         if first {
             self.catalog.send_replace(Some(specs));
         }
+        self.failure.send_replace(None);
+        self.connected.send_replace(true);
         Ok((generation, receiver, backlog))
     }
 
@@ -441,6 +484,7 @@ impl Inner {
             .is_some_and(|connection| connection.generation == generation)
         {
             state.connection = None;
+            self.connected.send_replace(false);
         }
     }
 

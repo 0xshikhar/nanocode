@@ -219,6 +219,16 @@ impl ClaudeExecutionPolicy for LazyClaudeExecution {
         true
     }
 
+    fn identified_steer_accepted(
+        &self,
+        message_id: String,
+        input_json: String,
+    ) -> PolicyFuture<'_, bool> {
+        Box::pin(async move {
+            self.get().await?.identified_steer_accepted(message_id, input_json).await
+        })
+    }
+
     fn accept_steer(
         &self,
         id: String,
@@ -395,6 +405,18 @@ impl ClaudeExecutionPolicy for ClaudeExecution {
 
     fn supports_steering(&self) -> bool {
         true
+    }
+
+    fn identified_steer_accepted(
+        &self,
+        message_id: String,
+        input_json: String,
+    ) -> PolicyFuture<'_, bool> {
+        Box::pin(async move {
+            let input: Box<serde_json::value::RawValue> = serde_json::from_str(&input_json)
+                .map_err(|error| nanocode_agent::NanocodexError::InvalidRequest(error.to_string()))?;
+            self.owner.identified_steer_accepted(message_id, &input).await.map_err(agent_error)
+        })
     }
 
     fn accept_steer(

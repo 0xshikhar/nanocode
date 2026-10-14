@@ -15,6 +15,29 @@ contracts live in `nanocode-tools` and wire types in `nanocode-types`.
 
 ## Remote workspace runners
 
+The native SDK owns a shared `RunnerPool` for each `Nanocodex` runtime. Configure
+outgoing runners with `.runner(Runner::connect(url).token(token).name("box").alongside())`
+on the builder, or call `runtime.connect_runner(...)` on a live runtime. Use
+`.runner_server(RunnerServerConfig::listen(address).token(token))` at startup or
+`runtime.listen_for_runners(...)` at runtime to accept multiple incoming runners.
+Incoming catalogs supply their names and workspaces; names must be unique among
+active connections. An omitted listener token is generated from 256 random bits.
+`RunnerHandle` exposes status subscriptions and disconnect; `RunnerServer` exposes
+its endpoint, token, and stop operation. `list_runners` and `runner_events` expose
+runtime-wide status. The pool is shared by all built-in agents and subagents.
+
+Dynamic attachment leaves model-visible tool definitions and system instructions
+unchanged. Conversation developer messages announce mount availability. Code Mode
+execution metadata discovers the currently attached tools on each cell. A detached
+mount remains reserved; workspace calls record known mount names alongside durable
+process routes. Resuming without the runner produces an unavailable error instead
+of interpreting its logical root as a local path. Replacement is explicit and
+remains unavailable while its runner is disconnected.
+
+When composing Code Mode directly, install a shared pool with
+`Tools::with_runner_pool` or `ToolsBuilder::runner_pool`. Existing fixed-catalog
+attachment APIs remain available below.
+
 `attachment::run_runner(RunnerConfig { endpoint, token, workspace, name })`
 runs a standalone native workspace executor. `RunnerEndpoint::Listen(address)`
 accepts authenticated agent connections on a loopback WebSocket listener;

@@ -59,6 +59,10 @@ pub trait DynamicToolProvider: Send + Sync {
 
     fn available_definitions(&self) -> Vec<ToolDefinition>;
 
+    fn model_catalog_visible(&self) -> bool {
+        true
+    }
+
     fn code_mode_tool_summaries(&self) -> Vec<(String, String)> {
         Vec::new()
     }
@@ -170,6 +174,8 @@ pub struct Tools {
     #[cfg(not(target_family = "wasm"))]
     pub(crate) process_route_store: Option<Arc<dyn crate::attachment::ProcessRouteStore>>,
     #[cfg(not(target_family = "wasm"))]
+    pub(crate) runner_pool: Option<crate::attachment::RunnerPool>,
+    #[cfg(not(target_family = "wasm"))]
     pub(super) deferred_tools_guidance_enabled: bool,
 
     pub(crate) embedded_host: Option<Arc<dyn crate::embedded::CodeModeHost>>,
@@ -207,6 +213,8 @@ impl Default for Tools {
             remote_runners: Vec::new(),
             #[cfg(not(target_family = "wasm"))]
             process_route_store: None,
+            #[cfg(not(target_family = "wasm"))]
+            runner_pool: None,
             #[cfg(not(target_family = "wasm"))]
             deferred_tools_guidance_enabled: false,
 
@@ -290,6 +298,12 @@ impl Tools {
     #[must_use]
     pub fn builder() -> ToolsBuilder {
         ToolsBuilder::default()
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub fn with_runner_pool(mut self, pool: crate::attachment::RunnerPool) -> Self {
+        self.runner_pool = Some(pool);
+        self
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -415,6 +429,12 @@ impl ToolsBuilder {
     )]
     pub fn add<S: ToolSource>(self, source: S) -> Self {
         source.install(self)
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub fn runner_pool(mut self, pool: crate::attachment::RunnerPool) -> Self {
+        self.tools.runner_pool = Some(pool);
+        self
     }
 
     #[cfg(not(target_family = "wasm"))]

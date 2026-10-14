@@ -707,14 +707,18 @@ where
                             command = self.commands.recv() => {
                                 let mut reopen = false;
                                 let command = match command {
-                                    Some(command) => accept_execution_command(
+                                    Some(command) => match accept_execution_command(
                                         &self.execution,
                                         &self.checkpoints,
                                         &self.spawner.config,
                                         default_thinking,
                                         command,
                                         &mut reopen,
-                                    ).await,
+                                    ).await {
+                                        Some(command) => Some(command),
+                                        None if reopen => None,
+                                        None => continue,
+                                    },
                                     None => None,
                                 };
                                 if reopen {
@@ -1321,14 +1325,18 @@ where
                     command = self.commands.recv() => {
                         let mut reopen = false;
                         let command = match command {
-                            Some(command) => accept_execution_command(
+                            Some(command) => match accept_execution_command(
                                 &self.execution,
                                 &self.checkpoints,
                                 &self.spawner.config,
                                 default_thinking,
                                 command,
                                 &mut reopen,
-                            ).await,
+                            ).await {
+                                Some(command) => Some(command),
+                                None if reopen => None,
+                                None => continue,
+                            },
                             None => None,
                         };
                         if reopen {
@@ -1468,18 +1476,33 @@ where
                             Some(Command::RoutePrompt {
                                 key: route_key,
                                 prompt,
+                                request_id,
+                                cancel_on_admission,
                                 parent,
                                 events,
                                 turn_result,
                                 route_result,
                             }) => {
+                                if let Some(id) = &request_id {
+                                    match self.execution.identified_steer_accepted(id.clone(), &prompt).await {
+                                        Ok(true) => {
+                                            drop(route_result.send(Ok(PromptRouteKind::Steered)));
+                                            continue;
+                                        }
+                                        Ok(false) => {}
+                                        Err(error) => {
+                                            drop(route_result.send(Err(error)));
+                                            continue;
+                                        }
+                                    }
+                                }
                                 let outcome = accept_turn_steer(
                                     &self.execution,
                                     &input_events,
                                     &steers,
                                     &steer_preempt,
                                     &mut accepted_steers,
-                                    None,
+                                    request_id.clone(),
                                     &execution_turn,
                                     &model_call_index,
                                     prompt.clone(),
@@ -1493,7 +1516,7 @@ where
                                         &self.checkpoints,
                                         &self.spawner.config,
                                         default_thinking,
-                                        Command::RoutePrompt { key: route_key, prompt, parent, events, turn_result, route_result },
+                                        Command::RoutePrompt { key: route_key, prompt, request_id, cancel_on_admission, parent, events, turn_result, route_result },
                                         &mut reopen,
                                     )
                                     .await;
@@ -2379,6 +2402,8 @@ async fn accept_idle_route(
     let Command::RoutePrompt {
         key,
         prompt,
+        request_id,
+        cancel_on_admission,
         parent,
         events,
         turn_result,
@@ -2387,6 +2412,19 @@ async fn accept_idle_route(
     else {
         return Some(command);
     };
+    if let Some(id) = &request_id {
+        match execution.identified_steer_accepted(id.clone(), &prompt).await {
+            Ok(true) => {
+                drop(route_result.send(Ok(PromptRouteKind::Steered)));
+                return None;
+            }
+            Ok(false) => {}
+            Err(error) => {
+                drop(route_result.send(Err(error)));
+                return None;
+            }
+        }
+    }
     if !execution.identifies_prompts() {
         if let Err(error) = execution
             .accepted_input(&events, &prompt, "prompt", None)
@@ -2401,7 +2439,7 @@ async fn accept_idle_route(
             prompt,
             execution_operation: None,
             accepted: None,
-            cancel_on_admission: false,
+            cancel_on_admission,
             thinking: None,
             service_tier: None,
             parent,
@@ -2411,7 +2449,7 @@ async fn accept_idle_route(
     }
 
     let admission = execution
-        .admit_automatic(SessionId::new().to_string(), &prompt)
+        .admit_automatic(request_id.unwrap_or_else(|| SessionId::new().to_string()), &prompt)
         .await;
     match admission {
         Ok((operation_id, AdmittedExecution::Execute)) => {
@@ -2437,7 +2475,7 @@ async fn accept_idle_route(
                 prompt,
                 execution_operation: Some(ExecutionOperation::Admitted(operation_id)),
                 accepted: None,
-                cancel_on_admission: false,
+                cancel_on_admission,
                 thinking: None,
                 service_tier: None,
                 parent,
@@ -2468,7 +2506,7 @@ async fn accept_idle_route(
                 prompt,
                 execution_operation: Some(ExecutionOperation::Recovered(operation_id)),
                 accepted: None,
-                cancel_on_admission: false,
+                cancel_on_admission,
                 thinking: None,
                 service_tier: None,
                 parent,

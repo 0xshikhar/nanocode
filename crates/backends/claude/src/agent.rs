@@ -202,6 +202,7 @@ pub struct ClaudeTools {
     adapter_cleanup: Vec<ToolCleanup>,
     adapter_shutdown: Vec<ToolCleanup>,
     pub(crate) code_turn_cleanup: Vec<CodeTurnCleanup>,
+    pub(crate) code_turn_preempt: Vec<ToolCleanup>,
     pub(crate) nested_tools: Option<NestedToolLookup>,
     #[cfg(not(target_family = "wasm"))]
     pub(crate) shared_catalog: Option<(nanocode_code_mode::Tools, std::path::PathBuf, AgentHandle)>,
@@ -219,6 +220,7 @@ impl nanocode_tools::ToolCollection for ClaudeTools {
             self.tools.extend(replacement.tools);
             self.adapter_cleanup.extend(replacement.adapter_cleanup);
             self.code_turn_cleanup = replacement.code_turn_cleanup;
+            self.code_turn_preempt = replacement.code_turn_preempt;
             self.nested_tools = replacement.nested_tools;
             self.shared_catalog = replacement.shared_catalog;
             return Ok(self);
@@ -246,6 +248,16 @@ impl ClaudeTools {
     {
         self.adapter_shutdown
             .push(Arc::new(move || Box::pin(shutdown())));
+        self
+    }
+
+    pub fn code_turn_preempt<F, Fut>(mut self, preempt: F) -> Self
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: crate::ToolFuture<Output = ()> + 'static,
+    {
+        self.code_turn_preempt
+            .push(Arc::new(move || Box::pin(preempt())));
         self
     }
 
@@ -1144,6 +1156,7 @@ impl ClaudeBuilder {
         let mut adapter_cleanup = Vec::new();
         let mut adapter_shutdown = Vec::new();
         let mut code_turn_cleanup = Vec::new();
+        let mut code_turn_preempt = Vec::new();
         let mut nested_tools = None;
         if let Some(factory) = &self.tools_factory {
             let native = factory(handle.clone())?;
@@ -1155,6 +1168,7 @@ impl ClaudeBuilder {
             adapter_cleanup.extend(native.adapter_cleanup);
             adapter_shutdown.extend(native.adapter_shutdown);
             code_turn_cleanup.extend(native.code_turn_cleanup);
+            code_turn_preempt.extend(native.code_turn_preempt);
         }
 
         if self.claude.model.trim().is_empty()
@@ -1338,6 +1352,7 @@ impl ClaudeBuilder {
                 adapter_cleanup: Vec::new(),
                 adapter_shutdown: Vec::new(),
                 code_turn_cleanup: Vec::new(),
+                code_turn_preempt: Vec::new(),
                 nested_tools: nested_tools.clone(),
                 #[cfg(not(target_family = "wasm"))]
                 shared_catalog: None,
@@ -1357,6 +1372,7 @@ impl ClaudeBuilder {
             adapter_cleanup.extend(adapted.adapter_cleanup);
             adapter_shutdown.extend(adapted.adapter_shutdown);
             code_turn_cleanup.extend(adapted.code_turn_cleanup);
+            code_turn_preempt.extend(adapted.code_turn_preempt);
             self.client_tool_search = false;
         }
         let mut names = handlers.keys().map(String::as_str).collect::<HashSet<_>>();
@@ -1454,6 +1470,7 @@ impl ClaudeBuilder {
             adapter_cleanup,
             adapter_shutdown,
             code_turn_cleanup,
+            code_turn_preempt,
             nested_tools,
             dynamic_tools: self.dynamic_tools,
             tool_hooks: self.tool_hooks,
@@ -2610,6 +2627,7 @@ struct State {
     adapter_cleanup: Vec<ToolCleanup>,
     adapter_shutdown: Vec<ToolCleanup>,
     code_turn_cleanup: Vec<CodeTurnCleanup>,
+    code_turn_preempt: Vec<ToolCleanup>,
     lifecycle_opened: Mutex<Option<String>>,
     subagent_type: Option<String>,
     subagent_type_resolver: Option<SubagentTypeResolver>,
@@ -4528,6 +4546,9 @@ impl State {
             boundary: None,
             durable,
         });
+        for preempt in &self.code_turn_preempt {
+            preempt().await;
+        }
         Ok(())
     }
 
@@ -4536,6 +4557,7 @@ impl State {
         request: &BackendPrompt,
         cursor: &mut Cursor,
         pending: &mut Vec<Message>,
+        replaying_boundary: bool,
     ) -> Result<bool> {
         let mut turns = self.steering.lock().await;
         let Some(turn) = turns.get_mut(&request.key) else {
@@ -4546,7 +4568,11 @@ impl State {
         while turn
             .pending
             .front()
-            .is_some_and(|steer| steer.after < boundary)
+            .is_some_and(|steer| {
+                steer.after < boundary
+                    && (!replaying_boundary
+                        || steer.boundary.is_some_and(|bound| bound <= boundary))
+            })
         {
             let steer = turn.pending.front().expect("pending steer");
             let messages = prompt_messages(&steer.prompt)?;
@@ -4957,17 +4983,21 @@ impl State {
         }
         let mut previous_message_id = conversation.previous_message_id.clone();
         for index in cursor.index..u32::MAX {
+            let replaying_boundary = cursor.recovered_code_index == Some(index);
             if self
-                .consume_steering(request, &mut cursor, &mut pending)
+                .consume_steering(request, &mut cursor, &mut pending, replaying_boundary)
                 .await?
             {
                 self.retain_pending(&mut cursor, &pending);
-                self.advance_cursor(&mut cursor, conversation).await?;
+                if !replaying_boundary {
+                    self.advance_cursor(&mut cursor, conversation).await?;
+                }
             }
             if cancel.flag.load(Ordering::SeqCst) && self.policy.is_none() {
                 return Err(NanocodexError::TurnCancelled);
             }
-            if index > 0
+            if !replaying_boundary
+                && index > 0
                 && conversation.allows_auto_compaction()
                 && !conversation.messages.is_empty()
                 && conversation.active_context_tokens >= cursor.threshold
@@ -5595,7 +5625,7 @@ impl State {
                 cursor.index = index + 1;
 
                 cursor.output_continuations = 0;
-                self.consume_steering(request, &mut cursor, &mut pending)
+                self.consume_steering(request, &mut cursor, &mut pending, false)
                     .await?;
                 conversation.messages = pending.clone();
                 conversation.previous_message_id = previous_message_id.clone();
@@ -5959,6 +5989,7 @@ impl LifecycleBackend for Driver {
     fn route(&self, request: BackendPrompt) -> BackendFuture<Result<BackendPromptRoute>> {
         let state = self.state.clone();
         let prompt = request.prompt.clone();
+        let request_id = request.request_id.clone();
         let start = self.submit(request);
         Box::pin(async move {
             if state.stopped.load(Ordering::SeqCst) {
@@ -5966,12 +5997,22 @@ impl LifecycleBackend for Driver {
             }
             {
                 let mut turns = state.steering.lock().await;
+                if let (Some(policy), Some(id)) = (&state.policy, &request_id)
+                    && policy
+                        .identified_steer_accepted(
+                            id.clone(),
+                            serde_json::to_string(&prompt).map_err(provider_error)?,
+                        )
+                        .await?
+                {
+                    return Ok(BackendPromptRoute::Steered);
+                }
                 if let Some((_, turn)) = turns
                     .iter_mut()
                     .filter(|(_, turn)| turn.accepting)
                     .min_by_key(|(key, _)| key.0)
                 {
-                    state.accept_steer(turn, None, prompt).await?;
+                    state.accept_steer(turn, request_id, prompt).await?;
                     return Ok(BackendPromptRoute::Steered);
                 }
             }

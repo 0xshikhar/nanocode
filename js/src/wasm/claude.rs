@@ -667,6 +667,15 @@ pub(super) async fn build_claude(
         }
         builder = builder.durability(durable).await.map_err(js_error)?;
     }
+    if factory.is_none() {
+        builder = builder.tools_factory(|agent| {
+            let preempt_session = agent.session_id().to_owned();
+            Ok(ClaudeTools::new().code_turn_preempt(move || {
+                super::host_preempt_code_turn(&preempt_session);
+                async {}
+            }))
+        });
+    }
     if let Some(factory) = factory {
         let host = config
             .host_definition_id
@@ -686,15 +695,24 @@ pub(super) async fn build_claude(
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .insert(agent.session_id().to_owned(), agent.clone());
+                let preempt_session = agent.session_id().to_owned();
+                let code_session = preempt_session.clone();
                 let native = nanocode_subagents::install_claude_tools(
                     ClaudeTools::new(),
                     agent,
                     registry.clone(),
                 )?;
+                let native = native.code_turn_preempt(move || {
+                    super::host_preempt_code_turn(&preempt_session);
+                    async {}
+                });
                 if direct {
                     return Ok(native);
                 }
-                let mut tools = ClaudeTools::new();
+                let mut tools = ClaudeTools::new().code_turn_preempt(move || {
+                    super::host_preempt_code_turn(&code_session);
+                    async {}
+                });
                 for definition in &code_definitions {
                     let name = definition.name.clone();
                     let native = native.clone();

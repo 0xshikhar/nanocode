@@ -198,6 +198,12 @@ enum Command {
         input: EncodedPayload,
         result: oneshot::Sender<Result<Option<u32>>>,
     },
+    IdentifiedSteerAccepted {
+        caller: Caller,
+        message_id: String,
+        input: EncodedPayload,
+        result: oneshot::Sender<Result<bool>>,
+    },
     RetainedSteers {
         caller: Caller,
         operation_id: String,
@@ -563,6 +569,29 @@ impl Driver {
                         }
                         Err(error) => Err(error),
                     };
+                    drop(result.send(outcome));
+                }
+                Command::IdentifiedSteerAccepted {
+                    caller,
+                    message_id,
+                    input,
+                    result,
+                } => {
+                    let outcome = self.authorize(&caller).and_then(|()| {
+                        let mut accepted = false;
+                        for operation in self.state.operations().values() {
+                            if let Some(receipt) = operation.steer_receipts.get(&message_id) {
+                                if receipt.input_key != input.key.as_ref() {
+                                    return Err(Error::SteerConflict { message_id });
+                                }
+                                if receipt.withdrawn {
+                                    return Err(Error::SteerWithdrawn { message_id });
+                                }
+                                accepted = true;
+                            }
+                        }
+                        Ok(accepted)
+                    });
                     drop(result.send(outcome));
                 }
                 Command::RetainedSteers {
@@ -2155,6 +2184,22 @@ impl DurableOwner {
             caller: self.caller()?,
             operation_id,
             accepted_after_model_call_index,
+            input: EncodedPayload::encode(input)?,
+            result,
+        })
+        .await?;
+        receive(receiver).await
+    }
+
+    pub async fn identified_steer_accepted<I: Serialize + ?Sized>(
+        &self,
+        message_id: String,
+        input: &I,
+    ) -> Result<bool> {
+        let (result, receiver) = oneshot::channel();
+        self.send(Command::IdentifiedSteerAccepted {
+            caller: self.caller()?,
+            message_id,
             input: EncodedPayload::encode(input)?,
             result,
         })
