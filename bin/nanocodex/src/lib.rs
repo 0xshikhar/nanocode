@@ -118,7 +118,10 @@ async fn prepare(args: &SessionArgs, notify: &mut dyn FnMut(&str)) -> Result<Pre
     let store = if args.ephemeral {
         None
     } else {
-        Some(host::open_store(&home)?)
+        Some({
+            let home = home.clone();
+            tokio::task::spawn_blocking(move || host::open_store(&home)).await??
+        })
     };
     let remote = host::attach_remote(&args.remote, &workspace, notify).await?;
     let config = HostConfig {
@@ -151,14 +154,14 @@ async fn interactive(args: SessionArgs) -> Result<()> {
                 .into(),
         );
     }
-    nanocode_tui::highlight::prewarm();
     let mut terminal =
         nanocode_tui::terminal::TerminalSession::enter(nanocode_tui::terminal::TerminalOptions {
             mouse_capture: !args.no_mouse,
             keyboard_enhancement: true,
         })?;
     let theme = nanocode_tui::theme::Theme::default();
-    drop(terminal.draw(|frame| view::splash(frame, &theme, "starting…")));
+    terminal.draw(|frame| view::splash(frame, &theme, "starting…"))?;
+    nanocode_tui::highlight::prewarm();
     let prepared = {
         let mut notify =
             |message: &str| drop(terminal.draw(|frame| view::splash(frame, &theme, message)));

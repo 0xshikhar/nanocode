@@ -1,4 +1,4 @@
-use super::{AttachmentError, AttachmentStatus, AttachmentTarget, driver};
+use super::{AttachmentError, AttachmentEvent, AttachmentStatus, AttachmentTarget, driver};
 use crate::{
     Tools, WorkspaceTools,
     prepared::{PreparedToolRuntime, PreparedTools},
@@ -56,7 +56,7 @@ pub async fn run_runner_with_tools(
                 .start()?;
             tokio::select! {
                 result = attachment.closed() => result,
-                _ = async { while events.recv().await.is_some() {} } => attachment.closed().await,
+                _ = async { while let Some(event) = events.recv().await { log_event(&event); } } => attachment.closed().await,
                 signal = tokio::signal::ctrl_c() => { signal.map_err(|error| AttachmentError::Transport(error.to_string().into()))?; attachment.detach().await },
             }
         }
@@ -92,7 +92,7 @@ pub async fn run_runner_with_tools(
             ));
             tokio::select! {
                 _ = &mut running => {},
-                _ = async { while event_rx.recv().await.is_some() {} } => {},
+                _ = async { while let Some(event) = event_rx.recv().await { log_event(&event); } } => {},
                 signal = tokio::signal::ctrl_c() => {
                     signal.map_err(|error| AttachmentError::Transport(error.to_string().into()))?;
                     let _ = commands.send(driver::Command::Detach).await;
@@ -104,5 +104,26 @@ pub async fn run_runner_with_tools(
                 .clone()
                 .unwrap_or(Err(AttachmentError::Closed))
         }
+    }
+}
+
+fn log_event(event: &AttachmentEvent) {
+    match event {
+        AttachmentEvent::Connecting => eprintln!("runner: connecting"),
+        AttachmentEvent::Retrying { reason, delay_ms } => {
+            eprintln!("runner: retrying in {delay_ms}ms ({reason})")
+        }
+        AttachmentEvent::Attached => eprintln!("runner: connected"),
+        AttachmentEvent::CatalogPublished { tool_count } => {
+            eprintln!("runner: published {tool_count} tools")
+        }
+        AttachmentEvent::CallStarted { call_id, name } => {
+            eprintln!("runner: executing {name} ({call_id})")
+        }
+        AttachmentEvent::CallCompleted { call_id, outcome } => {
+            eprintln!("runner: completed {call_id} ({outcome:?})")
+        }
+        AttachmentEvent::Detached { reason } => eprintln!("runner: disconnected ({reason})"),
+        AttachmentEvent::Fenced { reason } => eprintln!("runner: rejected ({reason})"),
     }
 }

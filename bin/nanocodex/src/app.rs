@@ -1375,8 +1375,12 @@ impl App {
                     "ephemeral"
                 };
                 let remote = self
-                    .remote_label
-                    .clone()
+                    .host
+                    .config
+                    .remote
+                    .as_ref()
+                    .map(|remote| remote.status_label())
+                    .or_else(|| self.remote_label.clone())
                     .unwrap_or_else(|| "local tools".into());
                 self.notice(
                     NoticeLevel::Info,

@@ -90,7 +90,7 @@ pub(crate) async fn run(
         let connected = if let Some(listener) = &config.listener {
             tokio::select! {
                 _ = commands.recv() => break Ok(()),
-                accepted = accept_runner(listener, &config.authorization) => Ok(accepted),
+                accepted = accept_runner(listener, &config.authorization, &events) => Ok(accepted),
             }
         } else {
             tokio::select! {
@@ -196,6 +196,13 @@ pub(crate) async fn run(
                 };
                 connection_span.in_scope(|| tracing::warn!(target: "nanocode_code_mode::attachment", stage = "attachment.socket.connect_failed", reason_code, http_status, retry_after_ms, service_outage_ms = outage_ms, reconnect_delay_ms = delay.as_millis() as u64, pending_calls = active.len(), "attachment connection attempt failed"));
                 let _ = status.send(AttachmentStatus::Disconnected);
+                emit(
+                    &events,
+                    AttachmentEvent::Retrying {
+                        reason: reason_code.into(),
+                        delay_ms: delay.as_millis() as u64,
+                    },
+                );
                 previous_delay = delay;
                 if wait_backoff(&mut commands, delay).await {
                     break Ok(());
@@ -263,6 +270,13 @@ pub(crate) async fn run(
             | ConnectionEnd::HeartbeatTimeout => {
                 let _ = status.send(AttachmentStatus::Disconnected);
                 let delay = delay.unwrap_or(MAX_TRANSPORT_BACKOFF);
+                emit(
+                    &events,
+                    AttachmentEvent::Retrying {
+                        reason: end.reason_code().into(),
+                        delay_ms: delay.as_millis() as u64,
+                    },
+                );
                 previous_delay = delay;
                 if wait_backoff(&mut commands, delay).await {
                     break Ok(());
@@ -1458,6 +1472,10 @@ fn trace_attachment_event(event: &AttachmentEvent) {
             stage = "attachment.connecting",
             "connecting attachment"
         ),
+        AttachmentEvent::Retrying { reason, delay_ms } => tracing::info!(
+            target: "nanocode_code_mode::attachment", reason = reason.as_ref(), delay_ms,
+            "retrying attachment"
+        ),
         AttachmentEvent::Attached => tracing::info!(
             target: "nanocode_code_mode::attachment",
             stage = "attachment.attached",
@@ -1486,6 +1504,7 @@ fn trace_attachment_event(event: &AttachmentEvent) {
 async fn accept_runner(
     listener: &tokio::net::TcpListener,
     authorization: &str,
+    events: &mpsc::Sender<AttachmentEvent>,
 ) -> Result<
     (
         tokio_tungstenite::WebSocketStream<
@@ -1509,6 +1528,13 @@ async fn accept_runner(
                 {
                     Ok(response)
                 } else {
+                    emit(
+                        events,
+                        AttachmentEvent::Retrying {
+                            reason: "authentication_failed".into(),
+                            delay_ms: 0,
+                        },
+                    );
                     let mut rejection =
                         tokio_tungstenite::tungstenite::handshake::server::ErrorResponse::new(
                             Some("invalid runner credential".into()),

@@ -29,6 +29,12 @@ An agent connects with `RemoteRunner::new(name)` and
 with `runner.tools().await`, then configure
 `Tools::builder().remote_runner(catalog, physical_workspace, mode)?.build()`.
 Pass those tools to `CodexHarness::tools` or `ClaudeHarness::tools`.
+Standalone runners advertise their canonical physical workspace in the catalog.
+`RemoteTools::workspace` exposes it, and
+`ToolsBuilder::remote_runner_discovered(catalog, mode)` uses it without an
+attach-side path guess. Explicit workspace overrides remain available for
+adapters without machine metadata. A reconnect cannot change the pinned
+workspace silently.
 
 `RemoteMode::Alongside` keeps the default cwd local. `/<name>` selects the
 runner's physical workspace, and `/<name>/src` selects its `src` directory.
@@ -75,6 +81,11 @@ milliseconds within the protocol integer range. Expiration returns
 `AttachmentError::Timeout` with the call ID and its outcome: `Ambiguous` after
 dispatch or `Unavailable` before dispatch. Dispatched calls may have executed
 and must not be retried automatically.
+The same explicit policy bounds initial catalog readiness. Without a ready
+runner, replace-mode startup waits for readiness or returns an unavailable
+error; configured calls remain remote and never use embedded local execution.
+Standalone runner stderr reports connecting, connected, retries, authentication
+failures, and tool dispatch/completion without printing credentials.
 
 These socket entry points are native-only. WASM hosts continue to supply their
 transport and local execution through the embedded Code Mode host contract.

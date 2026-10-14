@@ -516,6 +516,11 @@ pub enum AttachmentStatus {
 pub enum AttachmentEvent {
     Connecting,
 
+    Retrying {
+        reason: Box<str>,
+        delay_ms: u64,
+    },
+
     Attached,
 
     CatalogPublished {

@@ -427,6 +427,24 @@ impl ToolsBuilder {
     }
 
     #[cfg(not(target_family = "wasm"))]
+    pub fn remote_runner_discovered(
+        self,
+        tools: crate::attachment::RemoteTools,
+        mode: crate::attachment::RemoteMode,
+    ) -> Result<Self, crate::attachment::AttachmentError> {
+        let workspace = tools
+            .workspace()
+            .ok_or_else(|| {
+                crate::attachment::AttachmentError::Catalog(
+                    "runner did not advertise a workspace; supply an explicit workspace override"
+                        .into(),
+                )
+            })?
+            .to_path_buf();
+        self.remote_runner(tools, workspace, mode)
+    }
+
+    #[cfg(not(target_family = "wasm"))]
     pub fn remote_runner(
         mut self,
         tools: crate::attachment::RemoteTools,

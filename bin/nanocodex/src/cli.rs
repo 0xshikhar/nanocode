@@ -158,7 +158,7 @@ pub struct RemoteArgs {
     #[arg(
         long,
         value_name = "PATH",
-        help = "The runner's workspace path (defaults to this workspace)"
+        help = "Override the physical workspace advertised by the runner"
     )]
     pub runner_workspace: Option<PathBuf>,
 

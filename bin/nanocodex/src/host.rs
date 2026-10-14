@@ -22,7 +22,22 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub struct Remote {
     pub tools: Tools,
     pub label: String,
+    runner: RemoteRunner,
     _guard: Arc<dyn Any + Send + Sync>,
+}
+
+impl Remote {
+    pub fn status_label(&self) -> String {
+        format!(
+            "{} {}",
+            if self.runner.is_connected() {
+                "connected"
+            } else {
+                "disconnected"
+            },
+            self.label
+        )
+    }
 }
 
 #[derive(Clone)]
@@ -161,17 +176,13 @@ pub fn open_store(home: &Path) -> Result<SessionStore> {
 
 pub async fn attach_remote(
     args: &RemoteArgs,
-    workspace: &Path,
+    _workspace: &Path,
     notify: &mut dyn FnMut(&str),
 ) -> Result<Option<Remote>> {
     let mode = match args.runner_mode {
         RunnerModeArg::Alongside => RemoteMode::Alongside,
         RunnerModeArg::Replace => RemoteMode::Replace,
     };
-    let runner_workspace = args
-        .runner_workspace
-        .clone()
-        .unwrap_or_else(|| workspace.to_path_buf());
     let (runner, guard, label): (RemoteRunner, Arc<dyn Any + Send + Sync>, String) =
         match (&args.runner_connect, args.runner_host) {
             (Some(url), _) => {
@@ -181,7 +192,11 @@ pub async fn attach_remote(
                     .ok_or("--runner-connect requires --runner-token or NANOCODEX_RUNNER_TOKEN")?;
                 let runner = call_timeout(RemoteRunner::new(args.runner_name.clone())?, args)?;
                 let connection = runner.connect(AttachmentTarget::new(url, token)?)?;
-                (runner, Arc::new(connection), format!("connected to {url}"))
+                (
+                    runner,
+                    Arc::new(connection),
+                    format!("runner endpoint {url}"),
+                )
             }
             (None, Some(address)) => {
                 let token = args
@@ -192,14 +207,20 @@ pub async fn attach_remote(
                 let runner = call_timeout(host.runner(args.runner_name.clone(), token)?, args)?;
                 let label = format!("waiting for runner at {}", host.endpoint());
                 notify(&label);
+                let label = format!("agent endpoint {}", host.endpoint());
                 (runner, Arc::new(host), label)
+            }
+            (None, None) if mode == RemoteMode::Replace => {
+                return Err("replace mode requires --runner-connect or --runner-host".into());
             }
             (None, None) => return Ok(None),
         };
     let remote = runner.tools().await?;
-    let tools = Tools::builder()
-        .remote_runner(remote, runner_workspace, mode)?
-        .build()?;
+    let tools = match &args.runner_workspace {
+        Some(workspace) => Tools::builder().remote_runner(remote, workspace.clone(), mode)?,
+        None => Tools::builder().remote_runner_discovered(remote, mode)?,
+    }
+    .build()?;
     Ok(Some(Remote {
         tools,
         label: format!(
@@ -210,6 +231,7 @@ pub async fn attach_remote(
                 RunnerModeArg::Replace => "replacing local tools",
             }
         ),
+        runner: runner.clone(),
         _guard: Arc::new((guard, runner)),
     }))
 }

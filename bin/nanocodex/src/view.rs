@@ -405,9 +405,9 @@ fn footer(app: &App) -> Line<'static> {
             Style::default().fg(theme.muted()),
         ));
     }
-    if let Some(remote) = &app.remote_label {
+    if let Some(remote) = &app.host.config.remote {
         spans.push(Span::styled(
-            format!(" · runner {remote}"),
+            format!(" · runner {}", remote.status_label()),
             Style::default().fg(theme.muted()),
         ));
     }

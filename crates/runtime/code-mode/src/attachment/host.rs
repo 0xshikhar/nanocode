@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     fmt,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard, PoisonError},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -55,6 +56,7 @@ struct State {
     last_turn_ended: Option<[Box<str>; 3]>,
     deferred_frames: Vec<String>,
     call_timeout_ms: Option<u64>,
+    workspace: Option<PathBuf>,
 }
 
 struct Connection {
@@ -83,11 +85,27 @@ struct RemoteSpec {
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum RunnerFrame {
-    Catalog { runtime_id: String, tools: Value },
+    Catalog {
+        runtime_id: String,
+        tools: Value,
+        #[serde(default)]
+        machines: Vec<RunnerMachine>,
+    },
     Diagnostic {},
-    Result { call_id: String, outcome: Value },
-    Status { call_id: String, state: String },
+    Result {
+        call_id: String,
+        outcome: Value,
+    },
+    Status {
+        call_id: String,
+        state: String,
+    },
     Drain {},
+}
+
+#[derive(Deserialize)]
+struct RunnerMachine {
+    workspace: PathBuf,
 }
 
 #[derive(Deserialize)]
@@ -170,11 +188,21 @@ impl RemoteRunner {
     pub async fn tools(&self) -> Result<RemoteTools, AttachmentError> {
         let mut catalog = self.inner.catalog.subscribe();
         let mut failure = self.inner.failure.subscribe();
-        let specs = tokio::select! {
-            result = catalog.wait_for(Option::is_some) => result.map_err(|_| AttachmentError::Closed)?.clone().ok_or(AttachmentError::Closed)?,
-            result = failure.wait_for(Option::is_some) => return Err(result.map_err(|_| AttachmentError::Closed)?.clone().unwrap_or(AttachmentError::Closed)),
+        let timeout_ms = self.inner.state().call_timeout_ms;
+        let wait = async {
+            tokio::select! {
+                result = catalog.wait_for(Option::is_some) => result.map_err(|_| AttachmentError::Closed)?.clone().ok_or(AttachmentError::Closed),
+                result = failure.wait_for(Option::is_some) => Err(result.map_err(|_| AttachmentError::Closed)?.clone().unwrap_or(AttachmentError::Closed)),
+            }
+        };
+        let specs = match timeout_ms {
+            Some(ms) => tokio::time::timeout(Duration::from_millis(ms), wait)
+                .await
+                .map_err(|_| AttachmentError::Transport(format!("runner `{}` unavailable: no catalog before the configured connection deadline", self.namespace()).into()))??,
+            None => wait.await?,
         };
         Ok(RemoteTools {
+            workspace: self.inner.state().workspace.clone(),
             tools: specs
                 .iter()
                 .map(|spec| RemoteTool {
@@ -202,7 +230,12 @@ impl RemoteRunner {
                 ));
             }
         };
-        let RunnerFrame::Catalog { runtime_id, tools } = parse_frame(&first)? else {
+        let RunnerFrame::Catalog {
+            runtime_id,
+            tools,
+            machines,
+        } = parse_frame(&first)?
+        else {
             return Err(AttachmentError::Fenced(
                 "runner must publish its catalog first".into(),
             ));
@@ -212,7 +245,17 @@ impl RemoteRunner {
                 "invalid runner runtime identity".into(),
             ));
         }
-        let (generation, mut outbound, backlog) = self.inner.attach(&runtime_id, tools)?;
+        let workspace = match machines.as_slice() {
+            [] => None,
+            [machine] if machine.workspace.is_absolute() => Some(machine.workspace.clone()),
+            _ => {
+                return Err(AttachmentError::Catalog(
+                    "runner must advertise one absolute workspace for automatic routing".into(),
+                ));
+            }
+        };
+        let (generation, mut outbound, backlog) =
+            self.inner.attach(&runtime_id, tools, workspace)?;
         let _lease = ConnectionLease {
             inner: Arc::clone(&self.inner),
             generation,
@@ -312,9 +355,15 @@ impl Inner {
         &self,
         runtime_id: &str,
         tools: Value,
+        workspace: Option<PathBuf>,
     ) -> Result<(u64, mpsc::UnboundedReceiver<Outbound>, Vec<String>), AttachmentError> {
         let specs = parse_catalog(&self.namespace, &tools)?;
         let mut state = self.state();
+        if state.catalog.is_some() && state.workspace != workspace {
+            return Err(AttachmentError::Catalog(
+                "runner workspace differs from its pinned catalog".into(),
+            ));
+        }
         if state
             .catalog
             .as_ref()
@@ -375,6 +424,7 @@ impl Inner {
         let first = state.catalog.is_none();
         if first {
             state.catalog = Some(tools);
+            state.workspace = workspace;
         }
         drop(state);
         if first {
@@ -623,6 +673,7 @@ impl Drop for CancelOnDrop {
 #[derive(Clone)]
 pub struct RemoteTools {
     tools: Vec<RemoteTool>,
+    workspace: Option<PathBuf>,
 }
 
 impl fmt::Debug for RemoteTools {
@@ -635,6 +686,11 @@ impl fmt::Debug for RemoteTools {
 }
 
 impl RemoteTools {
+    #[must_use]
+    pub fn workspace(&self) -> Option<&Path> {
+        self.workspace.as_deref()
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = &RemoteTool> {
         self.tools.iter()
     }
