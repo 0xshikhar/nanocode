@@ -1,12 +1,12 @@
 //! Private host capabilities for the Rust-owned Claude subscription lifecycle.
 //! No OAuth state or credential is copied to agent session/checkpoint state.
 use super::{JsFuture, JsValue, js_error};
-use nanocodex_claude::subscription::{
+use nanocode_claude::subscription::{
     ClaudeLoginMode, ClaudeSubscription, ClaudeSubscriptionCommit, ClaudeSubscriptionConfig,
     ClaudeSubscriptionHost, ClaudeSubscriptionHostError, ClaudeSubscriptionHttpRequest,
     ClaudeSubscriptionHttpResponse, ClaudeSubscriptionStoreValue,
 };
-use nanocodex_claude::{ClaudeAuthFuture, ClaudeAuthProvider};
+use nanocode_claude::{ClaudeAuthFuture, ClaudeAuthProvider};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::Arc};
 use wasm_bindgen::prelude::*;

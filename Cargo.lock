@@ -2296,18 +2296,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "nanocodex"
+name = "nanocode"
 version = "0.6.7"
 dependencies = [
  "axum",
- "nanocodex-agent",
- "nanocodex-claude",
- "nanocodex-claude-tools",
- "nanocodex-durability",
- "nanocodex-oai-api",
- "nanocodex-oai-tools",
- "nanocodex-observability",
- "nanocodex-subagents",
+ "nanocode-claude",
+ "nanocode-claude-tools",
+ "nanocode-code-mode",
+ "nanocode-codex",
+ "nanocode-codex-tools",
+ "nanocode-durability",
+ "nanocode-observability",
+ "nanocode-runtime",
+ "nanocode-subagents",
+ "nanocode-tools",
  "reqwest",
  "rustls",
  "serde_json",
@@ -2315,36 +2317,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nanocodex-agent"
-version = "0.6.7"
-dependencies = [
- "async-trait",
- "chrono",
- "criterion",
- "eyre",
- "futures-util",
- "iana-time-zone",
- "nanocodex-home",
- "nanocodex-oai-api",
- "nanocodex-oai-tools",
- "reqwest",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-tungstenite",
- "tower",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "wasm-bindgen-futures",
- "web-time",
-]
-
-[[package]]
-name = "nanocodex-claude"
+name = "nanocode-claude"
 version = "0.6.7"
 dependencies = [
  "axum",
@@ -2354,10 +2327,10 @@ dependencies = [
  "httpdate",
  "image",
  "libc",
- "nanocodex-agent",
- "nanocodex-claude-tools",
- "nanocodex-oai-api",
- "nanocodex-oai-tools",
+ "nanocode-claude-tools",
+ "nanocode-code-mode",
+ "nanocode-codex",
+ "nanocode-runtime",
  "regex",
  "reqwest",
  "rustls",
@@ -2376,14 +2349,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "nanocodex-claude-tools"
+name = "nanocode-claude-tools"
 version = "0.6.7"
 dependencies = [
  "base64 0.22.1",
  "globset",
  "ignore",
  "image",
- "nanocodex-home",
+ "nanocode-home",
+ "nanocode-tools",
  "nix 0.31.3",
  "regex",
  "schemars",
@@ -2395,93 +2369,50 @@ dependencies = [
 ]
 
 [[package]]
-name = "nanocodex-computer"
+name = "nanocode-code-mode"
 version = "0.6.7"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
- "fs2",
- "libc",
- "nanocodex-oai-api",
- "roxmltree",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "tokio",
- "url",
-]
-
-[[package]]
-name = "nanocodex-durability"
-version = "0.6.7"
-dependencies = [
- "axum",
- "base64 0.22.1",
+ "bm25",
+ "criterion",
  "eyre",
  "futures-util",
+ "getrandom 0.4.3",
+ "http",
+ "httpdate",
  "image",
- "nanocodex-agent",
- "nanocodex-claude",
- "nanocodex-claude-tools",
- "nanocodex-oai-api",
- "nanocodex-oai-tools",
- "nanocodex-subagents",
+ "nanocode-codex",
+ "nanocode-codex-tools",
+ "nanocode-home",
+ "nanocode-tools",
+ "nanocode-tools-macros",
+ "nix 0.31.3",
+ "oauth2",
+ "portable-pty",
+ "regex",
  "reqwest",
- "rusqlite",
+ "rmcp",
+ "rquickjs",
+ "rustix",
  "rustls",
+ "schemars",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha1 0.11.0",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
- "tokio-postgres",
- "tower",
- "uuid",
- "wasm-bindgen-futures",
-]
-
-[[package]]
-name = "nanocodex-hand"
-version = "0.6.7"
-dependencies = [
- "base64 0.22.1",
- "block2",
- "dispatch2",
- "fs2",
- "image",
- "objc2",
- "objc2-core-audio-types",
- "objc2-core-foundation",
- "objc2-core-graphics",
- "objc2-core-media",
- "objc2-core-video",
- "objc2-foundation",
- "objc2-screen-capture-kit",
- "serde",
- "serde_json",
- "sha2 0.11.0",
+ "tokio-tungstenite",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
- "windows",
- "windows-sys 0.61.2",
- "x11rb",
- "x11rb-protocol",
 ]
 
 [[package]]
-name = "nanocodex-home"
-version = "0.6.7"
-dependencies = [
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "nanocodex-oai-api"
+name = "nanocode-codex"
 version = "0.6.7"
 dependencies = [
  "async-trait",
@@ -2519,58 +2450,114 @@ dependencies = [
 ]
 
 [[package]]
-name = "nanocodex-oai-tools"
+name = "nanocode-codex-tools"
 version = "0.6.7"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
- "bm25",
- "criterion",
  "eyre",
- "futures-util",
- "getrandom 0.4.3",
- "http",
- "httpdate",
  "image",
- "nanocodex-home",
- "nanocodex-oai-api",
- "nanocodex-oai-tools-macros",
- "nix 0.31.3",
- "oauth2",
- "portable-pty",
- "regex",
+ "nanocode-codex",
+ "nanocode-tools",
  "reqwest",
- "rmcp",
- "rquickjs",
- "rustix",
- "rustls",
- "schemars",
  "serde",
  "serde_json",
  "sha1 0.11.0",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
- "tokio-tungstenite",
- "tokio-util",
  "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
 ]
 
 [[package]]
-name = "nanocodex-oai-tools-macros"
+name = "nanocode-cua"
 version = "0.6.7"
 dependencies = [
- "proc-macro-crate",
- "proc-macro2",
- "quote",
- "syn",
+ "async-trait",
+ "base64 0.22.1",
+ "fs2",
+ "libc",
+ "nanocode-codex",
+ "nanocode-tools",
+ "roxmltree",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tokio",
+ "url",
 ]
 
 [[package]]
-name = "nanocodex-observability"
+name = "nanocode-durability"
+version = "0.6.7"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "eyre",
+ "futures-util",
+ "image",
+ "nanocode-claude",
+ "nanocode-claude-tools",
+ "nanocode-code-mode",
+ "nanocode-codex",
+ "nanocode-runtime",
+ "nanocode-subagents",
+ "reqwest",
+ "rusqlite",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-postgres",
+ "tower",
+ "uuid",
+ "wasm-bindgen-futures",
+]
+
+[[package]]
+name = "nanocode-hand"
+version = "0.6.7"
+dependencies = [
+ "base64 0.22.1",
+ "block2",
+ "dispatch2",
+ "fs2",
+ "image",
+ "objc2",
+ "objc2-core-audio-types",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-core-media",
+ "objc2-core-video",
+ "objc2-foundation",
+ "objc2-screen-capture-kit",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "windows",
+ "windows-sys 0.61.2",
+ "x11rb",
+ "x11rb-protocol",
+]
+
+[[package]]
+name = "nanocode-home"
+version = "0.6.7"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "nanocode-observability"
 version = "0.6.7"
 dependencies = [
  "clap",
@@ -2589,7 +2576,36 @@ dependencies = [
 ]
 
 [[package]]
-name = "nanocodex-subagents"
+name = "nanocode-runtime"
+version = "0.6.7"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "criterion",
+ "eyre",
+ "futures-util",
+ "iana-time-zone",
+ "nanocode-code-mode",
+ "nanocode-codex",
+ "nanocode-home",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "wasm-bindgen-futures",
+ "web-time",
+]
+
+[[package]]
+name = "nanocode-subagents"
 version = "0.6.7"
 dependencies = [
  "async-trait",
@@ -2597,10 +2613,10 @@ dependencies = [
  "futures-util",
  "js-sys",
  "jsonschema",
- "nanocodex-agent",
- "nanocodex-claude",
- "nanocodex-oai-api",
- "nanocodex-oai-tools",
+ "nanocode-claude",
+ "nanocode-code-mode",
+ "nanocode-codex",
+ "nanocode-runtime",
  "reqwest",
  "rustls",
  "serde",
@@ -2615,7 +2631,30 @@ dependencies = [
 ]
 
 [[package]]
-name = "nanocodex-voice-protocol"
+name = "nanocode-tools"
+version = "0.6.7"
+dependencies = [
+ "async-trait",
+ "nanocode-codex",
+ "nanocode-tools-macros",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "nanocode-tools-macros"
+version = "0.6.7"
+dependencies = [
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "nanocode-voice-protocol"
 version = "0.6.7"
 dependencies = [
  "serde",
@@ -2623,17 +2662,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "nanocodex-wasm"
+name = "nanocode-wasm"
 version = "0.6.7"
 dependencies = [
  "async-trait",
  "futures-util",
  "js-sys",
- "nanocodex",
- "nanocodex-agent",
- "nanocodex-claude",
- "nanocodex-subagents",
- "nanocodex-voice-protocol",
+ "nanocode",
+ "nanocode-claude",
+ "nanocode-runtime",
+ "nanocode-subagents",
+ "nanocode-tools",
+ "nanocode-voice-protocol",
  "reqwest",
  "serde",
  "serde_json",

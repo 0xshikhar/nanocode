@@ -8,7 +8,7 @@ use std::{
 };
 
 use js_sys::Promise;
-use nanocodex::{
+use nanocode::{
     Agent as RustNanocodex, AgentEvents, AgentSessionContext, DurableAgentExt, Model,
     NanocodexError, OpenAi, PromptRoute, ReasoningMode, Thinking, Tools, Turn, TurnControl,
     TurnResult,
@@ -37,7 +37,7 @@ use nanocodex::{
         standard::StandardTool,
     },
 };
-use nanocodex_agent::{
+use nanocode_runtime::{
     Capabilities, ForkRequest, HarnessFamily, HarnessModel, Origin, Persistence, ServiceTier,
     SessionCheckpoint, SessionInfo,
     backend::{AgentFactory, BackendFuture},
@@ -47,13 +47,13 @@ use tokio::sync::oneshot;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, spawn_local};
 
-use nanocodex_subagents::{
+use nanocode_subagents::{
     AgentDescriptor, AgentDirectoryEntry, AgentId as SubagentId, AgentStatus as SubagentStatus,
     AgentSummary, AgentTask, AgentUpdate as SubagentUpdate, MessageId as SubagentMessageId,
     MessagePriority, MessagePurpose, Registry as SubagentRegistry, ScopedAgentUpdate,
     SubagentControl, start_agent_with, start_agents_observed,
 };
-use nanocodex_voice_protocol::{
+use nanocode_voice_protocol::{
     BrowserVoiceEffects, BrowserVoiceProtocol, REALTIME_END_INSTRUCTIONS,
     REALTIME_START_INSTRUCTIONS, TranscriptEntry, build_chatgpt_realtime_call_with_settings,
     decode_chatgpt_realtime_call, preferred_physical_input, realtime_delegation,
@@ -82,7 +82,7 @@ pub fn native_spawn_contract_version() -> u32 {
 /// JS pickers and validation tables consume or are checked against this.
 #[wasm_bindgen(js_name = modelCapabilities)]
 pub fn model_capabilities() -> Result<JsValue, JsValue> {
-    use nanocodex_agent::{ClaudeModel, HarnessModel, ModelTransport};
+    use nanocode_runtime::{ClaudeModel, HarnessModel, ModelTransport};
     let codex = [
         Model::Astra,
         Model::Sol,
@@ -133,7 +133,7 @@ pub async fn prune_durable_receipts(
             "terminal_receipt_limit must be from 0 through 4096",
         ));
     }
-    let session = nanocodex::agent::durability::DurableSession::open_with_terminal_receipt_limit(
+    let session = nanocode::agent::durability::DurableSession::open_with_terminal_receipt_limit(
         JavaScriptDurabilityStore {
             route_id: durability_host_id.to_owned(),
         },
@@ -327,7 +327,7 @@ struct JavaScriptSpawnRoute {
 }
 
 #[async_trait::async_trait(?Send)]
-impl nanocodex_subagents::SpawnRouter for JavaScriptSpawnRouter {
+impl nanocode_subagents::SpawnRouter for JavaScriptSpawnRouter {
     async fn resolve(
         &self,
         parent_session_id: &str,
@@ -335,13 +335,13 @@ impl nanocodex_subagents::SpawnRouter for JavaScriptSpawnRouter {
         task: &str,
         options: SpawnOptions,
         host_context: Option<&str>,
-    ) -> std::io::Result<nanocodex_subagents::SpawnRoute> {
+    ) -> std::io::Result<nanocode_subagents::SpawnRoute> {
         match self
             .resolve_spawn(parent_session_id, role, task, options, host_context)
             .await?
         {
-            nanocodex_subagents::SpawnDecision::Routed(route) => Ok(route),
-            nanocodex_subagents::SpawnDecision::Native { .. } => Err(std::io::Error::other(
+            nanocode_subagents::SpawnDecision::Routed(route) => Ok(route),
+            nanocode_subagents::SpawnDecision::Native { .. } => Err(std::io::Error::other(
                 "native spawn requires a spawn decision",
             )),
         }
@@ -354,7 +354,7 @@ impl nanocodex_subagents::SpawnRouter for JavaScriptSpawnRouter {
         task: &str,
         options: SpawnOptions,
         host_context: Option<&str>,
-    ) -> std::io::Result<nanocodex_subagents::SpawnDecision> {
+    ) -> std::io::Result<nanocode_subagents::SpawnDecision> {
         let mut request = serde_json::json!({ "parentSessionId": parent_session_id,
             "role": role, "task": task });
         if let Some(harness) = options.selected_harness() {
@@ -392,7 +392,7 @@ impl nanocodex_subagents::SpawnRouter for JavaScriptSpawnRouter {
                     "native spawn cannot override requested settings",
                 ));
             }
-            return Ok(nanocodex_subagents::SpawnDecision::Native {
+            return Ok(nanocode_subagents::SpawnDecision::Native {
                 reference: route.route_id,
             });
         }
@@ -429,8 +429,8 @@ impl nanocodex_subagents::SpawnRouter for JavaScriptSpawnRouter {
         if route.stateless_http {
             options = options.stateless_http();
         }
-        Ok(nanocodex_subagents::SpawnDecision::Routed(
-            nanocodex_subagents::SpawnRoute {
+        Ok(nanocode_subagents::SpawnDecision::Routed(
+            nanocode_subagents::SpawnRoute {
                 options,
                 reference: route.route_id,
             },
@@ -481,7 +481,7 @@ struct JavaScriptSubscriptionResponse {
 #[derive(Serialize)]
 struct WasmAgentSessionContext<'a> {
     workspace: &'a str,
-    history: &'a [nanocodex::oai::responses::ResponseItem],
+    history: &'a [nanocode::oai::responses::ResponseItem],
 }
 
 #[derive(Deserialize)]
@@ -738,7 +738,7 @@ impl StateStore for JavaScriptDurabilityStore {
         owner: &'a OwnerToken,
         expected_revision: u64,
         payload: &'a str,
-        records: &'a [nanocodex::durability::StoreRecord],
+        records: &'a [nanocode::durability::StoreRecord],
     ) -> StoreFuture<'a, Result<u64, StoreError>> {
         Box::pin(async move {
             let fence = owner.fence().to_string();
@@ -1146,7 +1146,7 @@ async fn observe_javascript_code(
                             "JavaScript Code Mode host returned invalid notification: {error}"
                         ))
                     })?;
-                notifications.push(nanocodex::tools::embedded::CodeModeNotification {
+                notifications.push(nanocode::tools::embedded::CodeModeNotification {
                     call_id: notification.call_id,
                     text: notification.text,
                 });
@@ -1274,7 +1274,7 @@ async fn apply_browser_patch_plan(
     patch: &str,
     session_id: &str,
 ) -> Result<String, CodeModeHostError> {
-    use nanocodex::tools::apply_patch::{PatchOperation, plan, required_files};
+    use nanocode::tools::apply_patch::{PatchOperation, plan, required_files};
 
     let mut files = HashMap::new();
     for path in required_files(patch).map_err(CodeModeHostError::new)? {
@@ -1331,13 +1331,13 @@ struct JavaScriptBeforeCompaction {
     host_definition_id: u32,
 }
 
-impl nanocodex::agent::execution::BeforeCompaction for JavaScriptBeforeCompaction {
+impl nanocode::agent::execution::BeforeCompaction for JavaScriptBeforeCompaction {
     fn preserve(
         &self,
-        request: nanocodex::agent::execution::BeforeCompactionRequest,
-    ) -> nanocodex::agent::execution::ExecutionFuture<
+        request: nanocode::agent::execution::BeforeCompactionRequest,
+    ) -> nanocode::agent::execution::ExecutionFuture<
         '_,
-        Result<nanocodex::agent::execution::CompactionReceipt, NanocodexError>,
+        Result<nanocode::agent::execution::CompactionReceipt, NanocodexError>,
     > {
         Box::pin(async move {
             struct Cancel {
@@ -1605,7 +1605,7 @@ fn encode_login_status<E: ToString>(
 }
 
 fn encode_subscription_credential(
-    credential: Result<nanocodex::oai::auth::ChatGptCredential, impl ToString>,
+    credential: Result<nanocode::oai::auth::ChatGptCredential, impl ToString>,
 ) -> Result<String, JsValue> {
     let credential = credential.map_err(js_error)?;
     Ok(serde_json::json!({
@@ -1633,7 +1633,7 @@ struct WasmHarnessFactory {
     registry: Arc<SubagentRegistry>,
     parents: Arc<Mutex<HashMap<String, AgentHandle>>>,
     hosts: Arc<Mutex<HashMap<String, u32>>>,
-    codex: Option<(serde_json::Value, nanocodex::oai::auth::OpenAiAuth)>,
+    codex: Option<(serde_json::Value, nanocode::oai::auth::OpenAiAuth)>,
     claude: Option<serde_json::Value>,
 }
 
@@ -1916,7 +1916,7 @@ impl WasmNanocodex {
     pub async fn create(config_json: &str) -> Result<Self, JsValue> {
         let config = serde_json::from_str::<WasmConfig>(config_json)
             .map_err(|error| js_error(format!("invalid Nanocodex configuration: {error}")))?;
-        let auth = nanocodex::oai::auth::OpenAiAuth::api_key(config.api_key.clone());
+        let auth = nanocode::oai::auth::OpenAiAuth::api_key(config.api_key.clone());
         Self::create_with_auth(config, auth).await
     }
 
@@ -1934,11 +1934,11 @@ impl WasmNanocodex {
 
     async fn create_with_auth(
         config: WasmConfig,
-        auth: nanocodex::oai::auth::OpenAiAuth,
+        auth: nanocode::oai::auth::OpenAiAuth,
     ) -> Result<Self, JsValue> {
         let (factory, subagents) = if let Some(settings) = &config.subagents {
             let (registry, control, updates) =
-                nanocodex_subagents::channel(settings.max_concurrency);
+                nanocode_subagents::channel(settings.max_concurrency);
             if config.subagent_routing {
                 registry.set_spawn_router(Arc::new(JavaScriptSpawnRouter {
                     host_definition_id: config.host_definition_id,
@@ -2846,7 +2846,7 @@ impl WasmBrowserVoice {
         }
         let tail = self.protocol.borrow_mut().take_transcript_tail();
         let routed =
-            if let Some(context) = nanocodex_voice_protocol::realtime_transcript_context(&tail) {
+            if let Some(context) = nanocode_voice_protocol::realtime_transcript_context(&tail) {
                 self.agent
                     .append_developer_message(context)
                     .await
@@ -2954,7 +2954,7 @@ struct WasmManagedBrowserVoiceUpdate {
     #[serde(skip_serializing_if = "Option::is_none")]
     delegation: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    prefetch: Option<nanocodex_voice_protocol::VoicePrefetch>,
+    prefetch: Option<nanocode_voice_protocol::VoicePrefetch>,
 }
 
 /// Standalone Rust-owned browser voice protocol for a remote managed Agent.
@@ -2963,7 +2963,7 @@ struct WasmManagedBrowserVoiceUpdate {
 /// transports, the managed Agent lifecycle, and routing returned delegations.
 #[wasm_bindgen(js_name = ManagedBrowserVoice)]
 pub struct WasmManagedBrowserVoice {
-    protocol: RefCell<nanocodex_voice_protocol::ManagedVoiceProtocol>,
+    protocol: RefCell<nanocode_voice_protocol::ManagedVoiceProtocol>,
     startup_context: RefCell<Option<String>>,
     started: Cell<bool>,
     call_prepared: Cell<bool>,
@@ -3058,7 +3058,7 @@ impl WasmManagedBrowserVoice {
     #[wasm_bindgen(constructor)]
     pub fn new(voice: &str) -> Result<Self, JsValue> {
         let mut protocol =
-            nanocodex_voice_protocol::ManagedVoiceProtocol::new(voice).map_err(js_error)?;
+            nanocode_voice_protocol::ManagedVoiceProtocol::new(voice).map_err(js_error)?;
         protocol.enable_client_managed_handoffs();
         Ok(Self {
             protocol: RefCell::new(protocol),
@@ -3208,7 +3208,7 @@ impl WasmManagedBrowserVoice {
         let update = self.protocol.borrow_mut().realtime_message(payload);
         let delegation = update
             .delegation
-            .map(|delegation| nanocodex_voice_protocol::format_delegation(&delegation));
+            .map(|delegation| nanocode_voice_protocol::format_delegation(&delegation));
         encode_managed_voice_update(update.effects, delegation, update.prefetch)
     }
 
@@ -3287,7 +3287,7 @@ fn managed_voice_session_id(value: &str) -> Result<String, JsValue> {
 fn encode_managed_voice_update(
     effects: BrowserVoiceEffects,
     delegation: Option<String>,
-    prefetch: Option<nanocodex_voice_protocol::VoicePrefetch>,
+    prefetch: Option<nanocode_voice_protocol::VoicePrefetch>,
 ) -> Result<String, JsValue> {
     serde_json::to_string(&WasmManagedBrowserVoiceUpdate {
         effects,
@@ -3622,13 +3622,8 @@ fn turn_failure(error: &NanocodexError) -> TurnFailure {
             ..
         } => source
             .as_ref()
-            .downcast_ref::<nanocodex::durability::Error>()
-            .filter(|error| {
-                matches!(
-                    error,
-                    nanocodex::durability::Error::OperationConflict { .. }
-                )
-            })
+            .downcast_ref::<nanocode::durability::Error>()
+            .filter(|error| matches!(error, nanocode::durability::Error::OperationConflict { .. }))
             .map_or(execution_policy_failure_code(*disposition), |_| "conflict"),
         NanocodexError::Response(_)
             if error
@@ -3658,8 +3653,8 @@ fn turn_failure(error: &NanocodexError) -> TurnFailure {
 fn blocked_operation(error: &NanocodexError) -> Option<String> {
     let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
     while let Some(error) = source {
-        if let Some(nanocodex::durability::Error::OperationBlocked { pending_id, .. }) =
-            error.downcast_ref::<nanocodex::durability::Error>()
+        if let Some(nanocode::durability::Error::OperationBlocked { pending_id, .. }) =
+            error.downcast_ref::<nanocode::durability::Error>()
         {
             return Some(pending_id.clone());
         }
@@ -3675,9 +3670,9 @@ fn blocked_operation(error: &NanocodexError) -> Option<String> {
 }
 
 const fn execution_policy_failure_code(
-    disposition: nanocodex::ExecutionPolicyDisposition,
+    disposition: nanocode::ExecutionPolicyDisposition,
 ) -> &'static str {
-    use nanocodex::ExecutionPolicyDisposition;
+    use nanocode::ExecutionPolicyDisposition;
 
     match disposition {
         ExecutionPolicyDisposition::Retry => "retryable",
@@ -4075,7 +4070,7 @@ fn report_subagent_host_error(operation: &'static str, session_id: &str, error: 
         return;
     }
     let record = serde_json::json!({
-        "type": "nanocodex.subagent_host_error",
+        "type": "nanocode.subagent_host_error",
         "message": format!("Nanocodex failed while {operation}; later subagent updates will continue"),
         "operation": operation,
         "session_id": session_id,
@@ -4281,7 +4276,7 @@ fn default_reasoning_mode() -> String {
 }
 
 const fn default_max_subagents() -> usize {
-    nanocodex_subagents::DEFAULT_MAX_SUBAGENTS
+    nanocode_subagents::DEFAULT_MAX_SUBAGENTS
 }
 
 fn host_error_message(error: &JsValue) -> String {
@@ -4464,7 +4459,7 @@ impl WasmSubagents {
 
 async fn build_codex(
     config: WasmConfig,
-    auth: nanocodex::oai::auth::OpenAiAuth,
+    auth: nanocode::oai::auth::OpenAiAuth,
     factory: Option<Arc<WasmHarnessFactory>>,
     checkpoint: Option<SessionCheckpoint>,
     host_context: Option<Arc<str>>,
@@ -4473,8 +4468,8 @@ async fn build_codex(
 
     let model = config.model.parse::<Model>().map_err(js_error)?;
     // Explicit fastMode must be offered by the model, from the shared catalog.
-    nanocodex_agent::HarnessModel::Codex(model)
-        .capabilities(nanocodex_agent::ModelTransport::Native)
+    nanocode_runtime::HarnessModel::Codex(model)
+        .capabilities(nanocode_runtime::ModelTransport::Native)
         .check_fast_mode(config.fast_mode)
         .map_err(js_error)?;
     let host_definition_id = config.host_definition_id;
@@ -4529,7 +4524,7 @@ async fn build_codex(
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .insert(agent.session_id().to_owned(), agent.clone());
-                nanocodex_subagents::install_tools(tools.clone(), agent, registry.clone())
+                nanocode_subagents::install_tools(tools.clone(), agent, registry.clone())
             })
     } else {
         RustNanocodex::builder(openai).tools(tools)
@@ -4575,12 +4570,12 @@ async fn build_codex(
                     "terminal_receipt_retention must be from 0 through 4096",
                 ));
             }
-            nanocodex::agent::durability::DurableSession::open_with_terminal_receipt_limit(
+            nanocode::agent::durability::DurableSession::open_with_terminal_receipt_limit(
                 store, state_id, limit,
             )
             .await
         } else {
-            nanocodex::agent::durability::DurableSession::open(store, state_id).await
+            nanocode::agent::durability::DurableSession::open(store, state_id).await
         }
         .map_err(js_error)?;
         builder = builder.durability(durable_state).await.map_err(js_error)?;

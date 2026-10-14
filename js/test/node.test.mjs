@@ -214,7 +214,7 @@ test("Node-hosted WASM preserves follow-ons, cache identity, events, and custom 
   const scenario = (async () => {
     const socket = await server.connection;
     assert.equal(socket.request.headers.authorization, "Bearer test-key");
-    assert.equal(socket.request.headers["user-agent"], `nanocodex-wasm/${PACKAGE_VERSION}`);
+    assert.equal(socket.request.headers["user-agent"], `nanocode-wasm/${PACKAGE_VERSION}`);
     assert.equal(socket.request.headers["session-id"], SESSION_IDS.primary);
     const reader = messageReader(socket);
 

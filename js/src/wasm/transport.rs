@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use js_sys::Promise;
-use nanocodex::oai::transport::host::{
+use nanocode::oai::transport::host::{
     ConnectedHost, HostConnectRequest, HostConnection, HostConnectionMetadata, HostError,
     HostFuture, HostHttpBody, HostHttpResponse, HostMessage, HostTransport,
 };
@@ -297,12 +297,12 @@ fn decode_host_error(error: &JsValue, reconnectable: bool) -> HostError {
             body,
             retry_after_deadline_ms
                 .and_then(|value| value.as_u64())
-                .and_then(nanocodex::oai::transport::RetryAfter::from_unix_ms)
+                .and_then(nanocode::oai::transport::RetryAfter::from_unix_ms)
                 .or_else(|| {
                     retry_after
                         .and_then(|value| value.as_f64())
                         .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
-                        .and_then(nanocodex::oai::transport::RetryAfter::from_delay)
+                        .and_then(nanocode::oai::transport::RetryAfter::from_delay)
                 }),
         ),
     }

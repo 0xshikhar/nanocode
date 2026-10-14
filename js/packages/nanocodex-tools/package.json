@@ -136,7 +136,7 @@
   "license": "MIT OR Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/gakonst/nanocodex.git",
+    "url": "https://github.com/gakonst/nanocodexx.git",
     "directory": "js/packages/nanocodex-tools"
   }
 }

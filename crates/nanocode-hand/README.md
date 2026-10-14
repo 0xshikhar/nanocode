@@ -1,0 +1,45 @@
+# Nanocodex Hand
+
+Native screen capture, input and workflow recording for Nanocodex Hands. This package is part of the supported Rust workspace. Platform permission prompts and capture/input APIs remain owned by the native host.
+
+macOS requires macOS 26 or later for native observation. It captures the current main-display rectangle directly through ScreenCaptureKit, without enumerating windows or caching screenshots. Remote viewing uses hardware H.264 over the shared WebRTC publisher; encoder failure is reported and retried rather than silently switching to screenshot streaming. FFmpeg must be available on PATH.
+
+Still-image sizing, JPEG encoding and transport limits share a Rust core between Mac and Windows. The canonical policy is `src/capture_policy.json`; Linux embeds a generated copy. After changing policy, run `node scripts/sync-capture-policy.mjs` from the repository root. The current budget is 1280 pixels on the longest side and 500,000 bytes **after base64 encoding**.
+
+Windows uses native, bounded GDI JPEG capture and Win32 input in the signed-in user's desktop. The background Windows service launches and supervises the Hand worker in that user's interactive session because Session 0 cannot access the desktop. Locked and elevated secure desktops are not controlled by an ordinary user process.
+
+The shared video publisher requires FFmpeg's `gdigrab` input and software H.264 at 60 Hz. Put `ffmpeg.exe` beside `nanocodex2.exe` or on PATH; normal Windows releases bundle it. Encoder failure is reported, never replaced by JPEG live viewing. Native bounded JPEGs remain available for agent-requested observations, independently of live media. Run `cargo run -p nanocode-hand --example capture_latency` from the signed-in desktop to verify observation capture; this does not verify live video.
+
+Native Linux, macOS and Windows live viewing uses WebRTC H.264 only.
+`NANOCODEX_SCREEN_TRANSPORT=frames-v1` is rejected on native Hands; it is not a
+NAT workaround. Restricted Cloudflare sandboxes have a separate explicitly
+selected HTTPS-frame transport. NAT/ICE failure must be visible, not hidden by
+switching native viewers to screenshot streaming.
+
+For port-preserving NAT, `NANOCODEX_VIDEO_ADVERTISE_IP` advertises a reachable
+host IP while keeping sockets bound to the guest's private interface. Pair it
+with `NANOCODEX_VIDEO_UDP_PORTS=MIN-MAX` and explicit UDP forwarding through each
+NAT layer. `NANOCODEX_VIDEO_INTERFACE` selects the capture host's network interface;
+`NANOCODEX_VIDEO_IPV4_ONLY=1` restricts ICE to IPv4 UDP. These settings do not open
+firewalls, forward ports, or provide a TURN relay. Keep firewall allowances scoped
+to the intended viewers, executable, and UDP range. A LAN address only supports
+viewers that can reach that LAN; it does not provide cellular Internet access.
+
+Mac and Windows H.264 quality can be configured with `NANOCODEX_SCREEN_MAX_DIMENSION`
+(1280–7680; Mac default 3840, Windows default 1280) and `NANOCODEX_SCREEN_BITRATE_KBPS` (1000–100000; at default output size Mac 24000,
+Windows 6000). Without an explicit bitrate, smaller encoded frames scale the default by pixel area (a 1080p Mac stream defaults to 6000); an override remains exact. The encoder preserves aspect ratio, never upscales, and selects
+an H.264 level covering the output's 60 Hz macroblock rate and bitrate. Higher
+settings need enough capture/encoding CPU and network bandwidth; verify decoded
+frame rate in the actual viewer after changing them.
+
+For a real Mac stream check, run
+`cargo test -p nanocodex-bin --lib macos_live_webrtc -- --ignored --nocapture`
+from a Screen Recording-authorized application. This opt-in test captures the
+main display, encodes with VideoToolbox, negotiates a local WebRTC connection,
+and requires Chromium to decode at least 60 H.264 frames. It uses an isolated
+browser profile, sends no desktop input, and logs only aggregate decoder metrics.
+Set `NANOCODEX_TEST_CHROME` to choose a Chromium executable.
+
+Native workflow recordings are owned by the Hand and continue independently of
+connected model or screen clients. See [recording operations and platform limits](../../docs/hand-recording.md)
+for explicit scopes, local controls, privacy filtering, evidence retrieval and native E2E journeys.

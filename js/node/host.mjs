@@ -21,7 +21,7 @@ import {
 import { utf8ByteLength } from "../runtime/utf8.mjs";
 
 const RESPONSES_WEBSOCKETS_BETA = "responses_websockets=2026-02-06";
-const USER_AGENT = `nanocodex-wasm/${packageMetadata.version}`;
+const USER_AGENT = `nanocode-wasm/${packageMetadata.version}`;
 const DEFAULT_MAX_QUEUED_MESSAGES = 4_096;
 const DEFAULT_MAX_QUEUED_BYTES = 32 * 1024 * 1024;
 const DEFAULT_MAX_FRAME_BYTES = 16 * 1024 * 1024;

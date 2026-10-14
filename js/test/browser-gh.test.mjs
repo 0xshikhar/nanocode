@@ -155,7 +155,7 @@ test("browser gh makes useful GitHub calls through the same-origin connector", a
         default_branch: "master",
         description: "Tiny agents",
         full_name: "gakonst/nanocodex",
-        html_url: "https://github.com/gakonst/nanocodex",
+        html_url: "https://github.com/gakonst/nanocodexx",
         private: false,
       });
       if (url.includes("/pulls?")) return secureJson(url, [{

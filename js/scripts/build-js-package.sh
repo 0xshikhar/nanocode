@@ -86,11 +86,11 @@ if [[ "$(wasm-bindgen --version)" != "wasm-bindgen 0.2.126" ]]; then
 fi
 
 if [[ "$build_mode" == release ]]; then
-  cargo +1.97 build --locked -p nanocodex-wasm --target "$wasm_target" --profile wasm
+  cargo +1.97 build --locked -p nanocode-wasm --target "$wasm_target" --profile wasm
 else
-  cargo +1.97 build --locked -p nanocodex-wasm --target "$wasm_target"
+  cargo +1.97 build --locked -p nanocode-wasm --target "$wasm_target"
 fi
-wasm_artifact="$target_dir/$wasm_target/$cargo_profile/nanocodex_wasm.wasm"
+wasm_artifact="$target_dir/$wasm_target/$cargo_profile/nanocode_wasm.wasm"
 stamp_path="js/pkg-web/.nanocodex-bindgen-stamp"
 binaryen=""
 if [[ "$build_mode" == release ]]; then

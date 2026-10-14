@@ -1,4 +1,4 @@
-# nanocodex-computer
+# nanocode-cua
 
 MCP attachment for the official OpenAI CUA provider (Sky on macOS). The installed
 provider owns its tools, descriptions, schemas, JavaScript API, and permissions.
@@ -6,7 +6,7 @@ This package contains no CUA implementation, browser API facade, or fallback
 runtime. It launches the provider with its exact trusted command and arguments.
 
 ```js
-import { connectComputerTools, ensureComputer } from "nanocodex-computer";
+import { connectComputerTools, ensureComputer } from "nanocode-cua";
 
 const executable = await ensureComputer({ binary: installedNativeHelper });
 if (!executable) throw new Error("No official CUA provider is configured");
@@ -16,7 +16,7 @@ const computer = await connectComputerTools({ executable });
 await computer.close();
 ```
 
-`ensureComputer({ binary })` uses the installed `nanocodex2` or `nanocodex` helper
+`ensureComputer({ binary })` uses the installed `nanocodex2` or `nanocode` helper
 to provision the official provider on macOS. Automatic Windows setup is disabled
 pending native-helper verification. `discoverComputer` is
 read-only. Both honor `NANOCODEX_COMPUTER` as an explicit provider executable,
@@ -83,7 +83,7 @@ advertises no MCP client capabilities and responds to incoming provider RPC
 requests with standard method-not-found (`-32601`) errors. Provider notifications
 receive no response.
 
-Run `pnpm --filter nanocodex-computer test` and
-`pnpm --filter nanocodex-computer typecheck`. Tests use synthetic MCP protocol
+Run `pnpm --filter nanocode-cua test` and
+`pnpm --filter nanocode-cua typecheck`. Tests use synthetic MCP protocol
 fixtures; they do not ship a replacement CUA runtime. See
 [provider installation](../../docs/computer/upstream-provider.md).

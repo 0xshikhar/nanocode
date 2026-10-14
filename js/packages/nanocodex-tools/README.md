@@ -15,9 +15,9 @@ validator, and `X_API` discovery metadata. Hosts inject transport to the
 Hosts own persistence, network policy, credentials, and socket transports and
 inject those capabilities through the package's narrow interfaces.
 
-`nanocodex` owns the Rust/WASM agent runtime and composes WASM, workspace, and
+`nanocode` owns the Rust/WASM agent runtime and composes WASM, workspace, and
 MCP adapters around these capabilities. It imports and reexports this package's
-JS-only host capabilities; `nanocodex-tools` never imports `nanocodex`.
+JS-only host capabilities; `nanocodex-tools` never imports `nanocode`.
 
 Cloudflare Workers may supply Durable Object persistence and WebSocket
 registries to the hosted-tools core, but Cloudflare bindings, account authority,

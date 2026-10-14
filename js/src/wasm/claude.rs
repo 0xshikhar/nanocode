@@ -25,7 +25,7 @@ use super::{
     JsFuture, JsValue, Mutex, RustNanocodex, SessionCheckpoint, WasmHarnessFactory, WasmNanocodex,
     WasmSubagents, WasmSubagentsConfig, host_cancel_code_turn, js_agent_error, js_error,
 };
-use nanocodex_claude::{
+use nanocode_claude::{
     Claude, ClaudeAuthFuture, ClaudeAuthProvider, ClaudeAuthUnavailable, ClaudeClient,
     ClaudeNestedToolUpdate, ClaudeToolInvocation, ClaudeToolProgress, ClaudeToolReply, ClaudeTools,
     ServerToolDefinition, ToolDefinition, ToolResultContent,
@@ -123,7 +123,7 @@ pub(super) struct ClaudeConfig {
     endpoint: Option<String>,
     #[serde(default)]
     subscription_compatibility: bool,
-    subscription_identity: Option<nanocodex_claude::SubscriptionIdentity>,
+    subscription_identity: Option<nanocode_claude::SubscriptionIdentity>,
     host_definition_id: Option<u32>,
     #[serde(default)]
     tools: Vec<ToolDefinition>,
@@ -483,7 +483,7 @@ impl WasmNanocodex {
 
     async fn create_claude_with_codex_auth(
         config_json: &str,
-        codex_auth: Option<nanocodex::oai::auth::OpenAiAuth>,
+        codex_auth: Option<nanocode::oai::auth::OpenAiAuth>,
     ) -> Result<Self, JsValue> {
         // Serde errors can include caller-supplied strings; do not echo config secrets.
         let config: ClaudeConfig = serde_json::from_str(config_json)
@@ -493,7 +493,7 @@ impl WasmNanocodex {
                 .host_definition_id
                 .ok_or_else(|| js_error("subagents require hostDefinitionId"))?;
             let (registry, control, updates) =
-                nanocodex_subagents::channel(settings.max_concurrency);
+                nanocode_subagents::channel(settings.max_concurrency);
             if config.subagent_routing {
                 registry.set_spawn_router(Arc::new(JavaScriptSpawnRouter {
                     host_definition_id: host,
@@ -511,7 +511,7 @@ impl WasmNanocodex {
                             .get("api_key")
                             .and_then(Value::as_str)
                             .ok_or_else(|| js_error("Codex harness requires explicit transport"))?;
-                        nanocodex::oai::auth::OpenAiAuth::api_key(key.to_owned())
+                        nanocode::oai::auth::OpenAiAuth::api_key(key.to_owned())
                     };
                     Ok::<_, JsValue>((recipe, auth))
                 })
@@ -550,9 +550,9 @@ pub(super) async fn build_claude(
     let direct = config.is_direct();
     let endpoint = config.endpoint.unwrap_or_else(|| {
         if config.subscription_compatibility {
-            nanocodex_claude::ANTHROPIC_SUBSCRIPTION_MESSAGES_URL.to_owned()
+            nanocode_claude::ANTHROPIC_SUBSCRIPTION_MESSAGES_URL.to_owned()
         } else {
-            nanocodex_claude::ANTHROPIC_MESSAGES_URL.to_owned()
+            nanocode_claude::ANTHROPIC_MESSAGES_URL.to_owned()
         }
     });
     let http = reqwest::Client::new();
@@ -596,7 +596,7 @@ pub(super) async fn build_claude(
     }
     if let Some(effort) = config.thinking {
         if builder_model
-            .parse::<nanocodex_agent::HarnessModel>()
+            .parse::<nanocode_runtime::HarnessModel>()
             .is_ok()
         {
             builder = builder.thinking(effort).map_err(js_error)?;
@@ -660,12 +660,12 @@ pub(super) async fn build_claude(
     if let (Some(route_id), Some(state_id)) = (config.durability_host_id, config.durability_id) {
         let store = JavaScriptDurabilityStore { route_id };
         let durable = if let Some(limit) = config.terminal_receipt_retention {
-            nanocodex::agent::durability::DurableSession::open_with_terminal_receipt_limit(
+            nanocode::agent::durability::DurableSession::open_with_terminal_receipt_limit(
                 store, state_id, limit,
             )
             .await
         } else {
-            nanocodex::agent::durability::DurableSession::open(store, state_id).await
+            nanocode::agent::durability::DurableSession::open(store, state_id).await
         }
         .map_err(js_error)?;
         builder = builder.durability(durable).await.map_err(js_error)?;
@@ -689,7 +689,7 @@ pub(super) async fn build_claude(
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .insert(agent.session_id().to_owned(), agent.clone());
-                let native = nanocodex_subagents::install_claude_tools(
+                let native = nanocode_subagents::install_claude_tools(
                     ClaudeTools::new(),
                     agent,
                     registry.clone(),

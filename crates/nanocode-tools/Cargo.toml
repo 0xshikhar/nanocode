@@ -1,0 +1,21 @@
+[package]
+name = "nanocode-tools"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Shared tool traits, invocation contracts and macros for both harnesses"
+
+[dependencies]
+nanocode-codex = { version = "0.6.7", path = "../nanocode-codex", default-features = false }
+nanocode-tools-macros.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+schemars.workspace = true
+
+[lints]
+workspace = true

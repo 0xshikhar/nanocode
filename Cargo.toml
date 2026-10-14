@@ -1,22 +1,24 @@
 [workspace]
 members = [
-    "crates/nanocodex",
-    "crates/nanocodex-agent",
-    "crates/nanocodex-claude",
-    "crates/nanocodex-claude-tools",
-    "crates/nanocodex-durability",
-    "crates/nanocodex-hand",
-    "crates/nanocodex-home",
-    "crates/nanocodex-oai-api",
-    "crates/nanocodex-oai-tools",
-    "crates/nanocodex-observability",
-    "crates/nanocodex-subagents",
-    "crates/nanocodex-voice-protocol",
-    "crates/nanocodex-oai-tools/macros",
-    "crates/experimental/nanocodex-computer",
+    "crates/nanocode",
+    "crates/nanocode-tools",
+    "crates/nanocode-codex-tools",
+    "crates/nanocode-runtime",
+    "crates/nanocode-claude",
+    "crates/nanocode-claude-tools",
+    "crates/nanocode-durability",
+    "crates/nanocode-hand",
+    "crates/nanocode-home",
+    "crates/nanocode-codex",
+    "crates/nanocode-code-mode",
+    "crates/nanocode-observability",
+    "crates/nanocode-subagents",
+    "crates/nanocode-voice-protocol",
+    "crates/nanocode-tools-macros",
+    "crates/nanocode-cua",
     "js"
 ]
-default-members = ["crates/nanocodex"]
+default-members = ["crates/nanocode"]
 resolver = "2"
 
 [workspace.package]
@@ -33,6 +35,8 @@ categories = ["api-bindings", "asynchronous", "development-tools"]
 publish = true
 
 [workspace.dependencies]
+nanocode-tools = { version = "0.6.7", path = "crates/nanocode-tools" }
+nanocode-codex-tools = { version = "0.6.7", path = "crates/nanocode-codex-tools", default-features = false }
 libc = "0.2"
 base64 = "0.22.1"
 async-trait = "=0.1.89"
@@ -50,18 +54,18 @@ http = "1.3.1"
 httpdate = "1.0.3"
 ignore = "0.4.31"
 jsonschema = { version = "0.48.5", default-features = false }
-nanocodex = { version = "0.6.7", path = "crates/nanocodex" }
-nanocodex-agent = { version = "0.6.7", path = "crates/nanocodex-agent" }
-nanocodex-claude = { version = "0.6.7", path = "crates/nanocodex-claude" }
-nanocodex-claude-tools = { version = "0.6.7", path = "crates/nanocodex-claude-tools", default-features = false }
-nanocodex-home = { version = "0.6.7", path = "crates/nanocodex-home" }
-nanocodex-durability = { version = "0.6.7", path = "crates/nanocodex-durability" }
-nanocodex-voice-protocol = { version = "0.6.7", path = "crates/nanocodex-voice-protocol" }
-nanocodex-oai-api = { version = "0.6.7", path = "crates/nanocodex-oai-api" }
-nanocodex-observability = { version = "0.6.7", path = "crates/nanocodex-observability" }
-nanocodex-subagents = { version = "0.6.7", path = "crates/nanocodex-subagents" }
-nanocodex-oai-tools = { version = "0.6.7", path = "crates/nanocodex-oai-tools", default-features = false }
-nanocodex-oai-tools-macros = { version = "0.6.7", path = "crates/nanocodex-oai-tools/macros" }
+nanocode = { version = "0.6.7", path = "crates/nanocode" }
+nanocode-runtime = { version = "0.6.7", path = "crates/nanocode-runtime" }
+nanocode-claude = { version = "0.6.7", path = "crates/nanocode-claude" }
+nanocode-claude-tools = { version = "0.6.7", path = "crates/nanocode-claude-tools", default-features = false }
+nanocode-home = { version = "0.6.7", path = "crates/nanocode-home" }
+nanocode-durability = { version = "0.6.7", path = "crates/nanocode-durability" }
+nanocode-voice-protocol = { version = "0.6.7", path = "crates/nanocode-voice-protocol" }
+nanocode-codex = { version = "0.6.7", path = "crates/nanocode-codex" }
+nanocode-observability = { version = "0.6.7", path = "crates/nanocode-observability" }
+nanocode-subagents = { version = "0.6.7", path = "crates/nanocode-subagents" }
+nanocode-code-mode = { version = "0.6.7", path = "crates/nanocode-code-mode", default-features = false }
+nanocode-tools-macros = { version = "0.6.7", path = "crates/nanocode-tools-macros" }
 image = { version = "0.25.9", default-features = false, features = ["bmp", "gif", "jpeg", "png", "pnm", "webp"] }
 iana-time-zone = "0.1.64"
 js-sys = "0.3.82"

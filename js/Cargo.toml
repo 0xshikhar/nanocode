@@ -1,5 +1,5 @@
 [package]
-name = "nanocodex-wasm"
+name = "nanocode-wasm"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,15 +14,16 @@ description = "Embedded Node and browser WASM bindings for Nanocodex"
 crate-type = ["cdylib", "rlib"]
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+nanocode-tools.workspace = true
 async-trait.workspace = true
 futures-util.workspace = true
 js-sys.workspace = true
-nanocodex = { workspace = true, features = ["claude"] }
-nanocodex-claude.workspace = true
-nanocodex-agent.workspace = true
+nanocode = { workspace = true, features = ["claude"] }
+nanocode-claude.workspace = true
+nanocode-runtime.workspace = true
 reqwest.workspace = true
-nanocodex-subagents = { workspace = true, features = ["claude"] }
-nanocodex-voice-protocol.workspace = true
+nanocode-subagents = { workspace = true, features = ["claude"] }
+nanocode-voice-protocol.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["sync"] }
