@@ -18,6 +18,7 @@ nanocode-media.workspace = true
 nanocode-home = { workspace = true  }
 schemars = { workspace = true  }
 base64.workspace = true
+chrono.workspace = true
 getrandom = { workspace = true, features = ["wasm_js"] }
 sha2.workspace = true
 regex.workspace = true

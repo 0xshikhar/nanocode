@@ -8,6 +8,7 @@ use thiserror::Error;
 mod auth;
 #[cfg(not(target_family = "wasm"))]
 mod claude_code;
+mod environment;
 mod hooks;
 mod instructions;
 mod prompt;

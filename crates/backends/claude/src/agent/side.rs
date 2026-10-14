@@ -201,7 +201,10 @@ impl State {
         Ok(SideAnswer::new(
             text,
             Some(TurnUsage::from_reported(ReportedTurnUsage {
-                input_tokens: usage.input_tokens,
+                input_tokens: usage
+                    .input_tokens
+                    .saturating_add(usage.cache_read_input_tokens)
+                    .saturating_add(usage.cache_creation_input_tokens),
                 cached_input_tokens: usage.cache_read_input_tokens,
                 cache_write_input_tokens: usage.cache_creation_input_tokens,
                 output_tokens: usage.output_tokens,

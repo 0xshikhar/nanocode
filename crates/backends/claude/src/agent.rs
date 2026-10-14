@@ -1452,6 +1452,7 @@ impl ClaudeBuilder {
             conversation: Mutex::new(restored.conversation),
             round_boundary: std::sync::RwLock::new(round_boundary),
             side_view: std::sync::RwLock::new(None),
+            environment: std::sync::OnceLock::new(),
             boundary_stale: AtomicBool::new(false),
             policy: self.policy,
             admission: Mutex::new(()),
@@ -2639,6 +2640,8 @@ struct State {
 
     side_view: std::sync::RwLock<Option<Arc<Vec<Message>>>>,
 
+    environment: std::sync::OnceLock<String>,
+
     boundary_stale: AtomicBool,
     policy: Option<Arc<dyn ClaudeExecutionPolicy>>,
     admission: Mutex<()>,
@@ -3453,11 +3456,25 @@ impl State {
         Ok(())
     }
     fn current_system(&self) -> Option<Value> {
-        self.system_resolver
-            .as_ref()
-            .map(|resolve| json!(resolve(&self.session_id)))
-            .or_else(|| self.system_blocks.as_ref().map(|blocks| json!(blocks)))
-            .or_else(|| (!self.system.is_empty()).then(|| json!(self.system)))
+        let environment = self
+            .environment
+            .get_or_init(|| crate::environment::environment_section(&self.workspace()));
+        if let Some(resolve) = &self.system_resolver {
+            return Some(json!(format!(
+                "{}\n\n{environment}",
+                resolve(&self.session_id)
+            )));
+        }
+        if let Some(blocks) = &self.system_blocks {
+            let mut blocks = blocks.clone();
+            blocks.push(json!({"type": "text", "text": environment}));
+            return Some(json!(blocks));
+        }
+        Some(json!(if self.system.is_empty() {
+            environment.clone()
+        } else {
+            format!("{}\n\n{environment}", self.system)
+        }))
     }
 
     async fn publish_round_boundary(&self, conversation: &Conversation) -> Option<Arc<Snapshot>> {
@@ -5587,7 +5604,10 @@ impl State {
                 request.request_id.clone(),
                 text,
                 Some(TurnUsage::from_reported(ReportedTurnUsage {
-                    input_tokens: usage.input_tokens,
+                    input_tokens: usage
+                        .input_tokens
+                        .saturating_add(usage.cache_read_input_tokens)
+                        .saturating_add(usage.cache_creation_input_tokens),
                     cached_input_tokens: usage.cache_read_input_tokens,
                     cache_write_input_tokens: usage.cache_creation_input_tokens,
                     output_tokens: usage.output_tokens,
