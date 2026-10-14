@@ -86,9 +86,11 @@ impl OutputContract {
     }
 }
 
+pub const COMPLETION_INSTRUCTIONS_LEAD: &str = "Before finishing, call `submit_result`";
+
 pub(super) fn completion_instructions(schema: &str) -> String {
     format!(
-        "Before finishing, call `submit_result` with `{{ output: ... }}` and a JSON value \
+        "{COMPLETION_INSTRUCTIONS_LEAD} with `{{ output: ... }}` and a JSON value \
          matching the output schema below. Pass objects and arrays directly as JSON values. Use the callable entry in your actual tool catalog; \
          do not assume a Code Mode binding exists unless that catalog exposes it. \
          If validation rejects the value, correct it and retry. If the result is superseded, \

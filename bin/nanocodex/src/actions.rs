@@ -236,6 +236,7 @@ impl App {
     pub(crate) fn subagent(&mut self, scoped: ScopedAgentUpdate) {
         match scoped.update {
             AgentUpdate::Added(descriptor) => {
+                self.track_subagent(&descriptor);
                 self.tree.upsert(TreeNode {
                     id: descriptor.id.to_string(),
                     parent: descriptor.parent.map(|parent| parent.to_string()),
@@ -269,6 +270,7 @@ impl App {
                 });
             }
             AgentUpdate::Event { id, event } => {
+                self.subagent_event(id, &event);
                 let payload = serde_json::from_str::<serde_json::Value>(event.payload.get()).ok();
                 let key = id.to_string();
                 if event.kind == AgentEventKind::RunStarted

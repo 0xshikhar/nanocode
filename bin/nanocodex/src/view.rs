@@ -16,7 +16,7 @@ use crate::app::{App, Overlay, TurnState};
 
 pub const STATUS_VISIBLE: Duration = Duration::from_secs(4);
 
-pub const BINDINGS: [Binding; 27] = [
+pub const BINDINGS: [Binding; 28] = [
     Binding {
         keys: "enter",
         action: "send · queue while a turn runs",
@@ -36,6 +36,10 @@ pub const BINDINGS: [Binding; 27] = [
     Binding {
         keys: "esc esc",
         action: "interrupt the running turn",
+    },
+    Binding {
+        keys: "f2",
+        action: "focus the next subagent; past the last returns to the main thread",
     },
     Binding {
         keys: "alt+u / alt+up",
@@ -158,7 +162,14 @@ pub fn draw(app: &mut App, frame: &mut Canvas<'_>) {
         ]));
     }
     let tree_lines = if app.show_tree && !app.tree.is_empty() {
-        app.tree.lines(&theme, spinner, None)
+        let focused = app.focus.map(|id| id.to_string());
+        let selected = focused.and_then(|key| {
+            app.tree
+                .ordered()
+                .iter()
+                .position(|(_, _, node)| node.id == key)
+        });
+        app.tree.lines(&theme, spinner, selected)
     } else {
         Vec::new()
     };
@@ -184,7 +195,7 @@ pub fn draw(app: &mut App, frame: &mut Canvas<'_>) {
     ])
     .areas(area);
     let buffer = frame.buffer_mut();
-    app.transcript
+    app.visible_transcript()
         .render(transcript_area, buffer, &theme, spinner);
     if tree_height > 0 {
         let mut lines = vec![Line::styled(
@@ -315,6 +326,42 @@ fn status_line(app: &App, spinner: &str, now: Instant) -> Line<'static> {
             format!(" {text}"),
             Style::default().fg(theme.thinking_high()),
         );
+    }
+    if let Some(id) = app.focus
+        && let Some(view) = app.views.get(&id)
+    {
+        let key = id.to_string();
+        let state = app
+            .tree
+            .nodes()
+            .iter()
+            .find(|node| node.id == key)
+            .map(|node| node.status.label())
+            .unwrap_or_default();
+        return Line::from(vec![
+            Span::styled(" ▸ ", Style::default().fg(theme.accent())),
+            Span::styled(
+                format!("#{id} {}", view.role),
+                Style::default()
+                    .fg(theme.text())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(
+                    "{}{}{state}",
+                    view.model
+                        .as_deref()
+                        .map(|model| format!(" · {model}"))
+                        .unwrap_or_default(),
+                    if state.is_empty() { "" } else { " · " }
+                ),
+                Style::default().fg(theme.muted()),
+            ),
+            Span::styled(
+                "  enter messages it · esc esc interrupts · /agent returns",
+                Style::default().fg(theme.muted()),
+            ),
+        ]);
     }
     if app.interrupting && !matches!(app.turn, TurnState::Idle) {
         return Line::from(vec![

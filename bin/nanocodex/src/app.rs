@@ -89,6 +89,7 @@ pub enum AppEvent {
         update: BtwUpdate,
     },
     Subagent(ScopedAgentUpdate),
+    FocusReady(Box<crate::focus::FocusReady>),
     Notice(NoticeLevel, String),
     Applied(std::result::Result<(ModelSelection, Thinking, ServiceTier, String), String>),
 }
@@ -211,6 +212,8 @@ pub struct App {
     next_local: u64,
     history_path: Option<PathBuf>,
     spans: crate::telemetry::TurnSpans,
+    pub(crate) focus: Option<nanocode::subagents::AgentId>,
+    pub(crate) views: HashMap<nanocode::subagents::AgentId, crate::focus::SubagentView>,
 }
 
 pub async fn run(launch: Launch, mut terminal: TerminalSession) -> Result<()> {
@@ -270,6 +273,8 @@ pub async fn run(launch: Launch, mut terminal: TerminalSession) -> Result<()> {
         next_local: 0,
         history_path: launch.history_path.clone(),
         spans: crate::telemetry::TurnSpans::default(),
+        focus: None,
+        views: HashMap::new(),
     };
     for server in app.host.runtime.runner_servers() {
         app.notice(NoticeLevel::Info, listener_notice(&server));
@@ -798,6 +803,10 @@ impl App {
                 self.notice(level, text);
                 true
             }
+            AppEvent::FocusReady(ready) => {
+                self.focus_ready(*ready);
+                true
+            }
             AppEvent::Applied(result) => {
                 self.starting = false;
                 match result {
@@ -824,6 +833,7 @@ impl App {
             self.transcript.clear();
             self.mapper.reset();
             self.tree = AgentTree::default();
+            self.reset_focus();
         }
         self.session_started = ready
             .history
@@ -1254,11 +1264,11 @@ impl App {
             }
             Event::Mouse(mouse) => match mouse.kind {
                 MouseEventKind::ScrollUp => {
-                    self.transcript.scroll_up(3);
+                    self.visible_transcript().scroll_up(3);
                     true
                 }
                 MouseEventKind::ScrollDown => {
-                    self.transcript.scroll_down(3);
+                    self.visible_transcript().scroll_down(3);
                     true
                 }
                 _ => false,
@@ -1336,13 +1346,16 @@ impl App {
                 None => self.flash("no cleared draft to restore"),
             },
             KeyCode::Esc => {
-                if busy {
+                if busy || self.focus.is_some() {
                     if self
                         .esc_armed
                         .is_some_and(|armed| armed.elapsed() < QUIT_CONFIRMATION)
                     {
                         self.esc_armed = None;
-                        self.interrupt();
+                        match self.focus {
+                            Some(id) => self.interrupt_focused(id),
+                            None => self.interrupt(),
+                        }
                     } else {
                         self.esc_armed = Some(Instant::now());
                         self.flash("press esc again to interrupt");
@@ -1353,17 +1366,24 @@ impl App {
             }
             KeyCode::Char('d') if control => self.command("model"),
             KeyCode::Char('s') if control => self.command("thinking"),
-            KeyCode::Char('o') if control => self.transcript.toggle_expanded(),
+            KeyCode::Char('o') if control => self.visible_transcript().toggle_expanded(),
             KeyCode::Char('t') if control => self.show_tree = !self.show_tree,
             KeyCode::Char('r') if control => self.open_recent_prompts(),
             KeyCode::Char('g') if control => self.edit_externally(terminal),
             KeyCode::Char('l') if control => drop(terminal.clear()),
             KeyCode::Char('v') if control => self.paste_image(),
             KeyCode::F(1) => self.overlay = Some(Overlay::Help),
-            KeyCode::PageUp => self.transcript.scroll_up(self.transcript.page()),
-            KeyCode::PageDown => self.transcript.scroll_down(self.transcript.page()),
-            KeyCode::Home if control => self.transcript.scroll_to_top(),
-            KeyCode::End if control => self.transcript.scroll_to_bottom(),
+            KeyCode::PageUp => {
+                let transcript = self.visible_transcript();
+                transcript.scroll_up(transcript.page());
+            }
+            KeyCode::PageDown => {
+                let transcript = self.visible_transcript();
+                transcript.scroll_down(transcript.page());
+            }
+            KeyCode::Home if control => self.visible_transcript().scroll_to_top(),
+            KeyCode::End if control => self.visible_transcript().scroll_to_bottom(),
+            KeyCode::F(2) => self.cycle_focus(),
             KeyCode::Up if alt => self.recall_queued(),
             KeyCode::Char('u') if alt => self.recall_queued(),
             KeyCode::Tab
@@ -1542,6 +1562,13 @@ impl App {
             self.run_shell(command.trim().to_owned());
             return;
         }
+        if let Some(id) = self.focus {
+            if !self.attachments.is_empty() {
+                self.flash("attachments go to the main thread; /agent returns to it");
+            }
+            self.message_focused(id, text);
+            return;
+        }
         let attachments = std::mem::take(&mut self.attachments);
         match self.turn {
             TurnState::Running { .. } | TurnState::Starting(_) | TurnState::External(_) => {
@@ -1645,7 +1672,8 @@ impl App {
                     ),
                 );
             }
-            "expand" | "collapse" => self.transcript.toggle_expanded(),
+            "expand" | "collapse" => self.visible_transcript().toggle_expanded(),
+            "agent" | "focus" => self.focus_command(argument),
             "theme" if argument.is_empty() => self.open_theme_picker(),
             "theme" => self.set_theme(argument),
             "copy" => self.copy_last_reply(),

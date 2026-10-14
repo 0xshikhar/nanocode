@@ -4,6 +4,7 @@ mod cli;
 mod commands;
 mod events;
 mod extras;
+mod focus;
 mod history;
 mod host;
 mod models;

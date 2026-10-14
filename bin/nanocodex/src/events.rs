@@ -14,6 +14,30 @@ pub struct EventMapper {
     session: Usage,
     turn_start: usize,
     reported: bool,
+    subagent: bool,
+}
+
+pub fn subagent_prompt_display(text: &str) -> String {
+    let Some(rest) = text.strip_prefix("A directed message from ") else {
+        return text.to_owned();
+    };
+    let (Some((sender, _)), Some((_, body))) = (
+        rest.split_once(" was delivered by the sub-agent runtime."),
+        rest.split_once("\n\nMessage body:\n"),
+    ) else {
+        return text.to_owned();
+    };
+    let body = body
+        .split_once(&format!(
+            "\n\n{}",
+            nanocode::subagents::COMPLETION_INSTRUCTIONS_LEAD
+        ))
+        .map_or(body, |(body, _)| body);
+    if sender == "the user" {
+        body.to_owned()
+    } else {
+        format!("from {sender}: {body}")
+    }
 }
 
 #[derive(Clone, Copy, Default)]
@@ -41,6 +65,13 @@ pub struct Mapped {
 }
 
 impl EventMapper {
+    pub fn subagent() -> Self {
+        Self {
+            subagent: true,
+            ..Self::default()
+        }
+    }
+
     pub fn reset(&mut self) {
         self.assistant.clear();
         self.reasoning.clear();
@@ -83,6 +114,11 @@ impl EventMapper {
         match event.kind {
             AgentEventKind::InputAccepted => {
                 let text = prompt_text(&payload["input"]);
+                let text = if self.subagent {
+                    subagent_prompt_display(&text)
+                } else {
+                    text
+                };
                 let shown = text.as_str();
                 match completion_agent(shown) {
                     Some(agent) => transcript.push(CellKind::Notice(

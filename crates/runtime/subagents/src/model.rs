@@ -185,8 +185,9 @@ impl AgentMessage {
             MessageSender::User => (
                 "the user".to_owned(),
                 "The user is the human operating this session and is talking to you directly. \
-                 Follow their instructions, answer them in your reply, and still return your \
-                 required structured result to your parent when you finish."
+                 Follow their instructions and answer them in your reply. This message starts a \
+                 new result for your parent: call submit_result again with your updated result \
+                 before finishing, even if you submitted one earlier."
                     .to_owned(),
             ),
         };

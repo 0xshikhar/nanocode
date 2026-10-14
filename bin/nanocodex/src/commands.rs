@@ -1,4 +1,4 @@
-pub const COMMANDS: [(&str, &str); 23] = [
+pub const COMMANDS: [(&str, &str); 24] = [
     (
         "/model",
         "choose harness, model, thinking and speed for a new thread",
@@ -26,6 +26,10 @@ pub const COMMANDS: [(&str, &str); 23] = [
     ("/mouse", "toggle mouse capture for native text selection"),
     ("/help", "show key bindings"),
     ("/clear", "start a new session"),
+    (
+        "/agent",
+        "focus a subagent by #id or role and message it; /agent alone returns to the main thread",
+    ),
     (
         "/reload",
         "restart with the newest nanocodex on PATH, keeping this session",
