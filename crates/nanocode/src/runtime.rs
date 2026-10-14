@@ -835,7 +835,8 @@ impl Nanocodex {
         self.inner.recipe(model.family())?;
         let inherited = stored
             .turns
-            .is_empty()
+            .iter()
+            .all(|turn| turn.status != crate::durability::TurnStatus::Pending)
             .then(|| stored.summary.record.inherited_transcript.clone())
             .filter(|transcript| !transcript.is_empty());
         let durable_state = configured.resume(session_id).await.map_err(catalog_error)?;

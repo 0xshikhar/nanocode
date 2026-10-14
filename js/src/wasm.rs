@@ -1505,11 +1505,6 @@ pub(crate) async fn inherited_seed(
     described: nanocode::durability::SessionRecord,
 ) -> Result<Vec<nanocode::PromptMessage>, JsValue> {
     if described.inherited_transcript.is_empty()
-        || durable
-            .latest_checkpoint()
-            .await
-            .map_err(js_error)?
-            .is_some()
         || !durable
             .state()
             .await
