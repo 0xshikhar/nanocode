@@ -48,6 +48,7 @@ ignore = { workspace = true  }
 globset = { version = "0.4.19"  }
 tempfile = { workspace = true  }
 serde_yaml_ng = { workspace = true  }
+unicode-normalization = "0.1.25"
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 wasm-bindgen-futures.workspace = true

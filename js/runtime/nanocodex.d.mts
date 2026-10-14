@@ -106,6 +106,7 @@ export type Runtime = Readonly<{
   placement: "node" | "host" | "browser";
   defaults: Defaults;
   backends: readonly HarnessFamily[];
+  computerUseUnavailable: string | undefined;
 
   spawn<B extends BackendName>(options: SpawnOptions<B>): Promise<DefaultAgent<B>>;
   spawn(options?: InheritedSpawnOptions): Promise<DefaultAgent>;

@@ -197,6 +197,7 @@ pub struct App {
     thinking_override: Option<Thinking>,
     tier_override: Option<ServiceTier>,
     awaiting_terminal: bool,
+    computer_use_notice: Option<String>,
     pub(crate) session_started: bool,
     pub(crate) tx: UnboundedSender<AppEvent>,
     quit: bool,
@@ -254,6 +255,7 @@ pub async fn run(launch: Launch, mut terminal: TerminalSession) -> Result<()> {
         thinking_override: launch.thinking_override,
         tier_override: launch.tier_override,
         awaiting_terminal: false,
+        computer_use_notice: None,
         session_started: false,
         tx,
         quit: false,
@@ -673,6 +675,16 @@ impl App {
         });
         self.agent = Some(ready.agent);
         self.notice(NoticeLevel::Info, ready.notice);
+        let unavailable = self.host.runtime.computer_use_unavailable();
+        if unavailable.is_some() && unavailable != self.computer_use_notice {
+            self.computer_use_notice.clone_from(&unavailable);
+            if let Some(reason) = unavailable {
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!("computer use unavailable, continuing without it: {reason}"),
+                );
+            }
+        }
         let mut pending = ready.pending.into_iter();
         if let Some(turn) = pending.next() {
             self.notice(NoticeLevel::Info, "continuing the interrupted turn…");

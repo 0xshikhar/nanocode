@@ -50,6 +50,14 @@ const RESUME_KEYS = new Set(["harness", "instructions"]);
 
 
 
+let computerUseNotice;
+
+function noticeComputerUseUnavailable(reason) {
+  if (computerUseNotice === reason) return;
+  computerUseNotice = reason;
+  globalThis.process?.emitWarning?.("computer use unavailable, continuing without it: " + reason, { code: "NANOCODEX_CUA_UNAVAILABLE" });
+}
+
 export function createNanocodexFactory(platform) {
   return async function create(options) {
     const initial = snapshotRuntime(options, platform);
@@ -57,7 +65,14 @@ export function createNanocodexFactory(platform) {
     const defaults = resolveDefaults(initial, catalog);
     let config = await prepareWorkspace(initial, platform);
     if (initial.cua === undefined && platform.connectCua) {
-      const cua = await platform.connectCua();
+      let cua;
+      try {
+        cua = await platform.connectCua();
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        noticeComputerUseUnavailable(reason);
+        return createRuntime({ ...config, computerUseUnavailable: reason }, catalog, defaults, platform);
+      }
       try {
         config = { ...config, cua: snapshotCua(cua), closeCua: () => cua.close() };
         return createRuntime(config, catalog, defaults, platform);
@@ -604,6 +619,7 @@ function createRuntime(config, catalog, defaults, platform) {
     placement: platform.placement,
     defaults,
     backends: Object.freeze(Object.keys(config.backends)),
+    computerUseUnavailable: config.computerUseUnavailable,
     spawn,
     forBackend,
     resume,

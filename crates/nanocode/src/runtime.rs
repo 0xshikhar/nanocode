@@ -390,8 +390,7 @@ impl<B> NanocodexBuilder<B> {
         let workspace: Arc<Path> = resolve_workspace(self.workspace)?.into();
 
         #[cfg(not(target_family = "wasm"))]
-        let cua: computer::Cell =
-            (!self.cua_disabled).then(|| Arc::new(tokio::sync::OnceCell::new_with(self.cua)));
+        let cua: computer::Cell = (!self.cua_disabled).then(|| computer::cell(self.cua));
         #[cfg(target_family = "wasm")]
         let cua: computer::Cell = None;
         let ownership = Arc::new(Ownership::default());
@@ -520,6 +519,7 @@ impl<B> NanocodexBuilder<B> {
                 durability,
                 subagents: subagent_control,
                 subagent_updates,
+                cua,
             }),
         })
     }
@@ -720,6 +720,7 @@ struct Runtime {
     durability: Option<crate::durability::SessionStore>,
     subagents: Option<nanocode_subagents::SubagentControl>,
     subagent_updates: UpdateSlot,
+    cua: computer::Cell,
 }
 
 impl Nanocodex {
@@ -750,6 +751,11 @@ impl Nanocodex {
     #[must_use]
     pub fn thinking(&self) -> Thinking {
         self.inner.thinking
+    }
+
+    #[must_use]
+    pub fn computer_use_unavailable(&self) -> Option<String> {
+        computer::unavailable(&self.inner.cua)
     }
 
     #[must_use]

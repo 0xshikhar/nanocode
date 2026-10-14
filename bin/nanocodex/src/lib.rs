@@ -252,6 +252,9 @@ async fn exec(args: SessionArgs) -> Result<()> {
         _ => host.start(&prepared.model, prepared.thinking).await?,
     };
     app::apply_tier(&agent, &prepared.model, prepared.tier).await?;
+    if let Some(reason) = host.runtime.computer_use_unavailable() {
+        eprintln!("nanocodex: computer use unavailable, continuing without it: {reason}");
+    }
     tokio::spawn(async move { while events.recv().await.is_some() {} });
     let mut turn = agent.prompt(prompt.as_str()).await?;
     let mut stderr = std::io::stderr();
@@ -266,11 +269,11 @@ async fn exec(args: SessionArgs) -> Result<()> {
                     payload["tool"].as_str().unwrap_or("tool")
                 ));
             }
-            AgentEventKind::RunError => {
+            AgentEventKind::RunError if payload["observational"] == true => {
                 drop(writeln!(
                     stderr,
-                    "error: {}",
-                    payload["message"].as_str().unwrap_or_default()
+                    "warning: {}",
+                    payload["error"].as_str().unwrap_or_default()
                 ));
             }
             _ => {}
