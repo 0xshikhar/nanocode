@@ -556,7 +556,7 @@ where
                         &self.origin,
                     );
                     drop(parent);
-                    let compact_started = web_time::Instant::now();
+                    let compact_started = nanocode_platform::Instant::now();
                     let compact_base_checkpoint = latest_fork_checkpoint.clone();
                     let admitted = self
                         .execution
@@ -2377,7 +2377,10 @@ async fn accept_idle_route(
         return Some(command);
     };
     if let Some(id) = &request_id {
-        match execution.identified_steer_accepted(id.clone(), &prompt).await {
+        match execution
+            .identified_steer_accepted(id.clone(), &prompt)
+            .await
+        {
             Ok(true) => {
                 drop(route_result.send(Ok(PromptRouteKind::Steered)));
                 return None;
@@ -2413,7 +2416,10 @@ async fn accept_idle_route(
     }
 
     let admission = execution
-        .admit_automatic(request_id.unwrap_or_else(|| SessionId::new().to_string()), &prompt)
+        .admit_automatic(
+            request_id.unwrap_or_else(|| SessionId::new().to_string()),
+            &prompt,
+        )
         .await;
     match admission {
         Ok((operation_id, AdmittedExecution::Execute)) => {

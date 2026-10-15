@@ -1,3 +1,5 @@
+#![cfg(not(target_family = "wasm"))]
+
 use rustls::{ClientConfig, RootCertStore};
 use std::{
     ffi::OsString,

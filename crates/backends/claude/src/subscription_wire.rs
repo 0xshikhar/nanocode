@@ -89,8 +89,7 @@ impl SubscriptionIdentity {
                         .and_then(Value::as_str)
                         .is_some_and(|id| !id.is_empty())
                 });
-            let legacy = regex::Regex::new(r"^user_[0-9a-fA-F]{64}_account_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_session_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$").expect("pinned OMP pattern");
-            if json_id || legacy.is_match(user) {
+            if json_id || crate::subscription_identity::is_legacy_user_id(user) {
                 return Ok(json!({"user_id":user}));
             }
         }
@@ -115,10 +114,14 @@ impl SubscriptionIdentity {
     }
 }
 fn hex_digest(input: &[u8]) -> String {
-    Sha256::digest(input)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let digest = Sha256::digest(input);
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        hex.push(char::from(HEX[usize::from(byte >> 4)]));
+        hex.push(char::from(HEX[usize::from(byte & 0xf)]));
+    }
+    hex
 }
 pub fn prefix(name: &str) -> String {
     if matches!(

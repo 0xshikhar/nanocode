@@ -631,7 +631,7 @@ impl Execution {
                 "{turn_id}:steer:{}",
                 request_id
                     .map(str::to_owned)
-                    .unwrap_or_else(|| uuid::Uuid::now_v7().to_string())
+                    .unwrap_or_else(|| nanocode_platform::uuid_v7().to_string())
             )
         };
         let input = crate::client::events::AcceptedInput {
@@ -700,7 +700,11 @@ impl Execution {
         input: &T,
     ) -> Result<bool> {
         match &self.policy {
-            Some(policy) => policy.identified_steer_accepted(message_id, encode(input)?).await,
+            Some(policy) => {
+                policy
+                    .identified_steer_accepted(message_id, encode(input)?)
+                    .await
+            }
             None => Ok(false),
         }
     }

@@ -3,7 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use nanocode::durability::{SessionSummary, TranscriptItem};
 use nanocode_tui::{
     picker::{Picker, PickerItem},
-    transcript::{CellKind, ToolBody, ToolCell, ToolStatus, Transcript},
+    transcript::{CellKind, ToolStatus, Transcript},
 };
 
 pub fn age(updated_at_ms: u64) -> String {
@@ -61,7 +61,10 @@ pub fn session_at<'a>(
 }
 
 pub fn replay(transcript: &mut Transcript, history: Vec<TranscriptItem>) {
-    let mut tools = std::collections::HashMap::new();
+    let _span =
+        tracing::info_span!(target: "nanocodex", "nc.session.replay", items = history.len())
+            .entered();
+    let mut mapper = crate::events::EventMapper::default();
     for item in history {
         match item {
             TranscriptItem::User(text) if text.trim_start().starts_with("<turn_aborted>") => {
@@ -71,7 +74,9 @@ pub fn replay(transcript: &mut Transcript, history: Vec<TranscriptItem>) {
                 ));
             }
             TranscriptItem::User(text) => {
-                transcript.push(CellKind::User(text));
+                transcript.push(CellKind::User(
+                    crate::side::prompt_display(&text).to_owned(),
+                ));
             }
             TranscriptItem::Assistant(text) => {
                 transcript.push(CellKind::Assistant(text));
@@ -86,40 +91,26 @@ pub fn replay(transcript: &mut Transcript, history: Vec<TranscriptItem>) {
                 name,
                 arguments,
                 parent_call_id,
-            } => {
-                let mut cell = ToolCell::new(call_id.clone(), name.clone());
-                cell.depth = usize::from(parent_call_id.is_some());
-                cell.status = ToolStatus::Completed;
-                let arguments = serde_json::from_str::<serde_json::Value>(&arguments)
-                    .unwrap_or(serde_json::Value::String(arguments));
-                crate::events::describe_tool(&mut cell, &name, &arguments);
-                let index = transcript.push(CellKind::Tool(cell));
-                tools.insert(call_id, index);
-            }
+            } => mapper.replay_tool_call(
+                transcript,
+                &call_id,
+                &name,
+                &arguments,
+                parent_call_id.as_deref(),
+            ),
             TranscriptItem::ToolResult {
                 call_id,
                 output,
                 outcome,
-            } => {
-                if let Some(index) = tools.get(&call_id).copied() {
-                    transcript.update(index, |cell| {
-                        if let CellKind::Tool(tool) = cell {
-                            tool.status = match outcome {
-                                nanocode::agent::session::ToolOutcome::Failed => ToolStatus::Failed,
-                                _ => ToolStatus::Completed,
-                            };
-                            tool.output = crate::events::clean_output(&output);
-                            if tool.output_body == ToolBody::Text
-                                && crate::events::looks_like_diff(&tool.output)
-                            {
-                                tool.output_body = ToolBody::Diff;
-                            }
-                        }
-                    });
-                }
-            }
+            } => mapper.replay_tool_result(
+                transcript,
+                &call_id,
+                &output,
+                matches!(outcome, nanocode::agent::session::ToolOutcome::Failed),
+            ),
         }
     }
+    transcript.finish_running_tools(ToolStatus::Completed);
 }
 
 pub const fn user_facing(origin: nanocode::Origin) -> bool {

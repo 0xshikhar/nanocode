@@ -77,7 +77,8 @@ fn expand_tool(
             #(#fields,)*
         }
 
-        #[#nanocode::__private::async_trait]
+        #[cfg_attr(not(target_family = "wasm"), #nanocode::__private::async_trait)]
+        #[cfg_attr(target_family = "wasm", #nanocode::__private::async_trait(?Send))]
         impl #nanocode::__private::Tool for #original_ident {
             fn definition(&self) -> #nanocode::__private::ToolDefinition {
                 #nanocode::__private::ToolDefinition::function(

@@ -71,6 +71,12 @@ impl FileFinder {
     }
 
     fn refresh(&mut self) {
+        let _span = tracing::info_span!(
+            "tui.finder.filter",
+            files = self.files.len(),
+            query.bytes = self.query.len()
+        )
+        .entered();
         let query = self.query.to_lowercase();
         let mut scored = self
             .files

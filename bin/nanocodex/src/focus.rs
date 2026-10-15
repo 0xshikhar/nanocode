@@ -42,6 +42,8 @@ impl SubagentView {
 
 impl App {
     pub(crate) fn track_subagent(&mut self, descriptor: &AgentDescriptor) {
+        self.mapper
+            .learn_agent(descriptor.id, descriptor.role.clone());
         self.views.entry(descriptor.id).or_insert_with(|| {
             SubagentView::new(
                 descriptor.role.clone(),
@@ -76,6 +78,7 @@ impl App {
     }
 
     pub(crate) fn focus_command(&mut self, argument: &str) {
+        let _span = tracing::info_span!(target: "nanocodex", "nc.action", action.name = "focus_command", session.id = self.agent.as_ref().map(|agent| agent.session_id())).entered();
         let argument = argument.trim().trim_start_matches('#');
         if argument.is_empty() || argument.eq_ignore_ascii_case("main") {
             self.unfocus();
@@ -95,6 +98,7 @@ impl App {
     }
 
     pub(crate) fn cycle_focus(&mut self) {
+        let _span = tracing::info_span!(target: "nanocodex", "nc.action", action.name = "cycle_focus", session.id = self.agent.as_ref().map(|agent| agent.session_id())).entered();
         let order = self
             .tree
             .ordered()
@@ -123,6 +127,7 @@ impl App {
     }
 
     fn focus_on(&mut self, id: AgentId) {
+        let _span = tracing::info_span!(target: "nanocodex", "nc.action", action.name = "focus_on", session.id = self.agent.as_ref().map(|agent| agent.session_id())).entered();
         let Some(root) = self
             .agent
             .as_ref()
@@ -228,6 +233,7 @@ impl App {
     }
 
     pub(crate) fn message_focused(&mut self, id: AgentId, text: String) {
+        let _span = tracing::info_span!(target: "nanocodex", "nc.action", action.name = "message_focused", session.id = self.agent.as_ref().map(|agent| agent.session_id())).entered();
         let (Some(root), Some(control)) = (
             self.agent
                 .as_ref()
@@ -255,6 +261,7 @@ impl App {
     }
 
     pub(crate) fn interrupt_focused(&mut self, id: AgentId) {
+        let _span = tracing::info_span!(target: "nanocodex", "nc.action", action.name = "interrupt_focused", session.id = self.agent.as_ref().map(|agent| agent.session_id())).entered();
         let (Some(root), Some(control)) = (
             self.agent
                 .as_ref()

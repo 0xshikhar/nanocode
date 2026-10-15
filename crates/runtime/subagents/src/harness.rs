@@ -8,7 +8,13 @@ use nanocode_agent::input::Prompt;
 use nanocode_agent::{
     Nanocodex, NanocodexError, Result as AgentResult, SessionCheckpoint, TurnControl, TurnResult,
 };
-use std::{collections::VecDeque, sync::Weak};
+use std::{
+    collections::VecDeque,
+    sync::{
+        Arc, Weak,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing::Instrument;
 
@@ -19,6 +25,15 @@ pub(super) struct HarnessHandle {
     commands: mpsc::Sender<HarnessCommand>,
     deferred: mpsc::UnboundedSender<DeliveryCommand>,
     urgent: mpsc::UnboundedSender<DeliveryCommand>,
+    side_questions: Arc<AtomicUsize>,
+}
+
+pub(super) struct SideQuestionLease(Arc<AtomicUsize>);
+
+impl Drop for SideQuestionLease {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 struct DeliveryCommand {
@@ -55,6 +70,9 @@ impl EnqueuedDelivery {
 enum HarnessCommand {
     Snapshot {
         response: oneshot::Sender<std::io::Result<SessionCheckpoint>>,
+    },
+    Agent {
+        response: oneshot::Sender<std::io::Result<Nanocodex>>,
     },
     Start {
         prompt: String,
@@ -110,6 +128,26 @@ impl HarnessHandle {
         result
             .await
             .map_err(|_| std::io::Error::other("subagent snapshot interrupted"))?
+    }
+
+    pub(super) fn lease_side_question(&self) -> SideQuestionLease {
+        self.side_questions.fetch_add(1, Ordering::SeqCst);
+        SideQuestionLease(Arc::clone(&self.side_questions))
+    }
+
+    pub(super) fn answering_side_questions(&self) -> bool {
+        self.side_questions.load(Ordering::SeqCst) > 0
+    }
+
+    pub(super) async fn agent(&self) -> std::io::Result<Nanocodex> {
+        let (response, result) = oneshot::channel();
+        self.commands
+            .send(HarnessCommand::Agent { response })
+            .await
+            .map_err(|_| std::io::Error::other("subagent harness is closed"))?;
+        result
+            .await
+            .map_err(|_| std::io::Error::other("subagent harness stopped before responding"))?
     }
 
     pub(super) async fn start(
@@ -190,6 +228,7 @@ pub(super) fn spawn(
         commands,
         deferred,
         urgent,
+        side_questions: Arc::new(AtomicUsize::new(0)),
     };
     let capacity_revision = capacity.subscribe();
     let task = platform::spawn(
@@ -279,6 +318,13 @@ impl Harness {
                     None => Err(std::io::Error::other("subagent runtime is unloaded")),
                 };
                 let _ = response.send(result);
+                false
+            }
+            HarnessCommand::Agent { response } => {
+                let _ =
+                    response.send(self.agent.clone().ok_or_else(|| {
+                        std::io::Error::other(format!("agent {} is closed", self.id))
+                    }));
                 false
             }
             HarnessCommand::Start {

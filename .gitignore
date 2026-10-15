@@ -1,12 +1,12 @@
 .env
 .dev.vars*
 node_modules/
+/js/
 .turbo/
 .cache/
 .wrangler/
 .harness/
 .nanocodex/
-.nanocodex-js-package.lock
 .venv/
 target/
 py/bindings/.venv/
@@ -14,27 +14,6 @@ py/bindings/dist/
 py/bindings/python/nanocodex/*.so
 py/bindings/python/nanocodex/*.dylib
 py/bindings/python/nanocodex/*.pyd
-js/nanocodex/node_modules/
-js/nanocodex-tools/node_modules/
-js/nanocodex-tools/dist/
-js/nanocodex-connect-protocol/node_modules/
-js/nanocodex-connect-protocol/dist/
-js/nanocodex-connect-ui/node_modules/
-js/nanocodex-connect-ui/dist/
-js/nanocodex-vite/node_modules/
-js/nanocodex-vite/dist/
-js/nanocodex-react/node_modules/
-js/tui/node_modules/
-js/tui/dist/
-js/tui-react/node_modules/
-js/tui-react/dist/
-js/nanocodex-terminal/node_modules/
-js/nanocodex-terminal/dist/
-js/chief-of-staff/node_modules/
-js/chief-of-staff/dist/
-js/sites/dist/
-js/nanocodex/pkg-node/
-js/nanocodex/pkg-web/
 examples/node/node_modules/
 examples/rivet-actors/dist/
 examples/rivet-actors/node_modules/
@@ -59,28 +38,11 @@ __pycache__/
 /apple/build*/
 /macos/build*/
 
-/js/bindings/pkg-node/
-/js/bindings/pkg-web/
 /web/dist/
 /web/.repository-data/
 
-/js/managed/.media-build/
-
 .ci-release-plan.json
-/js/managed/wrangler.ci.jsonc
 
 /output/
 
-/js/managed/.shell-module/
-/js/managed/src/just-bash-lazy.mjs
-/js/managed/src/just-bash-lazy.d.mts
-
-third_party/codex-voice/vendor/
-
-js/egress/src/whatsapp-generated/
-js/egress/output/
-
-/js/pkg-node/
-/js/pkg-web/
 **/output/
-js/packages/*/dist/

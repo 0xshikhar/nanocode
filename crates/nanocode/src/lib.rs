@@ -12,6 +12,7 @@ pub use nanocode_agent::{
 pub use nanocode_agent::{
     BackendId, BackendKind, BackendRegistration as Backend, BackendRequest, ModelSelection,
 };
+pub use nanocode_platform as platform;
 
 pub use nanocode_backend_codex::NanocodexBuilder as CodexBuilder;
 mod harness;

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::client::responses::{ContentItem, MessageRole, ResponseItem};
+#[cfg(not(target_family = "wasm"))]
 use chrono::{Local, Utc};
 
 use crate::agent::ExecutionEnvironment;
@@ -378,6 +379,7 @@ fn between<'a>(text: &'a str, start: &str, end: &str) -> Option<&'a str> {
     Some(&text[start..end])
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn detected_execution_environment() -> ExecutionEnvironment {
     match iana_time_zone::get_timezone() {
         Ok(timezone) => {
@@ -388,4 +390,14 @@ fn detected_execution_environment() -> ExecutionEnvironment {
             Arc::from("Etc/UTC"),
         ),
     }
+}
+
+#[cfg(target_family = "wasm")]
+fn detected_execution_environment() -> ExecutionEnvironment {
+    ExecutionEnvironment::new(
+        chrono::DateTime::<chrono::Utc>::from(nanocode_platform::system_time())
+            .format("%Y-%m-%d")
+            .to_string(),
+        Arc::from("Etc/UTC"),
+    )
 }

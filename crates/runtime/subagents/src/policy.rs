@@ -128,7 +128,8 @@ impl SpawnPolicy {
                 requested: model.clone(),
             });
         }
-        if let (Some(parent_rank), Some(child_rank)) = (self.ladder_rank(parent), self.ladder_rank(model))
+        if let (Some(parent_rank), Some(child_rank)) =
+            (self.ladder_rank(parent), self.ladder_rank(model))
             && child_rank > parent_rank
         {
             return Err(SpawnPolicyError::ModelExceedsParent {
@@ -182,7 +183,11 @@ impl SpawnPolicy {
         }
         if let Some(thinking) = thinking {
             let bound = if self.bounded_by_parent_thinking && parent.registered {
-                Some(parent.thinking.ok_or(SpawnPolicyError::ParentThinkingUnknown)?)
+                Some(
+                    parent
+                        .thinking
+                        .ok_or(SpawnPolicyError::ParentThinkingUnknown)?,
+                )
             } else {
                 None
             };

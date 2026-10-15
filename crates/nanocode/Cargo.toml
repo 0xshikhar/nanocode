@@ -12,12 +12,13 @@ homepage.workspace = true
 repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Alloy-style facade for the Nanocodex agents SDK"
+description = "Public composition and builders for the Nanocodex Rust agent crates"
 
 [package.metadata.docs.rs]
 rustdoc-args = ["-D", "warnings"]
 
 [dependencies]
+nanocode-platform.workspace = true
 nanocode-agent.workspace = true
 nanocode-backend-codex.workspace = true
 nanocode-tools.workspace = true

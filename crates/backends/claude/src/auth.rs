@@ -1,8 +1,8 @@
 use std::{sync::Arc, time::Duration};
 
-use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
+use http::header::{AUTHORIZATION, HeaderMap, HeaderValue};
+use nanocode_platform::SystemTime;
 use tokio::sync::Mutex;
-use web_time::SystemTime;
 
 use crate::{ClaudeAuthFuture, ClaudeAuthProvider, ClaudeAuthUnavailable};
 
@@ -41,7 +41,7 @@ impl ClaudeAccessToken {
 
     fn usable(&self, refresh_margin: Duration) -> bool {
         self.expires_at
-            .duration_since(SystemTime::now())
+            .duration_since(nanocode_platform::system_time())
             .is_ok_and(|remaining| remaining > refresh_margin)
     }
 

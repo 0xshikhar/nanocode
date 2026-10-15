@@ -11,10 +11,7 @@ pub(crate) fn environment_section(workspace: &str) -> String {
         ));
     }
     lines.extend(host_lines());
-    lines.push(format!(
-        "Today's date: {}",
-        chrono::Local::now().format("%Y-%m-%d")
-    ));
+    lines.push(format!("Today's date: {}", current_date()));
     lines.join("\n")
 }
 
@@ -65,4 +62,16 @@ fn host_lines() -> Vec<String> {
 #[cfg(target_family = "wasm")]
 const fn host_lines() -> Vec<String> {
     Vec::new()
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn current_date() -> String {
+    chrono::Local::now().format("%Y-%m-%d").to_string()
+}
+
+#[cfg(target_family = "wasm")]
+fn current_date() -> String {
+    chrono::DateTime::<chrono::Utc>::from(nanocode_platform::system_time())
+        .format("%Y-%m-%d")
+        .to_string()
 }

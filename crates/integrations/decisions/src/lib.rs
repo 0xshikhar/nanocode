@@ -15,12 +15,14 @@ pub use request::{
 };
 pub use tool::DecisionTool;
 
-#[async_trait]
+#[cfg_attr(not(target_family = "wasm"), async_trait)]
+#[cfg_attr(target_family = "wasm", async_trait(?Send))]
 pub trait DecisionModel: Send + Sync {
     async fn decide(&self, request: &DecisionRequest) -> Result<Decision, DecisionError>;
 }
 
-#[async_trait]
+#[cfg_attr(not(target_family = "wasm"), async_trait)]
+#[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl<T: DecisionModel + ?Sized> DecisionModel for Arc<T> {
     async fn decide(&self, request: &DecisionRequest) -> Result<Decision, DecisionError> {
         (**self).decide(request).await

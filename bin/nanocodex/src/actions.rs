@@ -1,6 +1,5 @@
-use futures_util::StreamExt;
 use nanocode::{
-    AgentUpdate, ForkRequest, ModelSelection, Mutability, ScopedAgentUpdate, ServiceTier, Thinking,
+    AgentUpdate, ModelSelection, Mutability, ScopedAgentUpdate, ServiceTier, Thinking,
     agent::events::AgentEventKind,
 };
 use nanocode_tui::{
@@ -13,8 +12,6 @@ use crate::app::{
     subagent_status,
 };
 
-const BTW_PREAMBLE: &str = "Side question from the user, asked while you keep working on the main task. Answer it briefly from the conversation context. Do not call tools, do not modify files, and do not continue the main task in this reply.";
-
 impl App {
     pub(crate) fn request_switch(
         &mut self,
@@ -22,6 +19,7 @@ impl App {
         thinking: Thinking,
         tier: ServiceTier,
     ) {
+        let _span = tracing::info_span!(target: "nanocodex", "nc.action", action.name = "request_switch", session.id = self.agent.as_ref().map(|agent| agent.session_id())).entered();
         if self.session_started && model != self.model {
             self.flash(
                 "the model is fixed for this thread; use /new before choosing another model",
@@ -37,6 +35,7 @@ impl App {
     }
 
     pub(crate) fn switch(&mut self, model: ModelSelection, thinking: Thinking, tier: ServiceTier) {
+        let _span = tracing::info_span!(target: "nanocodex", "nc.action", action.name = "switch", session.id = self.agent.as_ref().map(|agent| agent.session_id())).entered();
         if self.session_started && model != self.model {
             self.flash(
                 "the model is fixed for this thread; use /new before choosing another model",
@@ -149,76 +148,22 @@ impl App {
         });
     }
 
-    pub(crate) fn btw(&mut self, question: String) {
-        let Some(agent) = self.agent.clone() else {
-            self.flash("the agent is still starting");
-            return;
-        };
-        self.next_btw += 1;
-        let id = self.next_btw;
-        let cell = self.transcript.push(CellKind::Btw {
-            question: question.clone(),
-            answer: String::new(),
-            done: false,
-        });
-        self.btw.insert(id, cell);
-        self.transcript.scroll_to_bottom();
-        let tx = self.tx.clone();
-        let native = agent.capabilities().side_question;
-        tokio::spawn(async move {
-            let send = |update| drop(tx.send(AppEvent::Btw { id, update }));
-            if native {
-                match agent.side_question(question).await {
-                    Ok(answer) => {
-                        send(BtwUpdate::Message(answer.into_text()));
-                        send(BtwUpdate::Done);
-                    }
-                    Err(error) => send(BtwUpdate::Failed(error.to_string())),
-                }
-                return;
-            }
-            let asked = async {
-                let (side, mut events) = agent
-                    .fork(ForkRequest::latest().side_conversation())
-                    .await?;
-                tokio::spawn(async move { while events.recv().await.is_some() {} });
-                let mut turn = side
-                    .prompt(format!("{BTW_PREAMBLE}\n\n{question}").as_str())
-                    .await?;
-                while let Some(event) = turn.next().await {
-                    let text = || {
-                        serde_json::from_str::<serde_json::Value>(event.payload.get())
-                            .ok()
-                            .and_then(|payload| payload["text"].as_str().map(str::to_owned))
-                            .unwrap_or_default()
-                    };
-                    match event.kind {
-                        AgentEventKind::AssistantDelta => send(BtwUpdate::Delta(text())),
-                        AgentEventKind::AssistantMessage => send(BtwUpdate::Message(text())),
-                        _ => {}
-                    }
-                }
-                let result = turn.await;
-                drop(side.shutdown().await);
-                result?;
-                Ok::<_, crate::host::Error>(())
-            };
-            match asked.await {
-                Ok(()) => send(BtwUpdate::Done),
-                Err(error) => send(BtwUpdate::Failed(error.to_string())),
-            }
-        });
-    }
-
     pub(crate) fn btw_update(&mut self, id: u64, update: BtwUpdate) {
-        let Some(&cell) = self.btw.get(&id) else {
+        let Some(&(owner, cell)) = self.btw.get(&id) else {
             return;
         };
         let finished = matches!(update, BtwUpdate::Done | BtwUpdate::Failed(_));
-        self.transcript.update(cell, |kind| {
+        let failed = matches!(update, BtwUpdate::Failed(_));
+        if !self.side_owns(id, owner) {
+            self.btw.remove(&id);
+            return;
+        }
+        let Some(transcript) = self.side_transcript_mut() else {
+            return;
+        };
+        transcript.update(cell, |kind| {
             if let CellKind::Btw { answer, done, .. } = kind {
                 match update {
-                    BtwUpdate::Delta(text) => answer.push_str(&text),
                     BtwUpdate::Message(text) => *answer = text,
                     BtwUpdate::Done => *done = true,
                     BtwUpdate::Failed(error) => {
@@ -230,6 +175,7 @@ impl App {
         });
         if finished {
             self.btw.remove(&id);
+            self.side_answered(id, cell, failed);
         }
     }
 
@@ -290,9 +236,12 @@ impl App {
                     });
                 }
                 let detail = payload.and_then(|payload| match event.kind {
-                    AgentEventKind::ToolCall => {
-                        payload["tool"].as_str().map(|tool| format!("▸ {tool}"))
-                    }
+                    AgentEventKind::ToolCall => payload["tool"].as_str().map(|tool| {
+                        format!(
+                            "▸ {}",
+                            crate::events::tool_label(tool, &payload["arguments"])
+                        )
+                    }),
                     AgentEventKind::AssistantMessage => payload["text"]
                         .as_str()
                         .and_then(|text| text.lines().find(|line| !line.trim().is_empty()))
@@ -313,6 +262,7 @@ impl App {
     }
 
     pub(crate) fn open_session_picker(&mut self) {
+        let _span = tracing::info_span!(target: "nanocodex", "nc.action", action.name = "open_session_picker", session.id = self.agent.as_ref().map(|agent| agent.session_id())).entered();
         let Some(store) = self.host.config.store.clone() else {
             self.flash("sessions are not saved with --ephemeral");
             return;
@@ -338,6 +288,7 @@ impl App {
     }
 
     pub(crate) fn resume(&mut self, session_id: String) {
+        let _span = tracing::info_span!(target: "nanocodex", "nc.action", action.name = "resume", session.id = self.agent.as_ref().map(|agent| agent.session_id())).entered();
         if !matches!(self.turn, TurnState::Idle) {
             self.flash("interrupt the running turn (esc) before resuming another session");
             return;
@@ -365,6 +316,7 @@ impl App {
     }
 
     pub(crate) fn new_session(&mut self) {
+        let _span = tracing::info_span!(target: "nanocodex", "nc.action", action.name = "new_session", session.id = self.agent.as_ref().map(|agent| agent.session_id())).entered();
         if !matches!(self.turn, TurnState::Idle) {
             self.flash("interrupt the running turn (esc) before starting a new session");
             return;
@@ -407,6 +359,7 @@ impl App {
     }
 
     pub(crate) fn compact(&mut self) {
+        let _span = tracing::info_span!(target: "nanocodex", "nc.action", action.name = "compact", session.id = self.agent.as_ref().map(|agent| agent.session_id())).entered();
         let Some(agent) = self.agent.clone() else {
             return;
         };

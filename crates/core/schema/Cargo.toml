@@ -1,0 +1,41 @@
+[package]
+name = "nanocode-schema"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Portable JSON Schema validation for Nanocodex output contracts"
+autotests = false
+autobenches = false
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+url.workspace = true
+base64.workspace = true
+fluent-uri = "0.4"
+idna = "1"
+percent-encoding = "2"
+appendlist = "1.4"
+regress = "0.12"
+num-cmp = "0.1"
+email_address = "0.2.9"
+unicode-general-category = "1"
+
+[lints]
+workspace = true
+
+[lib]
+test = false
+doctest = false
+bench = false
+
+[[test]]
+name = "contracts"
+path = "tests/contracts.rs"
+
+[[test]]
+name = "conformance"
+path = "tests/conformance.rs"

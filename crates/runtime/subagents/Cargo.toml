@@ -15,25 +15,20 @@ categories.workspace = true
 description = "Composable task-tree subagents for Nanocodex"
 
 [dependencies]
+nanocode-platform.workspace = true
 nanocode-agent.workspace = true
 async-trait.workspace = true
 futures-util.workspace = true
-jsonschema.workspace = true
+nanocode-schema.workspace = true
 nanocode-tools.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 tokio = { workspace = true, features = ["sync", "macros"] }
 tracing.workspace = true
-web-time.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 tokio = { workspace = true, features = ["rt", "time"] }
-
-[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
-js-sys.workspace = true
-wasm-bindgen.workspace = true
-wasm-bindgen-futures.workspace = true
 
 [lints]
 workspace = true

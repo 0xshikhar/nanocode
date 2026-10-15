@@ -160,7 +160,9 @@ impl LifecycleBackend for LocalLifecycle {
         let execution = self.execution.clone();
         Box::pin(async move {
             if let Some(id) = &request.request_id
-                && execution.identified_steer_accepted(id.clone(), &request.prompt).await?
+                && execution
+                    .identified_steer_accepted(id.clone(), &request.prompt)
+                    .await?
             {
                 return Ok(BackendPromptRoute::Steered);
             }
@@ -265,8 +267,10 @@ impl LifecycleBackend for LocalLifecycle {
         let commands = self.commands.clone();
         let shutdown = self.shutdown.clone();
         Box::pin(async move {
-            request_command(&commands, &shutdown, |result| Command::CancelActive { result })
-                .await
+            request_command(&commands, &shutdown, |result| Command::CancelActive {
+                result,
+            })
+            .await
         })
     }
 

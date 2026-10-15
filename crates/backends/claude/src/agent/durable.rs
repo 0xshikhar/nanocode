@@ -657,7 +657,7 @@ pub(super) fn replay(operation: String, output: Value) -> Result<TurnResult> {
     ))
 }
 pub(super) fn candidate_id(kind: &str) -> String {
-    format!("claude-{kind}-{}", uuid::Uuid::new_v4())
+    format!("claude-{kind}-{}", nanocode_platform::uuid_v4())
 }
 
 pub(super) fn recovery_error(error: impl std::fmt::Display) -> NanocodexError {

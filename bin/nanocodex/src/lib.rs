@@ -1,3 +1,5 @@
+#![cfg(not(target_family = "wasm"))]
+
 mod actions;
 mod app;
 mod cli;
@@ -9,6 +11,8 @@ mod history;
 mod host;
 mod models;
 mod sessions;
+mod side;
+mod split;
 mod telemetry;
 mod view;
 
@@ -35,9 +39,13 @@ const TELEMETRY_SHUTDOWN: std::time::Duration = std::time::Duration::from_millis
 
 fn install_telemetry(cli: &Cli) -> Result<Option<nanocode_observability::ObservabilityGuard>> {
     let args = &cli.observability;
-    if !args.enabled() {
-        return Ok(None);
+    let explicit_home = match &cli.command {
+        Some(Command::Exec(args)) => args.home.as_deref(),
+        Some(Command::Sessions(args)) => args.home.as_deref(),
+        _ => None,
     }
+    .or(cli.session.home.as_deref());
+    let home = host::home_dir(explicit_home)?;
     let interactive = !matches!(
         cli.command,
         Some(Command::Exec(_) | Command::Runner(_) | Command::Sessions(_) | Command::Models)
@@ -45,14 +53,13 @@ fn install_telemetry(cli: &Cli) -> Result<Option<nanocode_observability::Observa
     let output = match (args.log_filter().is_some(), interactive) {
         (false, _) => nanocode_observability::LogOutput::Disabled,
         (true, false) => nanocode_observability::LogOutput::Stderr,
-        (true, true) => nanocode_observability::LogOutput::File(
-            host::home_dir(cli.session.home.as_deref())?
-                .join("log")
-                .join("nanocodex.log"),
-        ),
+        (true, true) => {
+            nanocode_observability::LogOutput::File(home.join("log").join("nanocodex.log"))
+        }
     };
     Ok(Some(
         args.builder("nanocodex", env!("CARGO_PKG_VERSION"), output)
+            .otlp_directory(home.join("log").join("otel"))
             .shutdown_timeout(TELEMETRY_SHUTDOWN)
             .install()?,
     ))
@@ -67,10 +74,8 @@ pub fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let runtime = match tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-    {
+    let runtime = match tracing::info_span!(target: "nanocodex", "nc.startup", process.pid = std::process::id())
+        .in_scope(|| tokio::runtime::Builder::new_multi_thread().enable_all().build()) {
         Ok(runtime) => runtime,
         Err(error) => {
             eprintln!("nanocodex: failed to start the async runtime: {error}");

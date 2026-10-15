@@ -13,11 +13,12 @@ use super::{
     task_tree::TaskTree,
 };
 use futures_util::future::join_all;
-use jsonschema::Validator;
 use nanocode_agent::{
     AgentEvents, AgentHandle, ModelSelection, Nanocodex, NanocodexError, Result as AgentResult,
     SessionCheckpoint, Thinking, TurnResult, events::AgentEventKind,
 };
+use nanocode_platform::Instant;
+use nanocode_schema::Validator;
 use serde::Serialize;
 use serde_json::Value;
 use std::{
@@ -29,7 +30,6 @@ use std::{
     time::Duration,
 };
 use tokio::sync::{mpsc, oneshot, watch};
-use web_time::Instant;
 
 mod focus;
 
@@ -78,7 +78,7 @@ pub(super) struct OutputContract {
 
 impl OutputContract {
     pub(super) fn compile(schema: &Value) -> std::io::Result<Self> {
-        let validator = jsonschema::validator_for(schema)
+        let validator = nanocode_schema::validator_for(schema)
             .map_err(|error| std::io::Error::other(format!("invalid output_schema: {error}")))?;
         let schema = serde_json::to_string_pretty(schema)
             .map_err(|error| std::io::Error::other(format!("could not render schema: {error}")))?;
@@ -1116,7 +1116,12 @@ impl RegistryState {
             .sessions
             .iter()
             .filter(|(_, session)| {
-                !session.active && session.status.can_start_turn() && session.harness.is_some()
+                !session.active
+                    && session.status.can_start_turn()
+                    && session
+                        .harness
+                        .as_ref()
+                        .is_some_and(|harness| !harness.answering_side_questions())
             })
             .filter(|(id, _)| !scope.messages.has_pending_for(**id))
             .filter(|(id, _)| {

@@ -178,10 +178,7 @@ pub struct AgentStartReport {
     pub thinking: Option<Thinking>,
 }
 
-fn inferred_harness(
-    parent: Option<HarnessFamily>,
-    model: &str,
-) -> std::io::Result<HarnessFamily> {
+fn inferred_harness(parent: Option<HarnessFamily>, model: &str) -> std::io::Result<HarnessFamily> {
     let parent = parent
         .ok_or_else(|| std::io::Error::other("a model requires a backend selection or parent"))?;
     let inherited = ModelSelection::new(parent.clone(), model);
@@ -684,7 +681,8 @@ struct SpawnAgent {
     registry: Weak<Registry>,
 }
 
-#[async_trait]
+#[cfg_attr(not(target_family = "wasm"), async_trait)]
+#[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl Tool for SpawnAgent {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
@@ -775,7 +773,9 @@ fn spawn_agent_parameters_for(policy: &SpawnPolicy) -> Value {
             .join(" < ");
         let description = format!(
             "{} A child cannot rank above its spawning agent on this ladder: {ladder}.",
-            properties["model"]["description"].as_str().unwrap_or_default()
+            properties["model"]["description"]
+                .as_str()
+                .unwrap_or_default()
         );
         properties["model"]["description"] = json!(description);
     }
@@ -791,7 +791,9 @@ fn spawn_agent_parameters_for(policy: &SpawnPolicy) -> Value {
     if policy.bounded_by_parent_thinking {
         let description = format!(
             "{} A registered subagent cannot request more effort than its own.",
-            properties["thinking"]["description"].as_str().unwrap_or_default()
+            properties["thinking"]["description"]
+                .as_str()
+                .unwrap_or_default()
         );
         properties["thinking"]["description"] = json!(description);
     }
@@ -884,7 +886,8 @@ struct SubmitResult {
     registry: Weak<Registry>,
 }
 
-#[async_trait]
+#[cfg_attr(not(target_family = "wasm"), async_trait)]
+#[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl Tool for SubmitResult {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
@@ -954,7 +957,8 @@ struct SendAgentMessage {
     registry: Weak<Registry>,
 }
 
-#[async_trait]
+#[cfg_attr(not(target_family = "wasm"), async_trait)]
+#[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl Tool for SendAgentMessage {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
@@ -1049,7 +1053,8 @@ struct ListAgents {
     registry: Weak<Registry>,
 }
 
-#[async_trait]
+#[cfg_attr(not(target_family = "wasm"), async_trait)]
+#[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl Tool for ListAgents {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
@@ -1095,7 +1100,8 @@ struct WaitAgent {
     registry: Weak<Registry>,
 }
 
-#[async_trait]
+#[cfg_attr(not(target_family = "wasm"), async_trait)]
+#[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl Tool for WaitAgent {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
@@ -1162,7 +1168,8 @@ impl ChangeAgentLifecycle {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_family = "wasm"), async_trait)]
+#[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl Tool for ChangeAgentLifecycle {
     fn definition(&self) -> ToolDefinition {
         let description = match self.operation {
@@ -1261,7 +1268,8 @@ pub fn install_claude_tools<T: nanocode_tools::ToolCollection>(
 
 struct TurnAuthority(Arc<dyn Tool>);
 
-#[async_trait]
+#[cfg_attr(not(target_family = "wasm"), async_trait)]
+#[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl Tool for TurnAuthority {
     fn definition(&self) -> ToolDefinition {
         self.0.definition()

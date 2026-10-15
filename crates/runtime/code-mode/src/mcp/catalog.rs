@@ -4,7 +4,6 @@ use std::{
     time::Duration,
 };
 
-use bm25::{Document, SearchEngine, SearchEngineBuilder, Tokenizer};
 use nanocode_tools::ToolDefinition;
 use rmcp::model::Tool as RmcpTool;
 use serde::Serialize;
@@ -15,17 +14,13 @@ use tokio::sync::watch;
 use super::{
     client::Client,
     config::{McpServer, McpToolExposure},
+    search::{SearchEngine, tokenize},
 };
 
 const DEFAULT_SEARCH_LIMIT: usize = 8;
 const MAX_MODEL_TOOL_NAME_BYTES: usize = 128;
 const NAME_HASH_BYTES: usize = 12;
 const NAME_HASH_SUFFIX_BYTES: usize = NAME_HASH_BYTES + 1;
-
-#[derive(Clone, Copy, Debug, Default)]
-struct ToolSearchTokenizer;
-
-type ToolSearchEngine = SearchEngine<usize, u32, ToolSearchTokenizer>;
 
 pub(crate) struct ToolEntry {
     pub canonical_name: String,
@@ -58,7 +53,7 @@ pub(crate) struct ConnectedCatalog {
 
 struct SearchIndex {
     entries: Vec<Arc<ToolEntry>>,
-    engine: ToolSearchEngine,
+    engine: SearchEngine,
 }
 
 pub(crate) struct ProviderState {
@@ -415,60 +410,16 @@ impl ProviderState {
 impl SearchIndex {
     fn new(entries: impl IntoIterator<Item = Arc<ToolEntry>>) -> Self {
         let entries = entries.into_iter().collect::<Vec<_>>();
-        let documents = entries
-            .iter()
-            .enumerate()
-            .map(|(index, entry)| Document::new(index, entry.search_text.clone()));
-        let engine =
-            SearchEngineBuilder::<usize, u32, ToolSearchTokenizer>::with_tokenizer_and_documents(
-                ToolSearchTokenizer,
-                documents,
-            )
-            .build();
+        let engine = SearchEngine::new(entries.iter().map(|entry| tokenize(&entry.search_text)));
         Self { entries, engine }
     }
 
     fn search(&self, query: &str, limit: usize) -> Vec<Arc<ToolEntry>> {
         self.engine
-            .search(query, limit)
+            .search(&tokenize(query), limit)
             .into_iter()
-            .filter_map(|result| self.entries.get(result.document.id).cloned())
+            .map(|(index, _)| Arc::clone(&self.entries[index]))
             .collect()
-    }
-}
-
-impl Tokenizer for ToolSearchTokenizer {
-    fn tokenize(&self, input_text: &str) -> Vec<String> {
-        let mut tokens = Vec::new();
-        let mut token = String::new();
-        let mut previous = None;
-        let mut characters = input_text.chars().peekable();
-
-        while let Some(character) = characters.next() {
-            if !character.is_alphanumeric() {
-                push_search_token(&mut tokens, &mut token);
-                previous = None;
-                continue;
-            }
-
-            let starts_word = !token.is_empty()
-                && character.is_uppercase()
-                && (previous.is_some_and(char::is_lowercase)
-                    || characters.peek().is_some_and(|next| next.is_lowercase()));
-            if starts_word {
-                push_search_token(&mut tokens, &mut token);
-            }
-            token.extend(character.to_lowercase());
-            previous = Some(character);
-        }
-        push_search_token(&mut tokens, &mut token);
-        tokens
-    }
-}
-
-fn push_search_token(tokens: &mut Vec<String>, token: &mut String) {
-    if !token.is_empty() {
-        tokens.push(std::mem::take(token));
     }
 }
 

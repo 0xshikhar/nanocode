@@ -1,4 +1,4 @@
-use web_time::Instant;
+use nanocode_platform::Instant;
 
 use crate::client::{
     AgentEventKind, EncodedRequest, OpenAiAuthMode, ResponsesError, ResponsesTransport,

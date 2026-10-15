@@ -330,12 +330,7 @@ impl ExecutionPolicy for DurableExecution {
         Box::pin(async move {
             let input = raw(input_json)?;
             self.owner
-                .accept_steer(
-                    operation_id,
-                    accepted_after_model_call_index,
-                    &input,
-                    None,
-                )
+                .accept_steer(operation_id, accepted_after_model_call_index, &input, None)
                 .await
                 .map(|index| index.expect("unidentified steer is new"))
                 .map_err(agent_error)
@@ -801,7 +796,10 @@ impl ExecutionPolicy for LazyExecution {
         input_json: String,
     ) -> ExecutionFuture<'a, AgentResult<bool>> {
         Box::pin(async move {
-            self.get().await?.identified_steer_accepted(message_id, input_json).await
+            self.get()
+                .await?
+                .identified_steer_accepted(message_id, input_json)
+                .await
         })
     }
 

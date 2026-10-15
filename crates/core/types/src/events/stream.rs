@@ -7,11 +7,11 @@ use std::{
 };
 
 use futures_util::Stream;
+use nanocode_platform::Instant;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use serde_json::value::to_raw_value;
 use tokio::sync::mpsc;
-use web_time::Instant;
 
 pub const AGENT_EVENT_PROTOCOL_VERSION: u32 = 1;
 static PROCESS_MONOTONIC_EPOCH: OnceLock<Instant> = OnceLock::new();

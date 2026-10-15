@@ -1,12 +1,12 @@
 use std::{fmt, sync::Arc};
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
+use http::header::{AUTHORIZATION, HeaderMap, HeaderValue};
+use nanocode_platform::UNIX_EPOCH;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 use url::Url;
-use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::{ClaudeAuthFuture, ClaudeAuthProvider, ClaudeAuthUnavailable};
 
@@ -842,13 +842,13 @@ impl ClaudeAuthProvider for ClaudeSubscription {
 }
 
 fn now() -> u64 {
-    SystemTime::now()
+    nanocode_platform::system_time()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 fn random_secret() -> Result<String> {
     let mut bytes = [0; 32];
-    getrandom::fill(&mut bytes).map_err(|_| ClaudeSubscriptionError::Host)?;
+    nanocode_platform::fill_random(&mut bytes).map_err(|_| ClaudeSubscriptionError::Host)?;
     Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 fn valid_secret(value: &str) -> bool {

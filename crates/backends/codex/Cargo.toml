@@ -14,10 +14,10 @@
 "metadata" = { "docs" = { "rs" = {  "rustdoc-args" = ["-D", "warnings"] } } }
 
 ["dependencies"]
+"nanocode-platform" = { "workspace" = true }
 "nanocode-home" = { "workspace" = true }
 "chrono" = { "workspace" = true  }
 "futures-util" = { "workspace" = true }
-"iana-time-zone" = { "workspace" = true  }
 "nanocode-code-mode" = { "workspace" = true  }
 "serde" = { "workspace" = true }
 "serde_json" = { "workspace" = true }
@@ -26,7 +26,6 @@
 "tokio" = { "workspace" = true, "features" = ["macros", "sync", "time"] }
 "tower" = { "workspace" = true  }
 "tracing" = { "workspace" = true }
-"web-time" = { "workspace" = true  }
 "uuid" = { "workspace" = true  }
 "nanocode-media" = { "workspace" = true }
 "nanocode-types" = { "workspace" = true }
@@ -37,7 +36,6 @@
 "http" = { "workspace" = true  }
 "httpdate" = { "version" = "1.0.3"  }
 "smallvec" = { "workspace" = true }
-"reqwest" = { "workspace" = true }
 "nanocode-tools" = { "workspace" = true }
 "schemars" = { "workspace" = true }
 "nanocode-agent" = { "workspace" = true }
@@ -48,6 +46,8 @@
 ["target"."cfg(not(target_family = \"wasm\"))"]
 
 ["target"."cfg(not(target_family = \"wasm\"))"."dependencies"]
+"chrono" = { "workspace" = true, "features" = ["clock"] }
+"iana-time-zone" = { "workspace" = true }
 "tokio" = { "workspace" = true, "features" = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time", "rt"] }
 "getrandom" = { "workspace" = true  }
 "reqwest" = { "workspace" = true  }
@@ -57,11 +57,6 @@
 "url" = { "workspace" = true  }
 "nanocode-tls" = { "workspace" = true }
 "async-trait" = { "workspace" = true }
-
-["target"."cfg(all(target_family = \"wasm\", target_os = \"unknown\"))"]
-
-["target"."cfg(all(target_family = \"wasm\", target_os = \"unknown\"))"."dependencies"]
-"wasm-bindgen-futures" = { "workspace" = true  }
 
 ["target"."cfg(target_os = \"macos\")"]
 

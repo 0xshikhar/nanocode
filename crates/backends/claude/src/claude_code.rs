@@ -88,7 +88,7 @@ struct Login {
 }
 
 fn now_millis() -> u64 {
-    web_time::SystemTime::now()
+    nanocode_platform::system_time()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |elapsed| {
             u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
@@ -219,7 +219,10 @@ async fn write_file(path: &Path, bytes: &[u8]) -> Result<(), ClaudeAuthUnavailab
     tokio::task::spawn_blocking(move || {
         use std::io::Write as _;
         let directory = path.parent().unwrap_or_else(|| Path::new("."));
-        let temporary = directory.join(format!(".credentials.json.{}.tmp", uuid::Uuid::new_v4()));
+        let temporary = directory.join(format!(
+            ".credentials.json.{}.tmp",
+            nanocode_platform::uuid_v4()
+        ));
         let mut options = std::fs::OpenOptions::new();
         options.create_new(true).write(true);
         #[cfg(unix)]

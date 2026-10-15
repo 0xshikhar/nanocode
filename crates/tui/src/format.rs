@@ -44,6 +44,8 @@ fn sanitize_terminal_text_with_break(text: &str, line_break: char) -> Cow<'_, st
     let mut characters = text.chars().peekable();
     while let Some(character) = characters.next() {
         match character {
+            '\u{1b}' => skip_escape(&mut characters),
+            '\u{9b}' => skip_control_sequence(&mut characters),
             '\r' => {
                 if characters.peek() == Some(&'\n') {
                     characters.next();
@@ -57,6 +59,41 @@ fn sanitize_terminal_text_with_break(text: &str, line_break: char) -> Cow<'_, st
         }
     }
     Cow::Owned(sanitized)
+}
+
+fn skip_escape(characters: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+    match characters.next() {
+        Some('[') => skip_control_sequence(characters),
+        Some(']' | 'P' | 'X' | '^' | '_') => {
+            while let Some(character) = characters.next() {
+                if character == '\u{7}' {
+                    break;
+                }
+                if character == '\u{1b}' {
+                    if characters.peek() == Some(&'\\') {
+                        characters.next();
+                    }
+                    break;
+                }
+            }
+        }
+        Some(' '..='/') => {
+            while characters
+                .next_if(|character| (' '..='/').contains(character))
+                .is_some()
+            {}
+            characters.next();
+        }
+        _ => {}
+    }
+}
+
+fn skip_control_sequence(characters: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+    while characters
+        .next_if(|character| ('0'..='?').contains(character) || (' '..='/').contains(character))
+        .is_some()
+    {}
+    characters.next_if(|character| ('@'..='~').contains(character));
 }
 
 pub fn terminal_text_width(text: &str) -> usize {

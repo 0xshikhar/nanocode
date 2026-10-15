@@ -116,12 +116,23 @@ impl TerminalSession {
 
     pub fn draw(&mut self, render: impl FnOnce(&mut Canvas<'_>)) -> io::Result<()> {
         let (columns, rows) = crossterm::terminal::size()?;
+        let span = tracing::info_span!(
+            "tui.terminal.draw",
+            width = columns,
+            height = rows,
+            repaint = tracing::field::Empty,
+            frame.skipped = false,
+            frame.bytes = tracing::field::Empty,
+            frame.changed_cells = tracing::field::Empty
+        );
+        let _entered = span.enter();
         let area = Rect::new(0, 0, columns, rows);
         if area != self.current.area {
             self.previous = Buffer::empty(area);
             self.current = Buffer::empty(area);
             self.stale = true;
         }
+        span.record("repaint", self.stale);
         self.current.reset();
         let mut canvas = Canvas {
             area,
@@ -133,18 +144,20 @@ impl TerminalSession {
         if !self.truecolor {
             downsample(&mut self.current);
         }
-        let blank = Buffer::empty(area);
-        let updates = if self.stale {
-            blank.diff(&self.current)
-        } else {
-            self.previous.diff(&self.current)
-        };
-        if updates.is_empty() && cursor == self.cursor {
+        if self.stale {
+            self.previous.reset();
+        }
+        let updates =
+            tracing::info_span!("tui.terminal.diff").in_scope(|| self.previous.diff(&self.current));
+        span.record("frame.changed_cells", updates.len());
+        if !self.stale && updates.is_empty() && cursor == self.cursor {
+            span.record("frame.skipped", true);
             self.stats.skipped += 1;
             std::mem::swap(&mut self.previous, &mut self.current);
             return Ok(());
         }
         self.bytes.clear();
+        let encode = tracing::info_span!("tui.terminal.encode").entered();
         queue!(self.bytes, BeginSynchronizedUpdate)?;
         if self.stale {
             queue!(self.bytes, SetAttribute(Attribute::Reset))?;
@@ -164,8 +177,12 @@ impl TerminalSession {
             None => {}
         }
         queue!(self.bytes, EndSynchronizedUpdate)?;
-        self.output.write_all(&self.bytes)?;
-        self.output.flush()?;
+        drop(encode);
+        span.record("frame.bytes", self.bytes.len());
+        tracing::info_span!("tui.terminal.write", bytes = self.bytes.len()).in_scope(|| {
+            self.output.write_all(&self.bytes)?;
+            self.output.flush()
+        })?;
         self.stats.frames += 1;
         self.stats.bytes += self.bytes.len() as u64;
         if self.stale {

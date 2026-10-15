@@ -166,12 +166,9 @@ impl SessionRecord {
 }
 
 fn now_ms() -> u64 {
-    #[cfg(not(target_family = "wasm"))]
-    use std::time::{SystemTime, UNIX_EPOCH};
-    #[cfg(target_family = "wasm")]
-    use web_time::{SystemTime, UNIX_EPOCH};
+    use nanocode_platform::UNIX_EPOCH;
 
-    SystemTime::now()
+    nanocode_platform::system_time()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |elapsed| {
             u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
@@ -542,7 +539,7 @@ mod store {
                 }
             };
             let boundary = self.boundary(id, &state, &at).await?;
-            let branch_id = uuid::Uuid::now_v7().to_string();
+            let branch_id = nanocode_platform::uuid_v7().to_string();
             let selected = match selected {
                 Some((holder, payload)) => Some(
                     self.hydrate(&holder, &payload, Some(record.family()))

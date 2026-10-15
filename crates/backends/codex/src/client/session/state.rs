@@ -17,7 +17,7 @@ pub struct SessionId(uuid::Uuid);
 impl SessionId {
     #[must_use]
     pub fn new() -> Self {
-        Self(uuid::Uuid::now_v7())
+        Self(nanocode_platform::uuid_v7())
     }
 
     #[must_use]

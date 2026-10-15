@@ -1,5 +1,28 @@
-use super::{AgentDirectoryEntry, AgentSummary, MessageReceipt, SubagentControl};
-use crate::model::{AgentId, MessagePriority, MessagePurpose};
+use super::{AgentDirectoryEntry, AgentSummary, MessageReceipt, Registry, SubagentControl};
+use crate::{
+    harness::{HarnessHandle, SideQuestionLease},
+    model::{AgentId, MessagePriority, MessagePurpose},
+    platform,
+};
+use nanocode_agent::{NanocodexError, SideAnswer};
+use std::sync::Arc;
+
+struct SideQuestion {
+    lease: Option<SideQuestionLease>,
+    registry: Arc<Registry>,
+    root_session_id: String,
+}
+
+impl Drop for SideQuestion {
+    fn drop(&mut self) {
+        drop(self.lease.take());
+        let registry = Arc::clone(&self.registry);
+        let root_session_id = std::mem::take(&mut self.root_session_id);
+        drop(platform::spawn(async move {
+            registry.enforce_resident_limit(&root_session_id).await;
+        }));
+    }
+}
 
 impl SubagentControl {
     pub async fn send_user_message(
@@ -41,6 +64,47 @@ impl SubagentControl {
     pub async fn session_id(&self, root_session_id: &str, id: AgentId) -> std::io::Result<String> {
         self.require_root(root_session_id).await?;
         self.registry.child_session_id(root_session_id, id).await
+    }
+
+    pub async fn side_question(
+        &self,
+        root_session_id: &str,
+        id: AgentId,
+        question: impl Into<String>,
+    ) -> nanocode_agent::Result<SideAnswer> {
+        let invalid = |error: std::io::Error| NanocodexError::InvalidRequest(error.to_string());
+        let (harness, _side_question) = self
+            .lease_side_question(root_session_id, id)
+            .await
+            .map_err(invalid)?;
+        let agent = harness.agent().await.map_err(invalid)?;
+        agent.side_question(question).await
+    }
+
+    async fn lease_side_question(
+        &self,
+        root_session_id: &str,
+        id: AgentId,
+    ) -> std::io::Result<(HarnessHandle, SideQuestion)> {
+        self.require_root(root_session_id).await?;
+        self.registry.await_restored(root_session_id).await?;
+        let _residency_guard = self.registry.residency_lock.lock().await;
+        let _message_guard = self.registry.message_lock.lock().await;
+        self.registry
+            .rehydrate(root_session_id, id, MessagePurpose::Coordinate)
+            .await?;
+        let harness = self
+            .registry
+            .state
+            .lock()
+            .await
+            .harness_in_scope(root_session_id, id)?;
+        let lease = SideQuestion {
+            lease: Some(harness.lease_side_question()),
+            registry: Arc::clone(&self.registry),
+            root_session_id: root_session_id.to_owned(),
+        };
+        Ok((harness, lease))
     }
 
     async fn require_root(&self, root_session_id: &str) -> std::io::Result<()> {

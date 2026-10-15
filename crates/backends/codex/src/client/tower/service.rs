@@ -11,9 +11,9 @@ use crate::client::{
     responses::{CreatePolicy, ResponseCreate, WarmupResponse, WarmupServerEvent},
 };
 use ::tower::{Service, retry::Retry};
+use nanocode_platform::Instant;
 use tokio::sync::Mutex;
 use tracing::{Instrument, info_span};
-use web_time::Instant;
 
 mod https;
 

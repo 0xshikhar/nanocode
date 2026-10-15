@@ -8,6 +8,8 @@ members = [
     "crates/backends/claude",
     "crates/backends/codex",
     "crates/core/home",
+    "crates/core/platform",
+    "crates/core/schema",
     "crates/core/media",
     "crates/core/tls",
     "crates/core/tools",
@@ -19,10 +21,8 @@ members = [
     "crates/integrations/store-postgres",
     "crates/integrations/store-sqlite",
     "crates/integrations/store-jsonl",
-    "crates/integrations/voice-protocol",
     "crates/tui",
     "bin/nanocodex",
-    "js",
 ]
 default-members = ["crates/nanocode"]
 resolver = "2"
@@ -55,8 +55,7 @@ libc = "0.2"
 base64 = "0.22.1"
 async-trait = "=0.1.89"
 axum = { version = "0.8.9", default-features = false, features = ["form", "http1", "json", "query", "tokio"] }
-bm25 = { version = "2.3.2", default-features = false }
-chrono = { version = "0.4.43", default-features = false, features = ["clock", "std", "wasmbind"] }
+chrono = { version = "0.4.43", default-features = false, features = ["std"] }
 clap = { version = "4.5.54", features = ["derive", "env"] }
 eyre = "0.6.12"
 futures-util = { version = "0.3.31", default-features = false, features = ["async-await", "sink", "std"] }
@@ -65,23 +64,23 @@ getrandom = "0.4.3"
 http = "1.3.1"
 httpdate = "1.0.3"
 ignore = "0.4.31"
-jsonschema = { version = "0.48.5", default-features = false }
 nanocode = { version = "0.6.7", path = "crates/nanocode" }
 nanocode-backend-claude = { version = "0.6.7", path = "crates/backends/claude" }
 nanocode-home = { version = "0.6.7", path = "crates/core/home" }
+nanocode-platform = { version = "0.6.7", path = "crates/core/platform" }
+nanocode-schema = { version = "0.6.7", path = "crates/core/schema" }
 nanocode-durability = { version = "0.6.7", path = "crates/runtime/durability" }
-nanocode-voice-protocol = { version = "0.6.7", path = "crates/integrations/voice-protocol" }
 nanocode-observability = { version = "0.6.7", path = "crates/integrations/observability" }
 nanocode-subagents = { version = "0.6.7", path = "crates/runtime/subagents" }
 nanocode-code-mode = { version = "0.6.7", path = "crates/runtime/code-mode"  }
 nanocode-tools-macros = { version = "0.6.7", path = "crates/core/tools-macros" }
 image = { version = "0.25.9", default-features = false, features = ["bmp", "gif", "jpeg", "png", "pnm", "webp"] }
 iana-time-zone = "0.1.64"
-js-sys = "0.3.82"
 nix = { version = "0.31.3", default-features = false, features = ["process", "resource", "signal", "socket", "user"] }
 portable-pty = "0.9.0"
 opentelemetry = { version = "0.32", default-features = false, features = ["metrics", "trace"] }
 opentelemetry-otlp = { version = "0.32", default-features = false, features = ["http-proto", "metrics", "reqwest-blocking-client", "trace"] }
+opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic-messages", "metrics", "trace", "with-serde"] }
 opentelemetry-semantic-conventions = "0.32"
 opentelemetry_sdk = { version = "0.32", default-features = false, features = ["metrics", "trace"] }
 proc-macro-crate = "3"
@@ -112,16 +111,13 @@ tempfile = "3.27.0"
 tokio = "1.48.0"
 tokio-util = { version = "0.7", features = ["codec"] }
 tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
-tower = { version = "0.5.2", features = ["limit", "load-shed", "retry", "timeout", "util"] }
+tower = { version = "0.5.2", features = ["retry", "util"] }
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 tracing-appender = "0.2.4"
 tracing-opentelemetry = { version = "0.33", default-features = false, features = ["metrics"] }
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt", "json"] }
 url = "2.5.7"
-uuid = { version = "1", features = ["js", "serde", "v4", "v5", "v7"] }
-wasm-bindgen = "0.2.105"
-wasm-bindgen-futures = "0.4.55"
-web-time = "1.1.0"
+uuid = { version = "1", features = ["serde", "v5"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

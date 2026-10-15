@@ -255,6 +255,13 @@ impl Picker {
     }
 
     pub fn render(&mut self, area: Rect, buffer: &mut Buffer, theme: &Theme) {
+        let _span = tracing::info_span!(
+            "tui.picker.render",
+            width = area.width,
+            height = area.height,
+            items = self.items.len()
+        )
+        .entered();
         let (width, height) = self.desired_size(area);
         let popup = overlay::centered(area, width, height);
         let inner = overlay::frame(popup, buffer, theme, &self.title, self.footer.as_deref());

@@ -10,13 +10,13 @@ repository.workspace = true
 description = "Shared SDK protocol and tool wire contracts without backend clients"
 
 [dependencies]
+nanocode-platform.workspace = true
 smallvec.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 futures-util.workspace = true
 tokio = { workspace = true, features = ["sync"] }
-web-time.workspace = true
 
 [lints]
 workspace = true

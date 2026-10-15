@@ -4,9 +4,9 @@ use crate::client::{
     __private::ModelConfig, Thinking, pricing::ServiceTier, responses::Usage,
     transport::TransportStatsDelta,
 };
+use nanocode_platform::Instant;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, value::RawValue};
-use web_time::Instant;
 
 use crate::usage::TurnUsage;
 

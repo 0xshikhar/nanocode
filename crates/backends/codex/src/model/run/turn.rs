@@ -8,7 +8,9 @@ where
 {
     fn start_timing(&mut self) {
         self.started_at = Instant::now();
-        self.operation_started_at = SystemTime::now().duration_since(UNIX_EPOCH).ok();
+        self.operation_started_at = nanocode_platform::system_time()
+            .duration_since(UNIX_EPOCH)
+            .ok();
         self.elapsed_before_attempt = Duration::ZERO;
     }
 

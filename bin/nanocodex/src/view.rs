@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 use nanocode_tui::{
     keybindings::{self, Binding},
     ratatui::{
+        buffer::Buffer,
         layout::{Constraint, Layout, Rect},
         style::{Modifier, Style},
         text::{Line, Span},
@@ -10,13 +11,14 @@ use nanocode_tui::{
     },
     spinner::elapsed_label,
     terminal::Canvas,
+    theme::Theme,
 };
 
 use crate::app::{App, Overlay, TurnState};
 
 pub const STATUS_VISIBLE: Duration = Duration::from_secs(4);
 
-pub const BINDINGS: [Binding; 28] = [
+pub const BINDINGS: [Binding; 30] = [
     Binding {
         keys: "enter",
         action: "send · queue while a turn runs",
@@ -83,7 +85,7 @@ pub const BINDINGS: [Binding; 28] = [
     },
     Binding {
         keys: "ctrl+o",
-        action: "expand or collapse tools and reasoning",
+        action: "cycle tools and reasoning: collapsed → beautified → raw",
     },
     Binding {
         keys: "ctrl+t",
@@ -110,8 +112,16 @@ pub const BINDINGS: [Binding; 28] = [
         action: "harness, model, thinking, speed",
     },
     Binding {
-        keys: "/btw <question>",
-        action: "side question while working",
+        keys: "/btw [question]",
+        action: "side pane: a forked side thread beside the chat",
+    },
+    Binding {
+        keys: "tab / shift+tab · click",
+        action: "switch between the chat and the side pane",
+    },
+    Binding {
+        keys: "/collapse /split /close /zoom",
+        action: "side pane: merge into its thread, open in a terminal pane, close, full width",
     },
     Binding {
         keys: "/resume · /new",
@@ -133,6 +143,8 @@ pub const BINDINGS: [Binding; 28] = [
 
 pub fn draw(app: &mut App, frame: &mut Canvas<'_>) {
     let area = frame.area();
+    let _span = tracing::info_span!(target: "nanocodex", "nc.view", width = area.width, height = area.height).entered();
+    let layout = tracing::info_span!(target: "nanocodex", "nc.view.layout").entered();
     let now = Instant::now();
     let spinner = app.spinner.frame(now);
     let theme = app.theme.clone();
@@ -194,9 +206,9 @@ pub fn draw(app: &mut App, frame: &mut Canvas<'_>) {
         Constraint::Length(1),
     ])
     .areas(area);
+    drop(layout);
     let buffer = frame.buffer_mut();
-    app.visible_transcript()
-        .render(transcript_area, buffer, &theme, spinner);
+    transcripts(app, transcript_area, buffer, &theme, spinner);
     if tree_height > 0 {
         let mut lines = vec![Line::styled(
             format!("agents · {} active · ctrl+t to hide", app.tree.active()),
@@ -237,6 +249,107 @@ pub fn draw(app: &mut App, frame: &mut Canvas<'_>) {
     }
 }
 
+fn transcripts(app: &mut App, area: Rect, buffer: &mut Buffer, theme: &Theme, spinner: &str) {
+    let _span = tracing::info_span!(target: "nanocodex", "nc.panes.render", side = app.panes.side.is_some(), active_side = app.panes.active, zoomed = app.panes.zoomed).entered();
+    app.panes.main_area = Rect::default();
+    app.panes.side_area = Rect::default();
+    if app.panes.side.is_none() {
+        let _pane =
+            tracing::info_span!(target: "nanocodex", "nc.pane.render", pane = "main").entered();
+        app.panes.main_area = area;
+        app.visible_transcript()
+            .render(area, buffer, theme, spinner);
+        return;
+    }
+    let [tabs, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
+    tab_line(app, theme, spinner).render(tabs, buffer);
+    if app.panes.zoomed {
+        let _pane = tracing::info_span!(target: "nanocodex", "nc.pane.render", pane = if app.panes.active { "side" } else { "main" }).entered();
+        if app.panes.active {
+            app.panes.side_area = body;
+        } else {
+            app.panes.main_area = body;
+        }
+        app.active_transcript().render(body, buffer, theme, spinner);
+        return;
+    }
+    let divider = body.x + body.width.saturating_sub(1) / 2;
+    app.panes.main_area = Rect {
+        width: divider - body.x,
+        ..body
+    };
+    app.panes.side_area = Rect {
+        x: divider + 1,
+        width: body.right().saturating_sub(divider + 1),
+        ..body
+    };
+    let (main, side) = (app.panes.main_area, app.panes.side_area);
+    tracing::info_span!(target: "nanocodex", "nc.pane.render", pane = "main").in_scope(|| {
+        app.pane_transcript(false)
+            .render(main, buffer, theme, spinner)
+    });
+    tracing::info_span!(target: "nanocodex", "nc.pane.render", pane = "side").in_scope(|| {
+        app.pane_transcript(true)
+            .render(side, buffer, theme, spinner)
+    });
+    Block::default()
+        .borders(Borders::LEFT)
+        .border_style(Style::default().fg(theme.border()))
+        .render(
+            Rect {
+                x: divider,
+                width: 1,
+                ..body
+            },
+            buffer,
+        );
+}
+
+fn tab_line(app: &App, theme: &Theme, spinner: &str) -> Line<'static> {
+    let tab = |active: bool, label: String| {
+        if active {
+            Span::styled(
+                format!(" › {label} "),
+                Style::default()
+                    .fg(theme.accent())
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else {
+            Span::styled(format!("   {label} "), Style::default().fg(theme.muted()))
+        }
+    };
+    let chat = match app
+        .focus
+        .and_then(|id| app.views.get(&id).map(|view| (id, view)))
+    {
+        Some((id, view)) => format!("Chat · #{id} {}", view.role),
+        None => "Chat".to_owned(),
+    };
+    let side = app.panes.side.as_ref().map_or_else(String::new, |side| {
+        format!(
+            "BTW · {} · {}{}",
+            side.label(),
+            side.kind(),
+            if side.busy() {
+                format!(" {spinner}")
+            } else {
+                String::new()
+            }
+        )
+    });
+    Line::from(vec![
+        tab(!app.panes.active, chat),
+        tab(app.panes.active, side),
+        Span::styled(
+            format!(
+                "  tab/click: pane · /zoom{} · /collapse · /split · /close · ctrl+c×2 closes",
+                if app.panes.zoomed { ": restore" } else { "" }
+            ),
+            Style::default().fg(theme.muted()),
+        ),
+    ])
+}
+
 pub const FINDER_ROWS: usize = 8;
 
 fn finder_popup(app: &App, composer_area: Rect, transcript_area: Rect, frame: &mut Canvas<'_>) {
@@ -246,6 +359,7 @@ fn finder_popup(app: &App, composer_area: Rect, transcript_area: Rect, frame: &m
     if app.overlay.is_some() {
         return;
     }
+    let _span = tracing::info_span!(target: "nanocodex", "nc.finder.render", files = finder.finder.len(), matches = finder.finder.matches()).entered();
     let rows = FINDER_ROWS.min(usize::from(transcript_area.height.saturating_sub(1)));
     let lines = finder.finder.lines(rows, &app.theme);
     let height = u16::try_from(lines.len()).unwrap_or(u16::MAX);
@@ -281,6 +395,9 @@ fn command_popup(app: &App, composer_area: Rect, transcript_area: Rect, frame: &
     if matches.is_empty() {
         return;
     }
+    let _span =
+        tracing::info_span!(target: "nanocodex", "nc.commands.render", matches = matches.len())
+            .entered();
     let height = u16::try_from(matches.len())
         .unwrap_or(u16::MAX)
         .min(transcript_area.height);
@@ -318,6 +435,7 @@ fn command_popup(app: &App, composer_area: Rect, transcript_area: Rect, frame: &
 }
 
 fn status_line(app: &App, spinner: &str, now: Instant) -> Line<'static> {
+    let _span = tracing::info_span!(target: "nanocodex", "nc.status.render").entered();
     let theme = &app.theme;
     if let Some((text, at)) = &app.status
         && now.duration_since(*at) < STATUS_VISIBLE
@@ -326,6 +444,44 @@ fn status_line(app: &App, spinner: &str, now: Instant) -> Line<'static> {
             format!(" {text}"),
             Style::default().fg(theme.thinking_high()),
         );
+    }
+    if app.panes.side_active()
+        && let Some(side) = &app.panes.side
+    {
+        let state = match side.since() {
+            Some(since) if side.busy() => format!(
+                " · answering {} · esc esc cancels",
+                elapsed_label(now.duration_since(since))
+            ),
+            _ => String::new(),
+        };
+        let waiting = match side.waiting() {
+            0 => String::new(),
+            count => format!(" · {count} queued"),
+        };
+        return Line::from(vec![
+            Span::styled(
+                if side.busy() {
+                    format!(" {spinner} ")
+                } else {
+                    " ▸ ".to_owned()
+                },
+                Style::default().fg(theme.accent()),
+            ),
+            Span::styled(
+                format!("btw · {}", side.label()),
+                Style::default()
+                    .fg(theme.text())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(
+                    " · {}{state}{waiting}  enter asks · tab returns to the chat",
+                    side.kind()
+                ),
+                Style::default().fg(theme.muted()),
+            ),
+        ]);
     }
     if let Some(id) = app.focus
         && let Some(view) = app.views.get(&id)
@@ -408,6 +564,7 @@ fn status_line(app: &App, spinner: &str, now: Instant) -> Line<'static> {
 }
 
 fn footer(app: &App) -> Line<'static> {
+    let _span = tracing::info_span!(target: "nanocodex", "nc.footer.render").entered();
     let theme = &app.theme;
     let mut spans = vec![
         Span::styled(

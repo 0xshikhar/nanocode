@@ -4,6 +4,7 @@ mod config;
 mod native;
 mod oauth;
 mod pagination;
+mod search;
 mod stdio;
 
 use std::{

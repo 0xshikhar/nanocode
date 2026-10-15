@@ -8,6 +8,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 pub fn render(source: &str, width: u16, theme: &Theme) -> Vec<Line<'static>> {
+    let _span = tracing::info_span!("tui.diff.render", width, text.bytes = source.len()).entered();
     if width == 0 {
         return Vec::new();
     }

@@ -10,9 +10,9 @@ use std::{
 
 use ::tower::Service;
 use futures_util::{Stream, future::poll_fn};
+use nanocode_platform::Instant;
 use tokio::sync::mpsc;
 use tracing::{Instrument, info_span};
-use web_time::Instant;
 
 use crate::client::{
     ContentItem, EventSink, MessageRole, ResponseEvent, ResponseItem, ResponsesAttempt,

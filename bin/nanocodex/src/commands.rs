@@ -1,4 +1,4 @@
-pub const COMMANDS: [(&str, &str); 24] = [
+pub const COMMANDS: [(&str, &str); 29] = [
     (
         "/model",
         "choose harness, model, thinking and speed for a new thread",
@@ -9,7 +9,10 @@ pub const COMMANDS: [(&str, &str); 24] = [
         "/fast",
         "cycle the service tier (standard, fast, ultrafast)",
     ),
-    ("/btw", "ask a side question without interrupting the turn"),
+    (
+        "/btw",
+        "open the side pane: a forked side thread that never interrupts the turn",
+    ),
     ("/resume", "resume a saved session"),
     ("/new", "start a new session"),
     ("/agents", "toggle the subagent tree"),
@@ -21,11 +24,22 @@ pub const COMMANDS: [(&str, &str); 24] = [
     ("/image", "attach an image from the clipboard"),
     ("/detach", "remove pending image attachments"),
     ("/session", "show session, model and tool details"),
+    ("/id", "show the session id and copy it to the clipboard"),
     ("/runner", "list, connect, listen or disconnect runners"),
     ("/expand", "expand or collapse tools and reasoning"),
     ("/mouse", "toggle mouse capture for native text selection"),
     ("/help", "show key bindings"),
     ("/clear", "start a new session"),
+    (
+        "/collapse",
+        "send the side pane's conversation to its thread and close it",
+    ),
+    ("/split", "open the side thread in a new terminal pane"),
+    ("/close", "close the side pane without touching the thread"),
+    (
+        "/zoom",
+        "toggle the focused pane between split and full width",
+    ),
     (
         "/agent",
         "focus a subagent by #id or role and message it; /agent alone returns to the main thread",

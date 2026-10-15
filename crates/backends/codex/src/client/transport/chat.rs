@@ -1237,7 +1237,7 @@ fn reasoning_text(message: &Value) -> Result<String, ResponsesError> {
 }
 
 fn new_id(prefix: &str) -> String {
-    format!("{prefix}_{}", uuid::Uuid::new_v4().simple())
+    format!("{prefix}_{}", nanocode_platform::uuid_v4().simple())
 }
 
 #[derive(Default)]

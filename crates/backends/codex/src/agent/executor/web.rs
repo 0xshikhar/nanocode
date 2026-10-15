@@ -18,6 +18,6 @@ pub(crate) fn spawn_driver<F>(driver: F) -> Result<()>
 where
     F: Future<Output = ()> + 'static,
 {
-    wasm_bindgen_futures::spawn_local(driver);
+    nanocode_platform::spawn_local(driver);
     Ok(())
 }

@@ -5,9 +5,9 @@ use std::{
 };
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use nanocode_platform::UNIX_EPOCH;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::sync::Mutex;
-use web_time::{SystemTime, UNIX_EPOCH};
 
 use super::{
     OpenAiAuth, OpenAiAuthError, OpenAiAuthFuture, OpenAiAuthMode, OpenAiAuthSnapshot,
@@ -1059,7 +1059,7 @@ fn form_component(value: &str) -> String {
 }
 
 fn unix_millis() -> i64 {
-    SystemTime::now()
+    nanocode_platform::system_time()
         .duration_since(UNIX_EPOCH)
         .ok()
         .and_then(|duration| i64::try_from(duration.as_millis()).ok())

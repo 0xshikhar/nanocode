@@ -59,7 +59,8 @@ impl std::fmt::Debug for DecisionTool {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_family = "wasm"), async_trait)]
+#[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl Tool for DecisionTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(self.name.as_str(), DESCRIPTION, input_schema())

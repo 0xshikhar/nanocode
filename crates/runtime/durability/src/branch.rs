@@ -44,7 +44,7 @@ impl<S: StateStore> CheckpointBranch<S> {
         Ok(Self {
             store,
             source_id,
-            branch_id: uuid::Uuid::new_v4().to_string(),
+            branch_id: nanocode_platform::uuid_v4().to_string(),
             owner: acquired.owner,
             revision: acquired.state.revision,
             payload,

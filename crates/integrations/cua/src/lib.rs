@@ -1,3 +1,5 @@
+#![cfg(not(target_family = "wasm"))]
+
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use nanocode_tools::{
@@ -94,7 +96,8 @@ impl CatalogCache {
     }
 
     fn load(&self, fingerprint: &Value) -> Option<Vec<ProviderTool>> {
-        let cached: CachedCatalog = serde_json::from_slice(&std::fs::read(&self.path).ok()?).ok()?;
+        let cached: CachedCatalog =
+            serde_json::from_slice(&std::fs::read(&self.path).ok()?).ok()?;
         (cached.fingerprint == *fingerprint && validate_catalog(&cached.catalog).is_ok())
             .then_some(cached.catalog)
     }

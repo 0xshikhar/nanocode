@@ -36,12 +36,12 @@ use crate::client::{
     transport::{ResponsesError, ResponsesTransport, TransportStats, TransportStatsSnapshot},
 };
 use futures_util::{FutureExt, StreamExt, stream::FuturesOrdered};
+use nanocode_platform::{Duration, Instant, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, value::RawValue};
 use tokio::sync::watch;
 use tower::Service;
 use tracing::{Instrument, info, info_span};
-use web_time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use super::{
     CompactionCompleted, CompactionFailed, CompactionStarted, ModelCallCompleted, ModelCallFailed,

@@ -5,8 +5,8 @@ use crate::client::{
     ResponseItemId, monotonic_now_ns,
     responses::{ServerEvent, Usage},
 };
+use nanocode_platform::Instant;
 use serde::{Deserialize, Serialize};
-use web_time::Instant;
 
 use crate::client::{
     ResponsesError,
@@ -235,7 +235,7 @@ where
 {
     let mut done_items = Vec::with_capacity(2);
     let mut assistant_items = HashMap::new();
-    let item_namespace = uuid::Uuid::new_v4();
+    let item_namespace = nanocode_platform::uuid_v4();
     let mut timing = StreamTiming::new(started_at);
 
     loop {

@@ -16,6 +16,13 @@ pub struct Binding {
 }
 
 pub fn render(bindings: &[Binding], area: Rect, buffer: &mut Buffer, theme: &Theme) {
+    let _span = tracing::info_span!(
+        "tui.help.render",
+        width = area.width,
+        height = area.height,
+        bindings = bindings.len()
+    )
+    .entered();
     let keys_width = bindings
         .iter()
         .map(|binding| binding.keys.width())

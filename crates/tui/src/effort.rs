@@ -85,6 +85,13 @@ impl EffortDial {
     }
 
     pub fn render(&self, area: Rect, buffer: &mut Buffer, theme: &Theme) {
+        let _span = tracing::info_span!(
+            "tui.dial.render",
+            width = area.width,
+            height = area.height,
+            levels = self.levels.len()
+        )
+        .entered();
         let scale_width = self
             .levels
             .iter()

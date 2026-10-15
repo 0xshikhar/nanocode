@@ -1,14 +1,45 @@
 use std::{collections::HashMap, time::Duration};
 
 use nanocode::agent::events::{AgentEvent, AgentEventKind};
-use nanocode_tui::transcript::{CellKind, NoticeLevel, ToolBody, ToolCell, ToolStatus, Transcript};
+use nanocode_tui::{
+    format::{humanize_tool, shorten_home},
+    transcript::{CellKind, NoticeLevel, ToolBody, ToolCell, ToolStatus, Transcript},
+};
 use serde_json::Value;
+
+const WORKSPACE_CONTEXT: &str =
+    "\nWorkspace context (guidance only; does not expand tool authority):";
+
+const ROUTED_TOOLS: [&str; 6] = [
+    "exec_command",
+    "write_stdin",
+    "Bash",
+    "TaskOutput",
+    "TaskStop",
+    "apply_patch",
+];
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RunnerRoute {
+    pub name: String,
+    pub replace: bool,
+}
+
+struct CodeLink {
+    cell_id: String,
+    latest: String,
+}
 
 #[derive(Default)]
 pub struct EventMapper {
     assistant: HashMap<String, usize>,
     reasoning: HashMap<u64, usize>,
     tools: HashMap<String, usize>,
+    links: HashMap<String, CodeLink>,
+    waits: HashMap<String, String>,
+    agents: HashMap<String, String>,
+    runners: Vec<RunnerRoute>,
+    names: HashMap<String, String>,
     usage: Usage,
     last: Usage,
     session: Usage,
@@ -76,6 +107,61 @@ impl EventMapper {
         self.assistant.clear();
         self.reasoning.clear();
         self.tools.clear();
+        self.names.clear();
+    }
+
+    pub fn set_runners(&mut self, runners: Vec<RunnerRoute>) {
+        self.runners = runners;
+    }
+
+    pub fn learn_agent(&mut self, id: impl ToString, role: impl Into<String>) {
+        self.agents.insert(id.to_string(), role.into());
+    }
+
+    pub fn replay_tool_call(
+        &mut self,
+        transcript: &mut Transcript,
+        call_id: &str,
+        name: &str,
+        arguments: &str,
+        parent_call_id: Option<&str>,
+    ) {
+        let arguments = serde_json::from_str::<Value>(arguments)
+            .unwrap_or_else(|_| Value::String(arguments.to_owned()));
+        self.tool_call(
+            transcript,
+            &serde_json::json!({
+                "call_id": call_id,
+                "tool": name,
+                "arguments": arguments,
+                "parent_call_id": parent_call_id,
+            }),
+        );
+        self.usage.tool_calls -= 1;
+    }
+
+    pub fn replay_tool_result(
+        &mut self,
+        transcript: &mut Transcript,
+        call_id: &str,
+        output: &str,
+        failed: bool,
+    ) {
+        let Some(name) = self.names.get(call_id).cloned() else {
+            return;
+        };
+        self.tool_result(
+            transcript,
+            &serde_json::json!({
+                "call_id": call_id,
+                "tool": name,
+                "status": if failed { "failed" } else { "completed" },
+                "result": match serde_json::from_str::<Value>(output) {
+                    Ok(content @ Value::Array(_)) => content,
+                    _ => serde_json::json!({ "text": output }),
+                },
+            }),
+        );
     }
 
     pub const fn begin_turn(&mut self) {
@@ -103,6 +189,7 @@ impl EventMapper {
     }
 
     pub fn apply(&mut self, transcript: &mut Transcript, event: &AgentEvent) -> Mapped {
+        let _span = tracing::info_span!(target: "nanocodex", "nc.transcript.apply", event.kind = ?event.kind, event.bytes = event.payload.get().len(), cells = transcript.len()).entered();
         let mut mapped = Mapped { accepted: None };
         let Ok(payload) = serde_json::from_str::<Value>(event.payload.get()) else {
             transcript.push(CellKind::Notice(
@@ -125,7 +212,9 @@ impl EventMapper {
                         NoticeLevel::Info,
                         format!("subagent #{agent} completed · continuing"),
                     )),
-                    None => transcript.push(CellKind::User(shown.to_owned())),
+                    None => transcript.push(CellKind::User(
+                        crate::side::prompt_display(shown).to_owned(),
+                    )),
                 };
                 self.reasoning.clear();
                 mapped.accepted = Some(match payload["kind"].as_str() {
@@ -280,10 +369,6 @@ impl EventMapper {
                     .rsplit_once('/')
                     .map(|(parent, _)| parent.to_owned())
             });
-        let depth = parent
-            .as_ref()
-            .filter(|parent| self.tools.contains_key(*parent))
-            .map_or(0, |_| 1);
         let arguments = match &payload["arguments"] {
             Value::String(text) => {
                 serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.clone()))
@@ -291,50 +376,428 @@ impl EventMapper {
             other => other.clone(),
         };
         let mut cell = ToolCell::new(call_id.clone(), name.clone());
-        cell.depth = depth;
         describe_tool(&mut cell, &name, &arguments);
+        self.annotate(&mut cell, &name, &arguments);
         self.reasoning.clear();
+        self.names.insert(call_id.clone(), name.clone());
+        if name == "wait"
+            && let Some(cell_id) = cell_id_argument(&arguments)
+            && let Some((origin, link)) = self
+                .links
+                .iter_mut()
+                .find(|(_, link)| link.cell_id == cell_id)
+        {
+            link.latest.clone_from(&call_id);
+            self.waits.insert(call_id.clone(), origin.clone());
+        }
+        if let Some(parent) = parent
+            && let Some(target) = self.target(&parent)
+            && let Some(index) = self.index(transcript, &target)
+        {
+            let pushed = transcript.update(index, |kind| {
+                if let CellKind::Tool(tool) = kind
+                    && let Some(owner) = tool.find_mut(&target)
+                {
+                    owner.children.push(cell.clone());
+                }
+            });
+            if pushed {
+                self.tools.insert(call_id, index);
+                return;
+            }
+        }
         let index = transcript.push(CellKind::Tool(cell));
         self.tools.insert(call_id, index);
     }
 
-    fn tool_result(&mut self, transcript: &mut Transcript, payload: &Value) {
-        let call_id = payload["call_id"].as_str().unwrap_or_default();
-        let Some(index) = self
-            .tools
+    fn target(&self, parent: &str) -> Option<String> {
+        if let Some(link) = self.links.get(parent) {
+            return Some(link.latest.clone());
+        }
+        self.names.contains_key(parent).then(|| parent.to_owned())
+    }
+
+    fn index(&self, transcript: &Transcript, call_id: &str) -> Option<usize> {
+        self.tools
             .get(call_id)
             .copied()
             .or_else(|| transcript.find_tool(call_id))
-        else {
-            let name = payload["tool"].as_str().unwrap_or("tool").to_owned();
-            let display = if name == "exec" {
-                "code".to_owned()
-            } else {
-                name
+    }
+
+    fn annotate(&self, cell: &mut ToolCell, name: &str, arguments: &Value) {
+        let agent = |id: &Value| {
+            let id = match id {
+                Value::String(id) => id.clone(),
+                Value::Null => return None,
+                other => other.to_string(),
             };
-            let cell = ToolCell::new(call_id.to_owned(), display);
-            let index = transcript.push(CellKind::Tool(cell));
-            self.tools.insert(call_id.to_owned(), index);
-            self.tool_result(transcript, payload);
+            Some(match self.agents.get(&id) {
+                Some(role) => format!("#{id} {role}"),
+                None => format!("#{id}"),
+            })
+        };
+        match name {
+            "send_agent_message" | "close_agent" | "interrupt_agent" => {
+                if let Some(label) = agent(&arguments["agent_id"]) {
+                    cell.title = label;
+                }
+            }
+            "wait_agent" => {
+                if let Some(ids) = arguments["agent_ids"].as_array() {
+                    cell.title = ids.iter().filter_map(agent).collect::<Vec<_>>().join(", ");
+                }
+            }
+            _ => {}
+        }
+        if let Some(runner) = self.runner(name, arguments) {
+            cell.details.push(format!("on {runner}"));
+        }
+    }
+
+    fn runner(&self, name: &str, arguments: &Value) -> Option<String> {
+        let mut paths = ["workdir", "cwd", "path", "file_path", "notebook_path"]
+            .into_iter()
+            .filter_map(|key| arguments.get(key).and_then(Value::as_str))
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        if name == "apply_patch" {
+            paths.extend(patch_files(&patch_text(arguments)));
+        }
+        self.runners
+            .iter()
+            .find(|runner| {
+                let mount = format!("/{}", runner.name);
+                paths.iter().any(|path| {
+                    path == &mount
+                        || path
+                            .strip_prefix(&mount)
+                            .is_some_and(|rest| rest.starts_with('/'))
+                })
+            })
+            .or_else(|| {
+                (!paths.is_empty() || ROUTED_TOOLS.contains(&name))
+                    .then(|| self.runners.iter().find(|runner| runner.replace))
+                    .flatten()
+            })
+            .map(|runner| runner.name.clone())
+    }
+
+    fn tool_result(&mut self, transcript: &mut Transcript, payload: &Value) {
+        let call_id = payload["call_id"].as_str().unwrap_or_default();
+        let name = payload["tool"]
+            .as_str()
+            .map(str::to_owned)
+            .or_else(|| self.names.get(call_id).cloned())
+            .unwrap_or_else(|| "tool".to_owned());
+        let Some(index) = self.index(transcript, call_id) else {
+            self.tool_call(
+                transcript,
+                &serde_json::json!({
+                    "call_id": call_id,
+                    "tool": name,
+                    "parent_call_id": payload["parent_call_id"],
+                }),
+            );
+            self.usage.tool_calls -= 1;
+            if self.index(transcript, call_id).is_some() {
+                self.tool_result(transcript, payload);
+            }
             return;
         };
-        let status = match payload["status"].as_str() {
+        let mut outcome = outcome(&name, payload);
+        self.learn_agents(&name, payload);
+        let duration = payload["duration_ns"].as_u64().map(Duration::from_nanos);
+        let yielded = matches!(name.as_str(), "exec" | "code_mode" | "js")
+            .then(|| yielded_cell(&outcome.raw))
+            .flatten();
+        if let Some(cell_id) = &yielded {
+            self.links.insert(
+                call_id.to_owned(),
+                CodeLink {
+                    cell_id: cell_id.clone(),
+                    latest: call_id.to_owned(),
+                },
+            );
+            outcome.status = Some(ToolStatus::Yielded);
+        }
+        let status = outcome.status.unwrap_or(match payload["status"].as_str() {
             Some("completed") => ToolStatus::Completed,
             Some("cancelled") => ToolStatus::Cancelled,
             _ => ToolStatus::Failed,
-        };
-        let duration = payload["duration_ns"].as_u64().map(Duration::from_nanos);
-        let output = output_text(payload);
+        });
         transcript.update(index, |cell| {
-            if let CellKind::Tool(tool) = cell {
+            if let CellKind::Tool(top) = cell
+                && let Some(tool) = top.find_mut(call_id)
+            {
                 tool.status = status;
                 tool.duration = duration;
-                if tool.output_body == ToolBody::Text && looks_like_diff(&output) {
+                if tool.output_body == ToolBody::Text && looks_like_diff(&outcome.text) {
                     tool.output_body = ToolBody::Diff;
                 }
-                tool.output = output;
+                if let Some(cell_id) = &yielded {
+                    tool.title = format!("cell {cell_id}");
+                }
+                tool.exit_code = outcome.exit_code;
+                tool.details.extend(outcome.details);
+                tool.output = outcome.text;
+                tool.raw_output = outcome.raw;
             }
         });
+        if status != ToolStatus::Yielded
+            && let Some(origin) = self.waits.get(call_id).cloned()
+        {
+            self.links.remove(&origin);
+            if let Some(index) = self.index(transcript, &origin) {
+                transcript.update(index, |cell| {
+                    if let CellKind::Tool(top) = cell
+                        && let Some(tool) = top.find_mut(&origin)
+                        && tool.status == ToolStatus::Yielded
+                    {
+                        tool.status = status;
+                        tool.details.push("finished below".to_owned());
+                    }
+                });
+            }
+        }
+    }
+
+    fn learn_agents(&mut self, name: &str, payload: &Value) {
+        if !matches!(
+            name,
+            "spawn_agent" | "wait_agent" | "list_agents" | "close_agent" | "interrupt_agent"
+        ) {
+            return;
+        }
+        let mut texts = Vec::new();
+        collect_text(&payload["result"], &mut texts);
+        let parsed = serde_json::from_str::<Value>(texts.concat().trim()).ok();
+        for value in [parsed.as_ref(), Some(&payload["structured_result"])]
+            .into_iter()
+            .flatten()
+        {
+            self.learn_agent_values(value);
+        }
+    }
+
+    fn learn_agent_values(&mut self, value: &Value) {
+        match value {
+            Value::Object(map) => {
+                if let (Some(id), Some(role)) =
+                    (map.get("agent_id"), map.get("role").and_then(Value::as_str))
+                {
+                    let id = id.as_str().map_or_else(|| id.to_string(), str::to_owned);
+                    self.agents.insert(id, role.to_owned());
+                }
+                map.values()
+                    .for_each(|value| self.learn_agent_values(value));
+            }
+            Value::Array(items) => items.iter().for_each(|item| self.learn_agent_values(item)),
+            _ => {}
+        }
+    }
+}
+
+struct Outcome {
+    text: String,
+    raw: String,
+    exit_code: Option<i64>,
+    details: Vec<String>,
+    status: Option<ToolStatus>,
+}
+
+fn outcome(name: &str, payload: &Value) -> Outcome {
+    let mut texts = Vec::new();
+    collect_text(&payload["result"], &mut texts);
+    let raw = texts.concat();
+    let structured = &payload["structured_result"];
+    let mut outcome = Outcome {
+        text: String::new(),
+        raw: raw.clone(),
+        exit_code: None,
+        details: Vec::new(),
+        status: None,
+    };
+    let body = raw
+        .split_once(WORKSPACE_CONTEXT)
+        .map_or(raw.as_str(), |(body, _)| body);
+    match name {
+        "exec_command" | "write_stdin" => {
+            let shell = if structured.get("output").is_some() {
+                structured.clone()
+            } else {
+                shell_text(body)
+            };
+            outcome.text = shell["output"].as_str().unwrap_or(body).to_owned();
+            outcome.exit_code = shell["exit_code"].as_i64();
+            if let Some(session) = shell["session_id"].as_i64() {
+                outcome.details.push(format!("session {session} running"));
+            }
+            return outcome;
+        }
+        "exec" | "code_mode" | "js" | "wait" => {
+            outcome.status = code_status(body);
+            outcome.text = humanize(strip_code_header(body));
+            return outcome;
+        }
+        _ => {}
+    }
+    if let Some(output) = structured.get("output").and_then(Value::as_str) {
+        outcome.text = output.to_owned();
+        return outcome;
+    }
+    let parsed = serde_json::from_str::<Value>(body.trim()).ok();
+    if let Some(Value::Object(map)) = &parsed
+        && (map.contains_key("stdout")
+            || map.contains_key("stderr")
+            || map.contains_key("background"))
+    {
+        let parts = ["stdout", "stderr", "output"]
+            .into_iter()
+            .filter_map(|key| map.get(key).and_then(Value::as_str))
+            .filter(|text| !text.is_empty())
+            .map(|text| text.trim_end().to_owned())
+            .collect::<Vec<_>>();
+        outcome.text = parts.join("\n");
+        outcome.exit_code = map.get("exit_code").and_then(Value::as_i64);
+        if map.get("background").and_then(Value::as_bool) == Some(true) {
+            let task = map
+                .get("task_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            outcome.details.push(format!("background task {task}"));
+        }
+        if map.get("interrupted").and_then(Value::as_bool) == Some(true) {
+            outcome.details.push("interrupted".to_owned());
+        }
+        if map.get("truncated").and_then(Value::as_bool) == Some(true) {
+            outcome.details.push("output truncated".to_owned());
+        }
+        return outcome;
+    }
+    outcome.text = humanize(strip_code_header(body));
+    outcome
+}
+
+fn shell_text(text: &str) -> Value {
+    let (header, output) = text.split_once("Output:\n").unwrap_or(("", text));
+    let mut shell = serde_json::json!({ "output": output });
+    for line in header.lines() {
+        if let Some(code) = line
+            .strip_prefix("Process exited with code ")
+            .and_then(|code| code.trim().parse::<i64>().ok())
+        {
+            shell["exit_code"] = code.into();
+        }
+        if let Some(session) = line
+            .strip_prefix("Process running with session ID ")
+            .and_then(|session| session.trim().parse::<i64>().ok())
+        {
+            shell["session_id"] = session.into();
+        }
+    }
+    shell
+}
+
+fn code_status(text: &str) -> Option<ToolStatus> {
+    let header = text.lines().next()?;
+    match header {
+        "Script completed" => Some(ToolStatus::Completed),
+        "Script failed" => Some(ToolStatus::Failed),
+        "Script terminated" => Some(ToolStatus::Cancelled),
+        header if header.starts_with("Script running with cell ID ") => Some(ToolStatus::Yielded),
+        _ => None,
+    }
+}
+
+fn yielded_cell(text: &str) -> Option<String> {
+    text.lines()
+        .next()?
+        .strip_prefix("Script running with cell ID ")
+        .map(|id| id.trim().to_owned())
+}
+
+fn cell_id_argument(arguments: &Value) -> Option<String> {
+    match &arguments["cell_id"] {
+        Value::String(id) => Some(id.clone()),
+        Value::Number(id) => Some(id.to_string()),
+        _ => None,
+    }
+}
+
+fn patch_text(arguments: &Value) -> String {
+    match arguments {
+        Value::String(patch) => patch.clone(),
+        other => other
+            .get("input")
+            .or_else(|| other.get("patch"))
+            .and_then(Value::as_str)
+            .map_or_else(|| other.to_string(), str::to_owned),
+    }
+}
+
+fn patch_files(patch: &str) -> Vec<String> {
+    patch
+        .lines()
+        .filter_map(|line| {
+            [
+                "*** Add File: ",
+                "*** Update File: ",
+                "*** Delete File: ",
+                "*** Move to: ",
+            ]
+            .into_iter()
+            .find_map(|prefix| line.strip_prefix(prefix))
+        })
+        .map(|path| path.trim().to_owned())
+        .collect()
+}
+
+fn first_line(text: &str) -> (String, bool) {
+    let trimmed = text.trim();
+    let mut lines = trimmed.lines();
+    let first = lines.next().unwrap_or_default().to_owned();
+    (first, lines.next().is_some())
+}
+
+fn visible_input(chars: &str) -> String {
+    chars
+        .chars()
+        .map(|character| match character {
+            '\n' => "⏎\n".to_owned(),
+            '\u{1b}' => "⎋".to_owned(),
+            character if character.is_control() && (character as u32) < 0x20 => {
+                format!("^{}", char::from(b'@' + character as u8))
+            }
+            character => character.to_string(),
+        })
+        .collect()
+}
+
+fn lines_patch(header: &str, path: &str, removed: &str, added: &str) -> String {
+    let mut patch = format!("*** {header}: {path}\n");
+    if header == "Update File" {
+        patch.push_str("@@\n");
+    }
+    for line in removed.lines() {
+        patch.push('-');
+        patch.push_str(line);
+        patch.push('\n');
+    }
+    for line in added.lines() {
+        patch.push('+');
+        patch.push_str(line);
+        patch.push('\n');
+    }
+    patch
+}
+
+pub fn tool_label(name: &str, arguments: &Value) -> String {
+    let mut cell = ToolCell::new(String::new(), name);
+    describe_tool(&mut cell, name, arguments);
+    if cell.title.is_empty() {
+        cell.name
+    } else {
+        format!("{} {}", cell.name, first_line(&cell.title).0)
     }
 }
 
@@ -345,72 +808,284 @@ pub fn describe_tool(cell: &mut ToolCell, name: &str, arguments: &Value) {
             .and_then(Value::as_str)
             .map(str::to_owned)
     };
+    let command = |cell: &mut ToolCell, text: String| {
+        let (first, more) = first_line(&text);
+        cell.name = "run".into();
+        cell.title = first;
+        if more {
+            cell.input = text;
+            cell.input_body = ToolBody::Code;
+            cell.language = "bash".into();
+        }
+    };
+    let workdir = field("workdir");
     match name {
         "exec" | "code_mode" | "js" => {
             cell.name = "code".into();
             cell.input = match arguments {
                 Value::String(code) => code.clone(),
+                Value::Null => String::new(),
                 other => field("code").unwrap_or_else(|| other.to_string()),
             };
             cell.input_body = ToolBody::Code;
+            cell.language = "js".into();
         }
         "wait" => {
-            cell.title = field("cell_id")
-                .map(|id| format!("cell {id}"))
-                .unwrap_or_default();
+            cell.name = "code".into();
+            let id = cell_id_argument(arguments).unwrap_or_default();
+            cell.title = if arguments["terminate"].as_bool() == Some(true) {
+                format!("cell {id} · terminate")
+            } else {
+                format!("cell {id} · wait")
+            };
         }
-        "exec_command" | "Bash" | "shell" | "run_command" => {
-            cell.name = "run".into();
-            cell.title = field("cmd")
-                .or_else(|| field("command"))
+        "exec_command" => {
+            command(cell, field("cmd").unwrap_or_default());
+            if arguments["tty"].as_bool() == Some(true) {
+                cell.details.push("tty".into());
+            }
+        }
+        "Bash" | "shell" | "run_command" => {
+            command(
+                cell,
+                field("command")
+                    .or_else(|| field("cmd"))
+                    .unwrap_or_default(),
+            );
+            if arguments["run_in_background"].as_bool() == Some(true) {
+                cell.details.push("background".into());
+            }
+        }
+        "write_stdin" => {
+            let session = arguments
+                .get("session_id")
+                .map(Value::to_string)
                 .unwrap_or_default();
+            let chars = field("chars").unwrap_or_default();
+            if chars.is_empty() {
+                cell.name = "poll".into();
+                cell.title = format!("session {session}");
+            } else {
+                cell.name = "stdin".into();
+                cell.title = format!("session {session}");
+                cell.input = visible_input(&chars);
+            }
+        }
+        "TaskOutput" => {
+            cell.name = "task output".into();
+            cell.title = field("task_id").unwrap_or_default();
+        }
+        "TaskStop" => {
+            cell.name = "stop task".into();
+            cell.title = field("task_id").unwrap_or_default();
         }
         "apply_patch" => {
             cell.name = "patch".into();
-            cell.input =
-                field("input")
-                    .or_else(|| field("patch"))
-                    .unwrap_or_else(|| match arguments {
-                        Value::String(patch) => patch.clone(),
-                        other => other.to_string(),
-                    });
+            cell.input = patch_text(arguments);
+            cell.title = patch_files(&cell.input).join(", ");
             cell.input_body = ToolBody::Diff;
         }
-        "Edit" | "MultiEdit" | "Write" | "Read" | "NotebookEdit" | "view_image" => {
-            cell.title = field("file_path")
-                .or_else(|| field("path"))
-                .unwrap_or_default();
+        "Edit" => {
+            let path = field("file_path").unwrap_or_default();
+            cell.name = "edit".into();
+            cell.input = lines_patch(
+                "Update File",
+                &path,
+                &field("old_string").unwrap_or_default(),
+                &field("new_string").unwrap_or_default(),
+            );
+            cell.input_body = ToolBody::Diff;
+            if arguments["replace_all"].as_bool() == Some(true) {
+                cell.details.push("all occurrences".into());
+            }
+            cell.title = path;
+        }
+        "MultiEdit" => {
+            let path = field("file_path").unwrap_or_default();
+            cell.name = "edit".into();
+            cell.input = arguments["edits"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|edit| {
+                    lines_patch(
+                        "Update File",
+                        &path,
+                        edit["old_string"].as_str().unwrap_or_default(),
+                        edit["new_string"].as_str().unwrap_or_default(),
+                    )
+                })
+                .collect();
+            cell.input_body = ToolBody::Diff;
+            cell.title = path;
+        }
+        "Write" => {
+            let path = field("file_path").unwrap_or_default();
+            let content = field("content").unwrap_or_default();
+            cell.name = "write".into();
+            cell.input = lines_patch("Add File", &path, "", &content);
+            cell.input_body = ToolBody::Diff;
+            cell.title = path;
+        }
+        "Read" => {
+            cell.name = "read".into();
+            cell.title = field("file_path").unwrap_or_default();
+            let offset = arguments["offset"].as_u64();
+            let limit = arguments["limit"].as_u64();
+            match (offset, limit) {
+                (Some(offset), Some(limit)) => cell.details.push(format!(
+                    "lines {offset}–{}",
+                    offset + limit.saturating_sub(1)
+                )),
+                (Some(offset), None) => cell.details.push(format!("from line {offset}")),
+                (None, Some(limit)) => cell.details.push(format!("first {limit} lines")),
+                (None, None) => {}
+            }
+            if let Some(pages) = field("pages") {
+                cell.details.push(format!("pages {pages}"));
+            }
+        }
+        "NotebookEdit" => {
+            cell.name = "edit notebook".into();
+            cell.title = field("notebook_path").unwrap_or_default();
+            cell.input = field("new_source").unwrap_or_default();
+        }
+        "view_image" => {
+            cell.name = "view image".into();
+            cell.title = field("path").unwrap_or_default();
         }
         "Glob" | "Grep" => {
+            cell.name = name.to_lowercase();
             cell.title = field("pattern").unwrap_or_default();
             if let Some(path) = field("path") {
                 cell.title = format!("{} in {path}", cell.title);
             }
+            for key in ["glob", "type", "output_mode"] {
+                if let Some(value) = field(key) {
+                    cell.details.push(format!("{key} {value}"));
+                }
+            }
         }
-        "WebSearch" | "web_search" => cell.title = field("query").unwrap_or_default(),
-        "WebFetch" => cell.title = field("url").unwrap_or_default(),
+        "WebSearch" | "web_search" => {
+            cell.name = "search".into();
+            cell.title = field("query").unwrap_or_default();
+        }
+        "WebFetch" => {
+            cell.name = "fetch".into();
+            cell.title = field("url").unwrap_or_default();
+        }
         "spawn_agent" => {
             cell.name = "spawn agent".into();
             cell.title = field("role").unwrap_or_default();
             cell.input = field("task").unwrap_or_default();
+            for key in ["model", "thinking", "harness"] {
+                if let Some(value) = field(key) {
+                    cell.details.push(value);
+                }
+            }
         }
         "send_agent_message" => {
             cell.name = "message agent".into();
             cell.title = arguments
                 .get("agent_id")
-                .map(Value::to_string)
+                .map(|id| {
+                    format!(
+                        "#{}",
+                        id.as_str().map_or_else(|| id.to_string(), str::to_owned)
+                    )
+                })
                 .unwrap_or_default();
             cell.input = field("message").unwrap_or_default();
+            for key in ["purpose", "priority"] {
+                if let Some(value) = field(key) {
+                    cell.details.push(value);
+                }
+            }
         }
         "wait_agent" => cell.name = "wait for agents".into(),
-        _ => {
-            cell.title = match arguments {
-                Value::Object(map) if map.is_empty() => String::new(),
+        "list_agents" => cell.name = "list agents".into(),
+        "close_agent" => cell.name = "close agent".into(),
+        "interrupt_agent" => cell.name = "interrupt agent".into(),
+        "submit_result" => {
+            cell.name = "submit result".into();
+            cell.input = match &arguments["output"] {
+                Value::String(text) => text.clone(),
                 Value::Null => String::new(),
-                other => other.to_string(),
+                other => serde_json::to_string_pretty(other).unwrap_or_else(|_| other.to_string()),
             };
         }
+        "runners" => {
+            cell.name = "runner".into();
+            cell.title = ["action", "name", "url", "address"]
+                .into_iter()
+                .filter_map(field)
+                .collect::<Vec<_>>()
+                .join(" ");
+        }
+        "update_plan" => {
+            cell.name = "plan".into();
+            cell.title = field("explanation").unwrap_or_default();
+            cell.input = steps(&arguments["plan"], "step");
+        }
+        "TodoWrite" => {
+            cell.name = "todos".into();
+            cell.input = steps(&arguments["todos"], "content");
+        }
+        name if name.starts_with("mcp__") => {
+            cell.name = humanize_tool(name);
+            if let Some(code) = field("code") {
+                cell.title = field("title").unwrap_or_default();
+                cell.input = code;
+                cell.input_body = ToolBody::Code;
+                cell.language = "js".into();
+            } else {
+                cell.title = compact(arguments);
+            }
+        }
+        _ => cell.title = compact(arguments),
     }
+    if let Some(workdir) = workdir {
+        cell.details.push(format!(
+            "in {}",
+            shorten_home(std::path::Path::new(&workdir))
+        ));
+    }
+}
+
+fn compact(arguments: &Value) -> String {
+    match arguments {
+        Value::Object(map) if map.is_empty() => String::new(),
+        Value::Null => String::new(),
+        other => other.to_string(),
+    }
+}
+
+fn steps(items: &Value, key: &str) -> String {
+    items
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|item| {
+            let marker = match item["status"].as_str() {
+                Some("completed") => "✓",
+                Some("in_progress") => "▸",
+                _ => "○",
+            };
+            format!("{marker} {}", item[key].as_str().unwrap_or_default())
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+pub fn runner_routes(runtime: &nanocode::Nanocodex) -> Vec<RunnerRoute> {
+    runtime
+        .list_runners()
+        .into_iter()
+        .map(|runner| RunnerRoute {
+            replace: runner.mode == nanocode::code_mode::attachment::RemoteMode::Replace,
+            name: runner.name,
+        })
+        .collect()
 }
 
 fn prompt_text(input: &Value) -> String {
@@ -452,19 +1127,6 @@ fn collect_text(value: &Value, texts: &mut Vec<String>) {
         }
         _ => {}
     }
-}
-
-fn output_text(payload: &Value) -> String {
-    if let Some(output) = payload["structured_result"]
-        .get("output")
-        .and_then(Value::as_str)
-    {
-        return output.to_owned();
-    }
-    let mut texts = Vec::new();
-    collect_text(&payload["result"], &mut texts);
-    let text = texts.concat();
-    humanize(strip_code_header(&text))
 }
 
 pub fn humanize(text: &str) -> String {
@@ -545,14 +1207,11 @@ fn agent_lines(value: &Value, lines: &mut Vec<String>) {
     }
 }
 
-pub fn clean_output(text: &str) -> String {
-    humanize(strip_code_header(text))
-}
-
 fn strip_code_header(text: &str) -> &str {
     let Some(rest) = text
-        .strip_prefix("Script completed\n")
-        .or_else(|| text.strip_prefix("Script failed\n"))
+        .split_once('\n')
+        .filter(|(status, rest)| status.starts_with("Script ") && rest.starts_with("Wall time"))
+        .map(|(_, rest)| rest)
     else {
         return text;
     };

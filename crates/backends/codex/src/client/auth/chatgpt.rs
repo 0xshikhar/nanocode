@@ -5,7 +5,7 @@ use std::{
     io::{self, ErrorKind, Write},
     path::{Path, PathBuf},
     sync::{Arc, RwLock},
-    time::{SystemTime, UNIX_EPOCH},
+    time::UNIX_EPOCH,
 };
 
 use super::{
@@ -909,7 +909,7 @@ fn jwt_expiration(jwt: &str) -> Option<i64> {
 }
 
 fn unix_now() -> i64 {
-    SystemTime::now()
+    nanocode_platform::system_time()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| {
             i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)

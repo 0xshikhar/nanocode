@@ -136,6 +136,7 @@ impl AgentTree {
         spinner: &str,
         selected: Option<usize>,
     ) -> Vec<Line<'static>> {
+        let _span = tracing::info_span!("tui.tree.layout", nodes = self.nodes.len()).entered();
         self.ordered()
             .into_iter()
             .enumerate()

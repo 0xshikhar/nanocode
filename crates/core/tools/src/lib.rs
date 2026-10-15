@@ -149,7 +149,8 @@ pub enum ToolInputError {
     Decode(#[source] serde_json::Error),
 }
 
-#[async_trait]
+#[cfg_attr(not(target_family = "wasm"), async_trait)]
+#[cfg_attr(target_family = "wasm", async_trait(?Send))]
 pub trait Tool: Send + Sync + 'static {
     fn definition(&self) -> ToolDefinition;
 

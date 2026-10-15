@@ -1,4 +1,4 @@
-use std::{rc::Rc, time::Duration};
+use std::{borrow::Cow, rc::Rc, time::Duration};
 
 use ratatui::{
     buffer::Buffer,
@@ -11,6 +11,7 @@ use ratatui::{
 use syntect::easy::HighlightLines;
 
 use crate::{
+    beautify::beautify,
     diff,
     format::{format_duration, sanitize_terminal_text, sanitize_terminal_text_inline},
     highlight, markdown,
@@ -23,6 +24,35 @@ pub enum ToolStatus {
     Completed,
     Failed,
     Cancelled,
+    Yielded,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum DisplayMode {
+    #[default]
+    Collapsed,
+    Beautified,
+    Raw,
+}
+
+impl DisplayMode {
+    #[must_use]
+    pub const fn next(self) -> Self {
+        match self {
+            Self::Collapsed => Self::Beautified,
+            Self::Beautified => Self::Raw,
+            Self::Raw => Self::Collapsed,
+        }
+    }
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Collapsed => "collapsed",
+            Self::Beautified => "beautified",
+            Self::Raw => "raw",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -51,6 +81,11 @@ pub struct ToolCell {
     pub status: ToolStatus,
     pub duration: Option<Duration>,
     pub depth: usize,
+    pub raw_output: String,
+    pub language: String,
+    pub exit_code: Option<i64>,
+    pub details: Vec<String>,
+    pub children: Vec<Self>,
 }
 
 impl ToolCell {
@@ -67,7 +102,43 @@ impl ToolCell {
             status: ToolStatus::Running,
             duration: None,
             depth: 0,
+            raw_output: String::new(),
+            language: String::new(),
+            exit_code: None,
+            details: Vec::new(),
+            children: Vec::new(),
         }
+    }
+
+    pub fn find_mut(&mut self, call_id: &str) -> Option<&mut Self> {
+        if self.call_id == call_id {
+            return Some(self);
+        }
+        self.children
+            .iter_mut()
+            .find_map(|child| child.find_mut(call_id))
+    }
+
+    #[must_use]
+    pub fn contains(&self, call_id: &str) -> bool {
+        self.call_id == call_id || self.children.iter().any(|child| child.contains(call_id))
+    }
+
+    fn running(&self) -> bool {
+        self.status == ToolStatus::Running || self.children.iter().any(Self::running)
+    }
+
+    fn finish_running(&mut self, status: ToolStatus) {
+        if self.status == ToolStatus::Running {
+            self.status = status;
+        }
+        for child in &mut self.children {
+            child.finish_running(status);
+        }
+    }
+
+    fn unsuccessful(&self) -> bool {
+        matches!(self.status, ToolStatus::Failed) || self.exit_code.is_some_and(|code| code != 0)
     }
 }
 
@@ -92,12 +163,32 @@ struct Cell {
     revision: u64,
 }
 
+const SPINNER_SLOT: &str = "\u{0}";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct CacheKey {
     width: u16,
     revision: u64,
-    expanded: bool,
+    mode: DisplayMode,
     reasoning: bool,
+}
+
+#[derive(Clone)]
+struct Layout {
+    key: CacheKey,
+    lines: Rc<Vec<Line<'static>>>,
+    spinners: Rc<[(usize, usize)]>,
+    highlights: Rc<markdown::Highlights>,
+}
+
+impl Layout {
+    fn line(&self, row: usize, spinner: &str) -> Line<'static> {
+        let mut line = self.lines[row].clone();
+        for (_, span) in self.spinners.iter().filter(|(slot, _)| *slot == row) {
+            line.spans[*span].content = Cow::Owned(spinner.to_owned());
+        }
+        line
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -108,14 +199,17 @@ pub struct TranscriptPolicy {
 
 pub struct Transcript {
     cells: Vec<Cell>,
-    cache: Vec<Option<(CacheKey, Rc<Vec<Line<'static>>>)>>,
+    cache: Vec<Option<Layout>>,
     revision: u64,
     scroll: usize,
-    expanded: bool,
+    mode: DisplayMode,
     reasoning: bool,
     policy: TranscriptPolicy,
     last_height: usize,
-    last_total: usize,
+    last_total: Option<usize>,
+    last_width: u16,
+    theme: Option<Theme>,
+    anchor: Option<(usize, usize)>,
 }
 
 impl Transcript {
@@ -126,11 +220,14 @@ impl Transcript {
             cache: Vec::new(),
             revision: 0,
             scroll: 0,
-            expanded: false,
+            mode: DisplayMode::Collapsed,
             reasoning: false,
             policy,
             last_height: 0,
-            last_total: 0,
+            last_total: None,
+            last_width: 0,
+            theme: None,
+            anchor: None,
         }
     }
 
@@ -148,6 +245,8 @@ impl Transcript {
         self.cells.clear();
         self.cache.clear();
         self.scroll = 0;
+        self.last_total = None;
+        self.anchor = None;
     }
 
     pub fn push(&mut self, kind: CellKind) -> usize {
@@ -157,6 +256,7 @@ impl Transcript {
             revision: self.revision,
         });
         self.cache.push(None);
+        self.last_total = None;
         self.cells.len() - 1
     }
 
@@ -172,6 +272,7 @@ impl Transcript {
         change(&mut cell.kind);
         self.revision += 1;
         cell.revision = self.revision;
+        self.last_total = None;
         true
     }
 
@@ -197,16 +298,15 @@ impl Transcript {
     pub fn find_tool(&self, call_id: &str) -> Option<usize> {
         self.cells
             .iter()
-            .rposition(|cell| matches!(&cell.kind, CellKind::Tool(tool) if tool.call_id == call_id))
+            .rposition(|cell| matches!(&cell.kind, CellKind::Tool(tool) if tool.contains(call_id)))
     }
 
     pub fn finish_running_tools(&mut self, status: ToolStatus) {
         for index in 0..self.cells.len() {
-            if matches!(&self.cells[index].kind, CellKind::Tool(tool) if tool.status == ToolStatus::Running)
-            {
+            if matches!(&self.cells[index].kind, CellKind::Tool(tool) if tool.running()) {
                 self.update(index, |kind| {
                     if let CellKind::Tool(tool) = kind {
-                        tool.status = status;
+                        tool.finish_running(status);
                     }
                 });
             }
@@ -215,11 +315,32 @@ impl Transcript {
 
     #[must_use]
     pub const fn expanded(&self) -> bool {
-        self.expanded
+        !matches!(self.mode, DisplayMode::Collapsed)
     }
 
     pub const fn toggle_expanded(&mut self) {
-        self.expanded = !self.expanded;
+        self.mode = if self.expanded() {
+            DisplayMode::Collapsed
+        } else {
+            DisplayMode::Beautified
+        };
+        self.last_total = None;
+    }
+
+    #[must_use]
+    pub const fn mode(&self) -> DisplayMode {
+        self.mode
+    }
+
+    pub const fn set_mode(&mut self, mode: DisplayMode) {
+        self.mode = mode;
+        self.last_total = None;
+    }
+
+    pub const fn cycle_mode(&mut self) -> DisplayMode {
+        self.mode = self.mode.next();
+        self.last_total = None;
+        self.mode
     }
 
     #[must_use]
@@ -229,6 +350,7 @@ impl Transcript {
 
     pub const fn toggle_reasoning(&mut self) {
         self.reasoning = !self.reasoning;
+        self.last_total = None;
     }
 
     #[must_use]
@@ -236,25 +358,64 @@ impl Transcript {
         self.scroll == 0
     }
 
-    pub const fn scroll_up(&mut self, lines: usize) {
-        let limit = self.last_total.saturating_sub(self.last_height);
-        self.scroll = if self.scroll + lines > limit {
-            limit
-        } else {
-            self.scroll + lines
-        };
+    fn limit(&mut self, needed: usize) -> Option<usize> {
+        if self.last_total.is_none() {
+            let _span = tracing::info_span!(
+                "tui.transcript.extent",
+                cells = self.cells.len(),
+                needed,
+                cached = false
+            )
+            .entered();
+            let Some(theme) = self.theme.take() else {
+                return Some(0);
+            };
+            let mut total = 0;
+            let mut index = self.cells.len();
+            while index > 0 && total < needed {
+                index -= 1;
+                total += self.layout(index, self.last_width, &theme).lines.len();
+            }
+            self.theme = Some(theme);
+            if index == 0 {
+                self.last_total = Some(total);
+            }
+        }
+        self.last_total
+            .map(|total| total.saturating_sub(self.last_height))
     }
 
-    pub const fn scroll_down(&mut self, lines: usize) {
-        self.scroll = self.scroll.saturating_sub(lines);
+    #[must_use]
+    pub const fn scroll_offset(&self) -> usize {
+        self.scroll
+    }
+
+    pub fn scroll_up(&mut self, lines: usize) {
+        let scroll = self.scroll.saturating_add(lines);
+        let needed = scroll.saturating_add(self.last_height);
+        self.scroll = self.limit(needed).map_or(scroll, |limit| scroll.min(limit));
+    }
+
+    pub fn scroll_down(&mut self, lines: usize) {
+        if self.scroll == 0 {
+            return;
+        }
+        let needed = self.scroll.saturating_add(self.last_height);
+        let scroll = self
+            .limit(needed)
+            .map_or(self.scroll, |limit| self.scroll.min(limit));
+        self.scroll = scroll.saturating_sub(lines);
     }
 
     pub const fn scroll_to_bottom(&mut self) {
         self.scroll = 0;
     }
 
-    pub const fn scroll_to_top(&mut self) {
-        self.scroll = self.last_total.saturating_sub(self.last_height);
+    pub fn scroll_to_top(&mut self) {
+        if let (Some(limit), Some(total)) = (self.limit(usize::MAX), self.last_total) {
+            self.scroll = limit;
+            self.anchor = Some((0, total));
+        }
     }
 
     #[must_use]
@@ -266,28 +427,32 @@ impl Transcript {
         }
     }
 
-    fn cell_lines(
-        &mut self,
-        index: usize,
-        width: u16,
-        theme: &Theme,
-        spinner: &str,
-    ) -> Rc<Vec<Line<'static>>> {
+    fn layout(&mut self, index: usize, width: u16, theme: &Theme) -> Layout {
         let cell = &self.cells[index];
-        let running = matches!(&cell.kind, CellKind::Tool(tool) if tool.status == ToolStatus::Running)
-            || matches!(&cell.kind, CellKind::Btw { done: false, .. });
         let key = CacheKey {
             width,
             revision: cell.revision,
-            expanded: self.expanded,
+            mode: self.mode,
             reasoning: self.reasoning,
         };
-        if !running
-            && let Some((cached, lines)) = &self.cache[index]
-            && *cached == key
+        if let Some(layout) = &self.cache[index]
+            && layout.key == key
         {
-            return Rc::clone(lines);
+            return layout.clone();
         }
+        let span = tracing::info_span!(
+            "tui.transcript.layout",
+            cell.index = index,
+            cell.revision = cell.revision,
+            width,
+            mode = self.mode.label(),
+            layout.lines = tracing::field::Empty
+        );
+        let _entered = span.enter();
+        let mut highlights = self.cache[index]
+            .take()
+            .map(|layout| Rc::unwrap_or_clone(layout.highlights))
+            .unwrap_or_default();
         let mut lines = Vec::new();
         if index > 0 {
             lines.push(Line::default());
@@ -295,46 +460,126 @@ impl Transcript {
         let context = RenderContext {
             width,
             theme,
-            spinner,
-            expanded: self.expanded,
-            reasoning: self.reasoning || self.expanded,
+            mode: self.mode,
+            reasoning: self.reasoning || self.mode != DisplayMode::Collapsed,
             preview: self.policy.collapsed_preview_lines,
             diff_preview: self.policy.collapsed_diff_lines,
         };
-        context.render(&cell.kind, &mut lines);
-        let lines = Rc::new(lines);
-        if !running {
-            self.cache[index] = Some((key, Rc::clone(&lines)));
+        context.render(&cell.kind, &mut lines, &mut highlights);
+        let spinners = lines
+            .iter()
+            .enumerate()
+            .flat_map(|(row, line)| {
+                line.spans
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, span)| span.content == SPINNER_SLOT)
+                    .map(move |(span, _)| (row, span))
+            })
+            .collect::<Rc<[_]>>();
+        let layout = Layout {
+            key,
+            lines: Rc::new(lines),
+            spinners,
+            highlights: Rc::new(highlights),
+        };
+        span.record("layout.lines", layout.lines.len());
+        self.cache[index] = Some(layout.clone());
+        layout
+    }
+
+    fn extend(
+        &mut self,
+        layouts: &mut Vec<Layout>,
+        total: &mut usize,
+        needed: usize,
+        floor: usize,
+        width: u16,
+        theme: &Theme,
+    ) {
+        let mut index = self.cells.len() - layouts.len();
+        while index > 0 && (*total < needed || index > floor) {
+            index -= 1;
+            let layout = self.layout(index, width, theme);
+            *total += layout.lines.len();
+            layouts.push(layout);
         }
-        lines
     }
 
     pub fn render(&mut self, area: Rect, buffer: &mut Buffer, theme: &Theme, spinner: &str) {
+        let span = tracing::info_span!(
+            "tui.transcript.render",
+            width = area.width,
+            height = area.height,
+            cells = self.cells.len(),
+            mode = self.mode.label(),
+            scroll.before = self.scroll,
+            scroll.after = tracing::field::Empty,
+            layout.visited_cells = tracing::field::Empty
+        );
+        let _entered = span.enter();
         if area.width == 0 || area.height == 0 {
             return;
         }
         let width = area.width;
         let height = usize::from(area.height);
-        let rendered = (0..self.cells.len())
-            .map(|index| self.cell_lines(index, width, theme, spinner))
-            .collect::<Vec<_>>();
-        let total = rendered.iter().map(|lines| lines.len()).sum::<usize>();
-        if self.scroll > 0 && total > self.last_total && self.last_total > 0 {
-            self.scroll += total - self.last_total;
+        self.last_width = width;
+        if self.theme.as_ref() != Some(theme) {
+            self.cache.iter_mut().for_each(|entry| *entry = None);
+            self.theme = Some(theme.clone());
         }
-        self.last_total = total;
+        let count = self.cells.len();
+        let floor = match self.anchor {
+            Some((first, _)) if self.scroll > 0 => first.min(count),
+            _ => count,
+        };
+        let mut layouts = Vec::new();
+        let mut total = 0;
+        self.extend(
+            &mut layouts,
+            &mut total,
+            self.scroll.saturating_add(height),
+            floor,
+            width,
+            theme,
+        );
+        if self.scroll > 0
+            && let Some((first, lines)) = self.anchor
+            && first <= count
+            && count - first <= layouts.len()
+        {
+            let since = layouts[..count - first]
+                .iter()
+                .map(|layout| layout.lines.len())
+                .sum::<usize>();
+            self.scroll += since.saturating_sub(lines);
+        }
+        self.extend(
+            &mut layouts,
+            &mut total,
+            self.scroll.saturating_add(height),
+            count,
+            width,
+            theme,
+        );
+        let first = count - layouts.len();
+        span.record("layout.visited_cells", layouts.len());
+        self.anchor = Some((first, total));
+        self.last_total = (first == 0).then_some(total);
         self.last_height = height;
         self.scroll = self.scroll.min(total.saturating_sub(height));
+        span.record("scroll.after", self.scroll);
         let end = total - self.scroll;
         let start = end.saturating_sub(height);
         let mut visible = Vec::with_capacity(end - start);
         let mut offset = 0;
-        for lines in &rendered {
-            let next = offset + lines.len();
+        for layout in layouts.iter().rev() {
+            let count = layout.lines.len();
+            let next = offset + count;
             if next > start && offset < end {
                 let from = start.saturating_sub(offset);
-                let to = (end - offset).min(lines.len());
-                visible.extend(lines[from..to].iter().cloned());
+                let to = (end - offset).min(count);
+                visible.extend((from..to).map(|row| layout.line(row, spinner)));
             }
             offset = next;
             if offset >= end {
@@ -370,15 +615,19 @@ struct Gutter {
 struct RenderContext<'a> {
     width: u16,
     theme: &'a Theme,
-    spinner: &'a str,
-    expanded: bool,
+    mode: DisplayMode,
     reasoning: bool,
     preview: usize,
     diff_preview: usize,
 }
 
 impl RenderContext<'_> {
-    fn render(&self, kind: &CellKind, lines: &mut Vec<Line<'static>>) {
+    fn render(
+        &self,
+        kind: &CellKind,
+        lines: &mut Vec<Line<'static>>,
+        highlights: &mut markdown::Highlights,
+    ) {
         let theme = self.theme;
         match kind {
             CellKind::User(text) => {
@@ -402,7 +651,9 @@ impl RenderContext<'_> {
                 );
             }
             CellKind::Assistant(text) => {
-                let body = markdown::render(text, self.width.saturating_sub(2), theme).lines;
+                let body =
+                    markdown::render_with(text, self.width.saturating_sub(2), theme, highlights)
+                        .lines;
                 prefixed(
                     lines,
                     body,
@@ -443,7 +694,7 @@ impl RenderContext<'_> {
                     );
                 }
             }
-            CellKind::Tool(tool) => self.tool(tool, lines),
+            CellKind::Tool(tool) => self.tool(tool, tool.depth, false, lines),
             CellKind::Notice(level, text) => {
                 let (icon, color) = match level {
                     NoticeLevel::Info => ("ℹ ", theme.muted()),
@@ -468,21 +719,27 @@ impl RenderContext<'_> {
                 done,
             } => {
                 let bar = Style::default().fg(theme.thinking_medium());
-                let header = if *done {
-                    "btw".to_owned()
-                } else {
-                    format!("btw {}", self.spinner)
-                };
-                lines.push(Line::from(vec![
+                let mut header = vec![
                     Span::styled("┃ ", bar),
-                    Span::styled(header, bar.add_modifier(Modifier::BOLD)),
-                    Span::styled(
-                        format!("  {}", sanitize_terminal_text_inline(question)),
-                        Style::default().fg(theme.muted()),
-                    ),
-                ]));
+                    Span::styled("btw", bar.add_modifier(Modifier::BOLD)),
+                ];
+                if !*done {
+                    header.push(Span::raw(" "));
+                    header.push(Span::styled(SPINNER_SLOT, bar.add_modifier(Modifier::BOLD)));
+                }
+                header.push(Span::styled(
+                    format!("  {}", sanitize_terminal_text_inline(question)),
+                    Style::default().fg(theme.muted()),
+                ));
+                lines.push(Line::from(header));
                 if !answer.is_empty() {
-                    let body = markdown::render(answer, self.width.saturating_sub(2), theme).lines;
+                    let body = markdown::render_with(
+                        answer,
+                        self.width.saturating_sub(2),
+                        theme,
+                        highlights,
+                    )
+                    .lines;
                     prefixed(
                         lines,
                         body,
@@ -503,20 +760,24 @@ impl RenderContext<'_> {
         }
     }
 
-    fn tool(&self, tool: &ToolCell, lines: &mut Vec<Line<'static>>) {
+    fn tool(&self, tool: &ToolCell, depth: usize, nested: bool, lines: &mut Vec<Line<'static>>) {
         let theme = self.theme;
-        let indent = "  ".repeat(tool.depth);
+        let indent = "  ".repeat(depth);
         let (icon, color) = match tool.status {
-            ToolStatus::Running => (self.spinner, theme.accent()),
+            ToolStatus::Running => (SPINNER_SLOT, theme.accent()),
+            ToolStatus::Completed if tool.unsuccessful() => ("✗", theme.thinking_max()),
             ToolStatus::Completed => ("✓", theme.thinking_low()),
             ToolStatus::Failed => ("✗", theme.thinking_max()),
             ToolStatus::Cancelled => ("⊘", theme.muted()),
+            ToolStatus::Yielded => ("↻", theme.accent()),
         };
+        let muted = Style::default().fg(theme.muted());
         let mut header = vec![
             Span::raw(indent.clone()),
-            Span::styled(format!("{icon} "), Style::default().fg(color)),
+            Span::styled(icon, Style::default().fg(color)),
+            Span::raw(" "),
             Span::styled(
-                tool.name.clone(),
+                sanitize_terminal_text_inline(&tool.name).into_owned(),
                 Style::default()
                     .fg(theme.text())
                     .add_modifier(Modifier::BOLD),
@@ -525,7 +786,7 @@ impl RenderContext<'_> {
         if !tool.title.is_empty() {
             header.push(Span::styled(
                 format!(" {}", sanitize_terminal_text_inline(&tool.title)),
-                Style::default().fg(theme.muted()),
+                muted,
             ));
         }
         if let Some(duration) = tool.duration {
@@ -534,41 +795,81 @@ impl RenderContext<'_> {
                     " · {}",
                     format_duration(u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX))
                 ),
-                Style::default().fg(theme.muted()),
+                muted,
+            ));
+        }
+        if let Some(code) = tool.exit_code.filter(|code| *code != 0) {
+            header.push(Span::styled(
+                format!(" · exit {code}"),
+                Style::default().fg(theme.thinking_max()),
+            ));
+        }
+        for detail in &tool.details {
+            header.push(Span::styled(
+                format!(" · {}", sanitize_terminal_text_inline(detail)),
+                muted,
             ));
         }
         lines.push(Line::from(header));
+        let collapsed = self.mode == DisplayMode::Collapsed;
         let inner = self
             .width
             .saturating_sub(u16::try_from(indent.len() + 4).unwrap_or(u16::MAX));
         let gutter = Style::default().fg(theme.border());
-        if !tool.input.trim().is_empty() {
-            let body = self.body(&tool.input, tool.input_body, inner);
-            let limit = self.limit(tool.input_body);
+        let show_input = !nested || !collapsed || tool.input_body == ToolBody::Diff;
+        if show_input && !tool.input.trim().is_empty() {
+            let input = match (tool.input_body, self.mode) {
+                (ToolBody::Code, DisplayMode::Collapsed | DisplayMode::Beautified)
+                    if matches!(tool.language.as_str(), "js" | "javascript") =>
+                {
+                    Cow::Owned(beautify(&tool.input, "  "))
+                }
+                _ => Cow::Borrowed(tool.input.as_str()),
+            };
+            let body = self.body(&input, tool.input_body, &tool.language, inner);
             let gutter = Gutter {
                 first: format!("{indent}  │ "),
                 rest: format!("{indent}  │ "),
                 style: gutter,
             };
-            self.preview(lines, body, limit, &gutter, false);
+            self.preview(lines, body, self.limit(tool.input_body), &gutter, false);
         }
-        if !tool.output.trim().is_empty() {
-            let body = self.body(&tool.output, tool.output_body, inner);
-            let limit = self.limit(tool.output_body);
+        for child in &tool.children {
+            self.tool(child, depth + 1, true, lines);
+        }
+        let output = match self.mode {
+            DisplayMode::Raw if !tool.raw_output.is_empty() => tool.raw_output.as_str(),
+            _ => tool.output.as_str(),
+        };
+        let show_output = !nested || !collapsed || tool.unsuccessful();
+        if show_output && !output.trim().is_empty() {
+            let body = if self.mode == DisplayMode::Raw {
+                self.body(output, ToolBody::Text, "", inner)
+            } else {
+                self.body(output, tool.output_body, &tool.language, inner)
+            };
             let gutter = Gutter {
                 first: format!("{indent}  └ "),
                 rest: format!("{indent}    "),
                 style: gutter,
             };
-            self.preview(lines, body, limit, &gutter, true);
+            self.preview(lines, body, self.limit(tool.output_body), &gutter, true);
         }
     }
 
-    fn body(&self, text: &str, body: ToolBody, width: u16) -> Vec<Line<'static>> {
+    fn body(&self, text: &str, body: ToolBody, language: &str, width: u16) -> Vec<Line<'static>> {
+        let _span = tracing::info_span!(
+            "tui.tool.format",
+            text.bytes = text.len(),
+            ?body,
+            width,
+            mode = self.mode.label()
+        )
+        .entered();
         let text = sanitize_terminal_text(text.trim_end());
         match body {
             ToolBody::Diff => diff::render(&text, width, self.theme),
-            ToolBody::Code => code_lines(&text, "js", width),
+            ToolBody::Code => code_lines(&text, language, width),
             ToolBody::Text => markdown::wrap_plain_preserving_whitespace(
                 &text,
                 width,
@@ -593,10 +894,10 @@ impl RenderContext<'_> {
         tail: bool,
     ) {
         let total = body.len();
-        let limit = if self.expanded {
-            total
-        } else {
+        let limit = if self.mode == DisplayMode::Collapsed {
             preview.min(total)
+        } else {
+            total
         };
         let hidden = total - limit;
         let mut shown: Vec<Line<'static>> = if tail {
@@ -627,6 +928,13 @@ impl RenderContext<'_> {
 }
 
 fn code_lines(text: &str, language: &str, width: u16) -> Vec<Line<'static>> {
+    let _span = tracing::info_span!(
+        "tui.code.highlight",
+        text.bytes = text.len(),
+        width,
+        language
+    )
+    .entered();
     let assets = highlight::assets();
     let syntax = highlight::syntax_for_token(&assets.syntaxes, language);
     let mut highlighter = HighlightLines::new(syntax, highlight::theme());

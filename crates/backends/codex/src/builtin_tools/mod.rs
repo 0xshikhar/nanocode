@@ -55,29 +55,22 @@ pub fn tool_runtime(
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 pub fn handlers(
     web: Option<WebSearchConfig>,
     image: Option<ImageGenerationConfig>,
     client: reqwest::Client,
 ) -> Vec<std::sync::Arc<dyn Tool>> {
-    #[cfg(not(target_family = "wasm"))]
-    {
-        let mut tools: Vec<std::sync::Arc<dyn Tool>> = Vec::new();
-        if let Some(config) = web {
-            tools.push(std::sync::Arc::new(
-                web_search::WebSearchHandler::with_client(config, client.clone()),
-            ));
-        }
-        if let Some(config) = image {
-            tools.push(std::sync::Arc::new(
-                image_generation::ImageGenerationHandler::with_client(config, client),
-            ));
-        }
-        tools
+    let mut tools: Vec<std::sync::Arc<dyn Tool>> = Vec::new();
+    if let Some(config) = web {
+        tools.push(std::sync::Arc::new(
+            web_search::WebSearchHandler::with_client(config, client.clone()),
+        ));
     }
-    #[cfg(target_family = "wasm")]
-    {
-        let _ = (web, image, client);
-        Vec::new()
+    if let Some(config) = image {
+        tools.push(std::sync::Arc::new(
+            image_generation::ImageGenerationHandler::with_client(config, client),
+        ));
     }
+    tools
 }

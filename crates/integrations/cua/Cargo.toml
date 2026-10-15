@@ -11,7 +11,7 @@ publish.workspace = true
 description = "Thin MCP transport for the official external Sky computer provider"
 include = ["src/**", "Cargo.toml"]
 
-[dependencies]
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
 nanocode-tools.workspace = true
 async-trait.workspace = true
 base64.workspace = true

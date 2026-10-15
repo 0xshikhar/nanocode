@@ -263,6 +263,6 @@ fn spawn_driver(driver: impl Future<Output = ()> + Send + 'static) -> crate::Res
 
 #[cfg(target_family = "wasm")]
 fn spawn_driver(driver: impl Future<Output = ()> + 'static) -> crate::Result<()> {
-    wasm_bindgen_futures::spawn_local(driver);
+    nanocode_platform::spawn_local(driver);
     Ok(())
 }

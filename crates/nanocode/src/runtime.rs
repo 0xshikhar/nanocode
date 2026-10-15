@@ -749,7 +749,7 @@ fn persistent_recipe(
                         checkpoint.lineage().clone(),
                     )
                 } else {
-                    let id = uuid::Uuid::now_v7().to_string();
+                    let id = nanocode_platform::uuid_v7().to_string();
                     let lineage = if let Some(parent) = &spec.parent {
                         let parent_lineage = match store.load(parent.session_id()).await {
                             Ok(stored) => stored.summary.record.lineage,
@@ -1010,7 +1010,7 @@ impl Nanocodex {
                     Err(error) => return Err(catalog_error(error)),
                 };
                 let record = crate::durability::SessionRecord::root(
-                    uuid::Uuid::now_v7().to_string(),
+                    nanocode_platform::uuid_v7().to_string(),
                     model.clone(),
                     workspace,
                 )

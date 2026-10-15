@@ -18,6 +18,7 @@ description = "Portable durable execution state and stores for Nanocodex"
 rustdoc-args = ["-D", "warnings"]
 
 [dependencies]
+nanocode-platform.workspace = true
 nanocode-agent.workspace = true
 sha2.workspace = true
 serde.workspace = true
@@ -25,10 +26,6 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync"] }
 uuid.workspace = true
-
-[target.'cfg(target_family = "wasm")'.dependencies]
-wasm-bindgen-futures.workspace = true
-web-time.workspace = true
 
 [lints]
 workspace = true

@@ -22,12 +22,16 @@ mod durable;
 mod images;
 mod shared;
 mod side;
+mod telemetry;
 use crate::execution::{Admission, ClaudeExecutionPolicy, Step};
 pub use durable::{
     ClaudeCheckpointView, decode_checkpoint, decode_session_checkpoint, rewind_checkpoint,
     session_checkpoint,
 };
 use durable::{Cursor, Effect, Snapshot};
+use nanocode_platform::Instant;
+#[cfg(target_family = "wasm")]
+use nanocode_platform::sleep;
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
@@ -42,9 +46,7 @@ use std::{
 use tokio::sync::{Mutex, Notify, oneshot};
 #[cfg(not(target_family = "wasm"))]
 use tokio::time::sleep;
-#[cfg(target_family = "wasm")]
-use wasmtimer::tokio::sleep;
-use web_time::Instant;
+use tracing::Instrument as _;
 
 fn estimate_text_tokens(text: &str) -> u64 {
     (text.encode_utf16().count() as u64).div_ceil(4)
@@ -1132,7 +1134,7 @@ impl ClaudeBuilder {
             .as_ref()
             .map(|policy| policy.state_id().to_owned())
             .or_else(|| self.session_id.clone())
-            .unwrap_or_else(|| uuid::Uuid::now_v7().to_string());
+            .unwrap_or_else(|| nanocode_platform::uuid_v7().to_string());
         let mut recipe = self.clone();
         recipe.session_id = None;
         recipe.restored = None;
@@ -2000,7 +2002,7 @@ async fn web_fetch_with_source<P: crate::tools::web::ApprovedWebFetchSource>(
         return Err("invalid WebFetch prompt or URL".into());
     }
     fn public_url(url: &str) -> bool {
-        let Ok(parsed) = reqwest::Url::parse(url) else {
+        let Ok(parsed) = url::Url::parse(url) else {
             return false;
         };
         matches!(parsed.scheme(), "https" | "http")
@@ -2451,7 +2453,7 @@ impl AgentFactory for ClaudeNativeFactory {
             recipe.effort = state.effort();
             recipe.adaptive_thinking = state.adaptive_thinking.load(Ordering::SeqCst);
             recipe.fast_mode = state.fast_mode.load(Ordering::SeqCst);
-            let child_id = uuid::Uuid::now_v7().to_string();
+            let child_id = nanocode_platform::uuid_v7().to_string();
             let lineage = Lineage::child_of(&state.lineage, state.session_id.as_str(), origin);
             snapshot.lineage = Some(lineage.clone());
             snapshot.conversation_id = Some(state.conversation_id.clone());
@@ -2519,7 +2521,7 @@ impl AgentFactory for ClaudeNativeFactory {
             let mut recipe = recipe;
             let lineage =
                 Lineage::child_of(&state.lineage, state.session_id.as_str(), Origin::Subagent);
-            let child_id = uuid::Uuid::now_v7().to_string();
+            let child_id = nanocode_platform::uuid_v7().to_string();
             state.durable_child(&mut recipe, &child_id, &lineage, "spawn", journal_backed)?;
             recipe.session_id = Some(child_id);
             recipe.lineage = Some(lineage);
@@ -2966,7 +2968,20 @@ async fn start_turn(
             "input": request.prompt.instruction,
         }),
     );
-    state.accepted_turns.fetch_add(1, Ordering::SeqCst);
+    let turn_index = state.accepted_turns.fetch_add(1, Ordering::SeqCst) + 1;
+    let (reasoning_mode, effort) = state.run_labels();
+    let turn_span = telemetry::turn_span(
+        &tracing::Span::current(),
+        &telemetry::TurnLabels {
+            session_id: &state.session_id,
+            lineage: &state.lineage,
+            model: &state.model(),
+            reasoning_mode,
+            effort: &effort,
+            turn_index,
+            prompt_bytes: request.prompt.text_bytes(),
+        },
+    );
     let request_id = request.request_id.clone();
     let key = request.key;
     state.steering.lock().await.insert(
@@ -3000,6 +3015,7 @@ async fn start_turn(
 
     let speed = state.speed();
     let events = request.events.clone();
+    let finished_span = turn_span.clone();
     let task = async move {
         let started = Instant::now();
         let outcome = AssertUnwindSafe(running.run(request, speed, cancellation))
@@ -3007,6 +3023,7 @@ async fn start_turn(
             .await;
         let panicked = outcome.is_err();
         let result = outcome.unwrap_or(Err(NanocodexError::TurnStopped));
+        telemetry::finish_turn(&finished_span, &result);
         if panicked {
             running.stopped.store(true, Ordering::SeqCst);
             for cancel in running.cancellations.lock().await.values() {
@@ -3032,11 +3049,12 @@ async fn start_turn(
         running.idle.notify_waiters();
         running.persistence_ready.notify_waiters();
         let _ = sender.send(result);
-    };
+    }
+    .instrument(turn_span);
     #[cfg(not(target_family = "wasm"))]
     tokio::spawn(task);
     #[cfg(target_family = "wasm")]
-    wasm_bindgen_futures::spawn_local(task);
+    nanocode_platform::spawn_local(task);
     BackendTurn {
         request_id,
         result: Box::pin(async move { receiver.await.unwrap_or(Err(NanocodexError::TurnStopped)) }),
@@ -3132,11 +3150,12 @@ async fn defer_turn(
             .await),
         };
         let _ = sender.send(result);
-    };
+    }
+    .instrument(tracing::Span::current());
     #[cfg(not(target_family = "wasm"))]
     tokio::spawn(task);
     #[cfg(target_family = "wasm")]
-    wasm_bindgen_futures::spawn_local(task);
+    nanocode_platform::spawn_local(task);
     BackendTurn {
         request_id,
         result: Box::pin(async move { receiver.await.unwrap_or(Err(NanocodexError::TurnStopped)) }),
@@ -3517,7 +3536,7 @@ impl State {
         if let Some(initialize) = &self.child_workspace_init {
             let child = recipe
                 .session_id
-                .get_or_insert_with(|| uuid::Uuid::now_v7().to_string());
+                .get_or_insert_with(|| nanocode_platform::uuid_v7().to_string());
             initialize(&self.session_id, child)?;
             if let Some(resolve) = &self.workspace_resolver {
                 recipe.workspace = resolve(child);
@@ -3760,6 +3779,59 @@ impl State {
         index: u32,
         context: ResponseContext<'_>,
     ) -> std::result::Result<ResponseOutcome, ResponseFailure> {
+        let Some(events) = events else {
+            return self
+                .request_response(messages, tools, cancel, None, index, context)
+                .await;
+        };
+        let call_index = index.saturating_add(1);
+        let model = context
+            .template
+            .map_or_else(|| self.model(), |template| template.model.clone());
+        let (reasoning_mode, effort) = self.run_labels();
+        self.emit(
+            events,
+            AgentEventKind::ModelCallStarted,
+            json!({
+                "call_index": call_index,
+                "model": model,
+                "reasoning_mode": reasoning_mode,
+                "effort": effort,
+            }),
+        );
+        let span =
+            telemetry::model_call_span(call_index, &model, reasoning_mode, &effort, messages.len());
+        let started = Instant::now();
+        let outcome = self
+            .request_response(messages, tools, cancel, Some(events), index, context)
+            .instrument(span.clone())
+            .await;
+        let duration_ns = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        let failure = outcome.as_ref().err().map(|failure| &failure.error);
+        telemetry::finish_model_call(&span, duration_ns, failure);
+        if let Some(error) = failure {
+            self.emit(
+                events,
+                AgentEventKind::ModelCallFailed,
+                json!({
+                    "call_index": call_index,
+                    "model": model,
+                    "duration_ns": duration_ns,
+                    "error": error.to_string(),
+                }),
+            );
+        }
+        outcome
+    }
+    async fn request_response(
+        &self,
+        messages: &[Message],
+        tools: Vec<ClaudeToolSpec>,
+        cancel: &Cancellation,
+        events: Option<&AgentEventPublisher>,
+        index: u32,
+        context: ResponseContext<'_>,
+    ) -> std::result::Result<ResponseOutcome, ResponseFailure> {
         let started = Instant::now();
         let elapsed_ns = || u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
         let completed = |response: &crate::MessageResponse,
@@ -3768,6 +3840,16 @@ impl State {
                          first_output: Option<u64>,
                          dispatch: Option<u64>| {
             let Some(events) = events else { return };
+            telemetry::record_model_response(
+                &tracing::Span::current(),
+                response,
+                &telemetry::ModelCallTiming {
+                    attempt,
+                    first_event_ns: first_event,
+                    first_output_ns: first_output,
+                    dispatch_ns: dispatch,
+                },
+            );
 
             let input_tokens = response
                 .usage
@@ -3922,6 +4004,9 @@ impl State {
                 });
             }
             attempt += 1;
+            let attempt_span =
+                telemetry::attempt_span(index.saturating_add(1), attempt, max_attempts);
+            let attempt_started = Instant::now();
             let mut accepted = false;
             let mut published_text = false;
             let mut first_event = None;
@@ -3933,10 +4018,11 @@ impl State {
 
             fill(&mut request, &suffix);
             let opened = tokio::select! {
-                result = client.stream(&request) => result,
-                () = cancel.cancelled() => return Err(ResponseFailure {
-                    error: NanocodexError::TurnCancelled, recovery,
-                }),
+                result = client.stream(&request).instrument(attempt_span.clone()) => result,
+                () = cancel.cancelled() => {
+                    telemetry::cancel_attempt(&attempt_span);
+                    return Err(ResponseFailure { error: NanocodexError::TurnCancelled, recovery });
+                }
             };
             request.messages = Vec::new();
             let result = match opened {
@@ -3947,9 +4033,10 @@ impl State {
                     loop {
                         let event = tokio::select! {
                             event = stream.next() => event,
-                            () = cancel.cancelled() => return Err(ResponseFailure {
-                                error: NanocodexError::TurnCancelled, recovery,
-                            }),
+                            () = cancel.cancelled() => {
+                                telemetry::cancel_attempt(&attempt_span);
+                                return Err(ResponseFailure { error: NanocodexError::TurnCancelled, recovery });
+                            }
                         };
                         let event = match event {
                             Some(Ok(event)) => event,
@@ -4000,8 +4087,19 @@ impl State {
                     }
                 }
             };
+            telemetry::record_attempt(
+                &attempt_span,
+                &telemetry::AttemptTiming {
+                    accepted,
+                    first_event_ns: first_event,
+                    first_output_ns: first_output,
+                    duration_ns: u64::try_from(attempt_started.elapsed().as_nanos())
+                        .unwrap_or(u64::MAX),
+                },
+            );
             let error = match result {
                 Ok(response) => {
+                    telemetry::complete_attempt(&attempt_span);
                     if let Some(effect) = active_effect {
                         effect
                             .complete(serde_json::to_value(&response).map_err(provider_error)?)
@@ -4045,6 +4143,7 @@ impl State {
                 || (uncertain && recovery.is_some())
                 || delay > Duration::from_secs(60)
             {
+                telemetry::fail_attempt(&attempt_span, &error, None, retry_after.is_some());
                 return Err(ResponseFailure {
                     error: NanocodexError::Response(nanocode_agent::BackendError(Box::new(error))),
                     recovery: if uncertain || upgrade.is_some() {
@@ -4054,6 +4153,9 @@ impl State {
                     },
                 });
             }
+            let delay_ns = u64::try_from(delay.as_nanos()).unwrap_or(u64::MAX);
+            telemetry::fail_attempt(&attempt_span, &error, Some(delay_ns), retry_after.is_some());
+            drop(attempt_span);
             if let Some(events) = events {
                 self.emit(
                     events,
@@ -4063,7 +4165,7 @@ impl State {
                         "attempt": attempt,
                         "next_attempt": attempt + 1,
                         "max_attempts": max_attempts,
-                        "delay_ns": u64::try_from(delay.as_nanos()).unwrap_or(u64::MAX),
+                        "delay_ns": delay_ns,
                         "server_requested_delay": retry_after.is_some(),
                         "error": error.to_string(),
                     }),
@@ -4560,7 +4662,7 @@ impl State {
             .to_owned();
         let item = id
             .clone()
-            .unwrap_or_else(|| uuid::Uuid::now_v7().to_string());
+            .unwrap_or_else(|| nanocode_platform::uuid_v7().to_string());
         self.emit(
             &turn.events,
             AgentEventKind::InputAccepted,
@@ -5903,6 +6005,7 @@ impl LifecycleBackend for Driver {
     }
     fn submit(&self, mut request: BackendPrompt) -> BackendFuture<Result<BackendTurn>> {
         let state = self.state.clone();
+        let parent = tracing::Span::current();
         Box::pin(async move {
             let (accepted, receipt) = oneshot::channel();
             let task = async move {
@@ -6031,11 +6134,12 @@ impl LifecycleBackend for Driver {
                 }
                 .await;
                 let _ = accepted.send(result);
-            };
+            }
+            .instrument(parent);
             #[cfg(not(target_family = "wasm"))]
             tokio::spawn(task);
             #[cfg(target_family = "wasm")]
-            wasm_bindgen_futures::spawn_local(task);
+            nanocode_platform::spawn_local(task);
             receipt.await.unwrap_or(Err(NanocodexError::TurnStopped))
         })
     }
@@ -6315,7 +6419,7 @@ impl LifecycleBackend for Driver {
             #[cfg(not(target_family = "wasm"))]
             tokio::spawn(task);
             #[cfg(target_family = "wasm")]
-            wasm_bindgen_futures::spawn_local(task);
+            nanocode_platform::spawn_local(task);
             receipt.await.unwrap_or(Err(NanocodexError::TurnStopped))
         })
     }
@@ -6334,7 +6438,7 @@ impl LifecycleBackend for Driver {
                 let mut snapshot = state.latest_boundary().await?;
                 snapshot
                     .developer_notices
-                    .push((uuid::Uuid::now_v7().to_string(), text.clone()));
+                    .push((nanocode_platform::uuid_v7().to_string(), text.clone()));
                 if let Some(policy) = &state.policy {
                     let operation = state
                         .steering
@@ -6438,7 +6542,7 @@ impl LifecycleBackend for Driver {
             #[cfg(not(target_family = "wasm"))]
             tokio::spawn(release);
             #[cfg(target_family = "wasm")]
-            wasm_bindgen_futures::spawn_local(release);
+            nanocode_platform::spawn_local(release);
             Ok(())
         })
     }

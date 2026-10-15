@@ -2,8 +2,60 @@ use std::{collections::HashMap, time::Instant};
 
 use nanocode::agent::events::{AgentEvent, AgentEventKind};
 use nanocode_observability::METRICS_TARGET;
+use nanocode_tui::crossterm::event::{Event, KeyCode, KeyModifiers, MouseEventKind};
+use opentelemetry::{Context, trace::TraceContextExt};
 use serde_json::Value;
 use tracing::{Level, Span, field::Empty};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+pub fn input_span(event: &Event) -> Span {
+    let action = match event {
+        Event::Key(key) => match key.code {
+            KeyCode::Char(character) if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                match character {
+                    'c' => "clear_or_quit",
+                    'z' => "restore_draft",
+                    'd' => "model_picker",
+                    's' => "thinking_dial",
+                    'o' => "display_mode",
+                    't' => "agent_tree",
+                    'r' => "recent_prompts",
+                    'g' => "external_editor",
+                    'l' => "redraw",
+                    'v' => "paste_image",
+                    _ => "control_key",
+                }
+            }
+            KeyCode::Char(_) => "text",
+            KeyCode::Enter => "submit",
+            KeyCode::Esc => "escape",
+            KeyCode::Tab | KeyCode::BackTab => "tab",
+            KeyCode::PageUp => "page_up",
+            KeyCode::PageDown => "page_down",
+            KeyCode::Home => "home",
+            KeyCode::End => "end",
+            KeyCode::F(1) => "help",
+            KeyCode::F(2) => "agent_focus",
+            KeyCode::Up => "up",
+            KeyCode::Down => "down",
+            KeyCode::Left => "left",
+            KeyCode::Right => "right",
+            KeyCode::Backspace | KeyCode::Delete => "delete",
+            _ => "key",
+        },
+        Event::Mouse(mouse) => match mouse.kind {
+            MouseEventKind::ScrollUp => "scroll_up",
+            MouseEventKind::ScrollDown => "scroll_down",
+            MouseEventKind::Down(_) => "pane_click",
+            _ => "mouse",
+        },
+        Event::Resize(..) => "resize",
+        Event::Paste(_) => "paste",
+        Event::FocusGained => "focus_gained",
+        Event::FocusLost => "focus_lost",
+    };
+    tracing::info_span!(target: "nanocodex", "nc.input", input.action = action, input.redraw = Empty, session.id = Empty)
+}
 
 #[derive(Default)]
 pub struct TurnSpans {
@@ -176,6 +228,7 @@ pub struct FrameMetrics {
     input: Option<Instant>,
     stream: Option<Instant>,
     resize: Option<Instant>,
+    input_context: Option<Context>,
 }
 
 impl FrameMetrics {
@@ -185,6 +238,7 @@ impl FrameMetrics {
             input: None,
             stream: None,
             resize: None,
+            input_context: None,
         }
     }
 
@@ -194,10 +248,11 @@ impl FrameMetrics {
         }
     }
 
-    pub fn input(&mut self, resize: bool) {
+    pub fn input(&mut self, resize: bool, span: &Span) {
         if self.enabled {
             let now = Instant::now();
             self.input.get_or_insert(now);
+            self.input_context.get_or_insert_with(|| span.context());
             if resize {
                 self.resize.get_or_insert(now);
                 tracing::event!(target: METRICS_TARGET, Level::INFO, { monotonic_counter.nc.resize.events = 1_u64 });
@@ -209,6 +264,14 @@ impl FrameMetrics {
         if self.enabled {
             self.stream.get_or_insert_with(Instant::now);
         }
+    }
+
+    pub fn frame(&mut self, session: Option<&str>) -> Span {
+        let span = tracing::info_span!(target: "nanocodex", "nc.frame", session.id = session, frame.input = self.input.is_some(), frame.stream = self.stream.is_some(), frame.resize = self.resize.is_some(), otel.status_code = Empty);
+        if let Some(context) = self.input_context.take() {
+            span.add_link(context.span().span_context().clone());
+        }
+        span
     }
 
     pub fn begin(&self) -> Option<Instant> {

@@ -10,6 +10,7 @@ publish.workspace = true
 description = "Typed Anthropic Messages protocol and streaming transport"
 
 [dependencies]
+nanocode-platform.workspace = true
 nanocode-agent.workspace = true
 nanocode-durability.workspace = true
 nanocode-types.workspace = true
@@ -19,9 +20,7 @@ nanocode-home = { workspace = true  }
 schemars = { workspace = true  }
 base64.workspace = true
 chrono.workspace = true
-getrandom = { workspace = true, features = ["wasm_js"] }
 sha2.workspace = true
-regex.workspace = true
 xxhash-rust = { version = "0.8.15", features = ["xxh64"] }
 url.workspace = true
 futures-util.workspace = true
@@ -29,30 +28,28 @@ httpdate = "1.0.3"
 image.workspace = true
 nanocode-code-mode = { path = "../../runtime/code-mode", version = "0.6.7"   }
 tokio = { workspace = true, features = ["macros", "sync", "time"] }
-web-time.workspace = true
 uuid.workspace = true
-reqwest = { workspace = true, features = ["stream", "gzip", "brotli", "deflate", "zstd"] }
+http.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
 nix = { workspace = true, features = ["fs"]  }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
+regex.workspace = true
+chrono = { workspace = true, features = ["clock"] }
+reqwest = { workspace = true, features = ["stream", "gzip", "brotli", "deflate", "zstd"] }
 tokio = { workspace = true, features = ["fs", "process", "rt-multi-thread"] }
 nanocode-tls.workspace = true
-tracing.workspace = true
 ignore = { workspace = true  }
 globset = { version = "0.4.19"  }
 tempfile = { workspace = true  }
 serde_yaml_ng = { workspace = true  }
 unicode-normalization = "0.1.25"
-
-[target.'cfg(target_family = "wasm")'.dependencies]
-wasm-bindgen-futures.workspace = true
-wasmtimer = { version = "0.4.3", default-features = false, features = ["tokio"] }
 
 [lints]
 workspace = true
@@ -61,3 +58,7 @@ workspace = true
 test = false
 doctest = false
 bench = false
+
+[[test]]
+name = "subscription_identity"
+path = "tests/subscription_identity.rs"

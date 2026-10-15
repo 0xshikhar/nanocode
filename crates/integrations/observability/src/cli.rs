@@ -15,10 +15,21 @@ pub struct ObservabilityOutputArgs {
     )]
     log_filter: Option<String>,
 
-    #[arg(long, env = "NANOCODEX_LOG_FORMAT", global = true, default_value_t, value_enum)]
+    #[arg(
+        long,
+        env = "NANOCODEX_LOG_FORMAT",
+        global = true,
+        default_value_t,
+        value_enum
+    )]
     log_format: LogFormatArg,
 
-    #[arg(long, env = "NANOCODEX_LOG_FILE", global = true, help = "Write tracing logs to this file")]
+    #[arg(
+        long,
+        env = "NANOCODEX_LOG_FILE",
+        global = true,
+        help = "Write tracing logs to this file"
+    )]
     log_file: Option<PathBuf>,
 
     #[arg(
@@ -26,7 +37,7 @@ pub struct ObservabilityOutputArgs {
         env = "OTEL_EXPORTER_OTLP_ENDPOINT",
         global = true,
         value_parser = NonEmptyStringValueParser::new(),
-        help = "OTLP/HTTP collector base URL; enables trace and metric export"
+        help = "OTLP/HTTP collector base URL for trace and metric export"
     )]
     otel_endpoint: Option<String>,
 

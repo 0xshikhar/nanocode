@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     path::PathBuf,
+    task::Poll,
     time::{Duration, Instant},
 };
 
@@ -88,14 +89,43 @@ pub enum AppEvent {
         id: u64,
         update: BtwUpdate,
     },
+    Side {
+        pane: u64,
+        update: crate::side::SideUpdate,
+    },
     Subagent(ScopedAgentUpdate),
     FocusReady(Box<crate::focus::FocusReady>),
     Notice(NoticeLevel, String),
     Applied(std::result::Result<(ModelSelection, Thinking, ServiceTier, String), String>),
 }
 
+impl AppEvent {
+    const fn kind(&self) -> &'static str {
+        match self {
+            Self::Agent { .. } => "agent",
+            Self::TurnStarted { .. } => "turn_started",
+            Self::RoutedTurn { .. } => "routed_turn",
+            Self::Files(_) => "files",
+            Self::ShellDone { .. } => "shell_done",
+            Self::ImagePasted(_) => "image_pasted",
+            Self::TurnFinished { .. } => "turn_finished",
+            Self::PromptFailed { .. } => "prompt_failed",
+            Self::SteerSent { .. } => "steer_sent",
+            Self::RunnerListening(_) => "runner_listening",
+            Self::AgentReady(_) => "agent_ready",
+            Self::AgentFailed(_) => "agent_failed",
+            Self::Sessions(_) => "sessions",
+            Self::Btw { .. } => "btw",
+            Self::Side { .. } => "side",
+            Self::Subagent(_) => "subagent",
+            Self::FocusReady(_) => "focus_ready",
+            Self::Notice(..) => "notice",
+            Self::Applied(_) => "applied",
+        }
+    }
+}
+
 pub enum BtwUpdate {
-    Delta(String),
     Message(String),
     Done,
     Failed(String),
@@ -194,7 +224,7 @@ pub struct App {
     pub(crate) attachments: Vec<PathBuf>,
     attachments_by_id: HashMap<String, Vec<PathBuf>>,
     next_attachments: Vec<PathBuf>,
-    pub(crate) pending_copy: Option<String>,
+    pub(crate) pending_copy: Option<(String, &'static str)>,
     pub(crate) interrupting: bool,
     thinking_override: Option<Thinking>,
     tier_override: Option<ServiceTier>,
@@ -207,13 +237,14 @@ pub struct App {
     quit_armed: Option<Instant>,
     esc_armed: Option<Instant>,
     stashed_draft: Option<String>,
-    pub(crate) btw: HashMap<u64, usize>,
+    pub(crate) btw: HashMap<u64, (Option<nanocode::subagents::AgentId>, usize)>,
     pub(crate) next_btw: u64,
     next_local: u64,
     history_path: Option<PathBuf>,
     spans: crate::telemetry::TurnSpans,
     pub(crate) focus: Option<nanocode::subagents::AgentId>,
     pub(crate) views: HashMap<nanocode::subagents::AgentId, crate::focus::SubagentView>,
+    pub(crate) panes: crate::side::Panes,
 }
 
 pub async fn run(launch: Launch, mut terminal: TerminalSession) -> Result<()> {
@@ -275,6 +306,7 @@ pub async fn run(launch: Launch, mut terminal: TerminalSession) -> Result<()> {
         spans: crate::telemetry::TurnSpans::default(),
         focus: None,
         views: HashMap::new(),
+        panes: crate::side::Panes::default(),
     };
     for server in app.host.runtime.runner_servers() {
         app.notice(NoticeLevel::Info, listener_notice(&server));
@@ -499,8 +531,13 @@ impl App {
             metrics.wakeup();
             let now = Instant::now();
             if scheduler.is_due(now) {
+                let span = metrics.frame(self.agent.as_ref().map(|agent| agent.session_id()));
+                let _frame = span.enter();
                 let frame_started = metrics.begin();
-                terminal.draw(|frame| view::draw(self, frame))?;
+                if let Err(error) = terminal.draw(|frame| view::draw(self, frame)) {
+                    span.record("otel.status_code", "ERROR");
+                    return Err(error.into());
+                }
                 metrics.presented(frame_started);
                 scheduler.presented(Instant::now());
                 if self.animating() {
@@ -518,10 +555,28 @@ impl App {
                 event = input.next() => {
                     match event {
                         Some(Ok(event)) => {
-                            let resize = matches!(event, Event::Resize(..));
-                            if self.handle_terminal(event, terminal) {
-                                metrics.input(resize);
-                                scheduler.request_immediate(Instant::now());
+                            let mut pending = Some(event);
+                            while let Some(event) = pending.take() {
+                                let resize = matches!(event, Event::Resize(..));
+                                let span = crate::telemetry::input_span(&event);
+                                span.record("session.id", self.agent.as_ref().map(|agent| agent.session_id()));
+                                let changed = span.in_scope(|| self.handle_terminal(event, terminal));
+                                span.record("input.redraw", changed);
+                                if changed {
+                                    metrics.input(resize, &span);
+                                    scheduler.request_immediate(Instant::now());
+                                }
+                                match std::future::poll_fn(|context| {
+                                    Poll::Ready(input.poll_next_unpin(context))
+                                })
+                                .await
+                                {
+                                    Poll::Ready(Some(Ok(event))) if !self.quit => {
+                                        pending = Some(event);
+                                    }
+                                    Poll::Ready(Some(Err(error))) => return Err(error.into()),
+                                    _ => {}
+                                }
                             }
                         }
                         Some(Err(error)) => return Err(error.into()),
@@ -556,6 +611,7 @@ impl App {
         !matches!(self.turn, TurnState::Idle)
             || self.starting
             || !self.btw.is_empty()
+            || self.panes.busy()
             || self.tree.active() > 0
     }
 
@@ -585,39 +641,47 @@ impl App {
         let thinking = self.thinking;
         let tier = self.tier;
         let tx = self.tx.clone();
-        tokio::spawn(async move {
-            let ready = async {
-                match resume {
-                    Some(session_id) => {
-                        open_session(&host, &session_id, thinking_override, tier_override).await
+        let span = tracing::info_span!(target: "nanocodex", "nc.session.connect", model = %model, resume = resume.is_some(), otel.status_code = tracing::field::Empty);
+        tokio::spawn(tracing::Instrument::instrument(
+            async move {
+                let ready = async {
+                    match resume {
+                        Some(session_id) => {
+                            open_session(&host, &session_id, thinking_override, tier_override).await
+                        }
+                        None => {
+                            let (agent, events) = host.start(&model, thinking).await?;
+                            apply_tier(&agent, &model, tier).await?;
+                            Ok(Ready {
+                                notice: format!("new session {}", agent.session_id()),
+                                agent,
+                                events,
+                                model,
+                                thinking,
+                                tier,
+                                history: None,
+                                reset_transcript: false,
+                                pending: Vec::new(),
+                                prompts: Vec::new(),
+                            })
+                        }
                     }
-                    None => {
-                        let (agent, events) = host.start(&model, thinking).await?;
-                        apply_tier(&agent, &model, tier).await?;
-                        Ok(Ready {
-                            notice: format!("new session {}", agent.session_id()),
-                            agent,
-                            events,
-                            model,
-                            thinking,
-                            tier,
-                            history: None,
-                            reset_transcript: false,
-                            pending: Vec::new(),
-                            prompts: Vec::new(),
-                        })
+                };
+                let event = match ready.await {
+                    Ok(ready) => AppEvent::AgentReady(Box::new(ready)),
+                    Err(error) => {
+                        tracing::Span::current().record("otel.status_code", "ERROR");
+                        AppEvent::AgentFailed(error.to_string())
                     }
-                }
-            };
-            let event = match ready.await {
-                Ok(ready) => AppEvent::AgentReady(Box::new(ready)),
-                Err(error) => AppEvent::AgentFailed(error.to_string()),
-            };
-            drop(tx.send(event));
-        });
+                };
+                drop(tx.send(event));
+            },
+            span,
+        ));
     }
 
     fn handle_app(&mut self, event: AppEvent) -> bool {
+        let _span = tracing::info_span!(target: "nanocodex", "nc.app_event", event.kind = event.kind(), session.id = self.agent.as_ref().map(|agent| agent.session_id())).entered();
         match event {
             AppEvent::Agent { generation, event } => {
                 if generation == self.generation {
@@ -786,6 +850,10 @@ impl App {
                 self.btw_update(id, update);
                 false
             }
+            AppEvent::Side { pane, update } => {
+                self.side_update(pane, update);
+                false
+            }
             AppEvent::Subagent(update) => {
                 self.subagent(update);
                 false
@@ -834,6 +902,9 @@ impl App {
             self.mapper.reset();
             self.tree = AgentTree::default();
             self.reset_focus();
+            if self.panes.side.is_some() {
+                self.close_side();
+            }
         }
         self.session_started = ready
             .history
@@ -896,6 +967,10 @@ impl App {
     fn agent_event(&mut self, event: &AgentEvent) {
         let session_id = self.agent.as_ref().map(Agent::session_id);
         self.spans.event(event, session_id);
+        if event.kind == AgentEventKind::ToolCall {
+            self.mapper
+                .set_runners(crate::events::runner_routes(&self.host.runtime));
+        }
         let mapped = self.mapper.apply(&mut self.transcript, event);
         if event.kind == AgentEventKind::RunStarted
             && matches!(self.turn, TurnState::Idle)
@@ -1010,6 +1085,7 @@ impl App {
     }
 
     pub(crate) fn start_turn(&mut self, text: String) {
+        let _span = tracing::info_span!(target: "nanocodex", "nc.action", action.name = "start_turn", session.id = self.agent.as_ref().map(|agent| agent.session_id())).entered();
         let attachments = std::mem::take(&mut self.next_attachments);
         let Some(agent) = self.agent.clone() else {
             let id = self.enqueue_follow_up(text);
@@ -1066,6 +1142,7 @@ impl App {
     }
 
     fn enqueue_follow_up(&mut self, text: String) -> String {
+        let _span = tracing::info_span!(target: "nanocodex", "nc.action", action.name = "enqueue_follow_up", session.id = self.agent.as_ref().map(|agent| agent.session_id())).entered();
         let id = self.local_id("follow");
         self.queue.push(QueuedPrompt {
             id: id.clone(),
@@ -1077,6 +1154,7 @@ impl App {
     }
 
     fn flush_pending_steers(&mut self) {
+        let _span = tracing::info_span!(target: "nanocodex", "nc.action", action.name = "flush_pending_steers", session.id = self.agent.as_ref().map(|agent| agent.session_id())).entered();
         if matches!(self.turn, TurnState::External(_)) {
             self.route_pending_steers();
             return;
@@ -1111,6 +1189,7 @@ impl App {
     }
 
     fn route_pending_steers(&mut self) {
+        let _span = tracing::info_span!(target: "nanocodex", "nc.action", action.name = "route_pending_steers", session.id = self.agent.as_ref().map(|agent| agent.session_id())).entered();
         let Some(agent) = self.agent.clone() else {
             return;
         };
@@ -1154,6 +1233,7 @@ impl App {
     }
 
     fn interrupt(&mut self) {
+        let _span = tracing::info_span!(target: "nanocodex", "nc.action", action.name = "interrupt", session.id = self.agent.as_ref().map(|agent| agent.session_id())).entered();
         if matches!(self.turn, TurnState::External(_)) {
             let Some(agent) = self.agent.clone() else {
                 return;
@@ -1227,9 +1307,9 @@ impl App {
         match event {
             Event::Key(key) if key.kind != KeyEventKind::Release => {
                 self.handle_key(key, terminal);
-                if let Some(text) = self.pending_copy.take() {
+                if let Some((text, copied)) = self.pending_copy.take() {
                     match terminal.copy(&text) {
-                        Ok(()) => self.flash("copied the last reply to the clipboard"),
+                        Ok(()) => self.flash(copied),
                         Err(error) => self.flash(format!("copy failed: {error}")),
                     }
                 }
@@ -1263,13 +1343,16 @@ impl App {
                 true
             }
             Event::Mouse(mouse) => match mouse.kind {
-                MouseEventKind::ScrollUp => {
-                    self.visible_transcript().scroll_up(3);
-                    true
-                }
-                MouseEventKind::ScrollDown => {
-                    self.visible_transcript().scroll_down(3);
-                    true
+                MouseEventKind::Down(_) => self.click_pane(mouse.column, mouse.row),
+                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                    let transcript = self.transcript_at(mouse.column, mouse.row);
+                    let previous = transcript.scroll_offset();
+                    if mouse.kind == MouseEventKind::ScrollUp {
+                        transcript.scroll_up(3);
+                    } else {
+                        transcript.scroll_down(3);
+                    }
+                    transcript.scroll_offset() != previous
                 }
                 _ => false,
             },
@@ -1316,6 +1399,11 @@ impl App {
             }
         }
         match key.code {
+            KeyCode::Char('c')
+                if control && self.panes.side_active() && self.composer.is_empty() =>
+            {
+                self.side_ctrl_c();
+            }
             KeyCode::Char('c') if control => {
                 if !self.composer.is_empty() {
                     self.stashed_draft = Some(self.composer.take());
@@ -1345,6 +1433,7 @@ impl App {
                 }
                 None => self.flash("no cleared draft to restore"),
             },
+            KeyCode::Esc if self.panes.side_active() => self.side_escape(),
             KeyCode::Esc => {
                 if busy || self.focus.is_some() {
                     if self
@@ -1366,7 +1455,10 @@ impl App {
             }
             KeyCode::Char('d') if control => self.command("model"),
             KeyCode::Char('s') if control => self.command("thinking"),
-            KeyCode::Char('o') if control => self.visible_transcript().toggle_expanded(),
+            KeyCode::Char('o') if control => {
+                let mode = self.active_transcript().cycle_mode();
+                self.flash(format!("tools: {} · ctrl+o cycles", mode.label()));
+            }
             KeyCode::Char('t') if control => self.show_tree = !self.show_tree,
             KeyCode::Char('r') if control => self.open_recent_prompts(),
             KeyCode::Char('g') if control => self.edit_externally(terminal),
@@ -1374,18 +1466,26 @@ impl App {
             KeyCode::Char('v') if control => self.paste_image(),
             KeyCode::F(1) => self.overlay = Some(Overlay::Help),
             KeyCode::PageUp => {
-                let transcript = self.visible_transcript();
+                let transcript = self.active_transcript();
                 transcript.scroll_up(transcript.page());
             }
             KeyCode::PageDown => {
-                let transcript = self.visible_transcript();
+                let transcript = self.active_transcript();
                 transcript.scroll_down(transcript.page());
             }
-            KeyCode::Home if control => self.visible_transcript().scroll_to_top(),
-            KeyCode::End if control => self.visible_transcript().scroll_to_bottom(),
+            KeyCode::Home if control => self.active_transcript().scroll_to_top(),
+            KeyCode::End if control => self.active_transcript().scroll_to_bottom(),
             KeyCode::F(2) => self.cycle_focus(),
             KeyCode::Up if alt => self.recall_queued(),
             KeyCode::Char('u') if alt => self.recall_queued(),
+            KeyCode::Tab if self.panes.side.is_some() && self.composer.is_empty() => {
+                self.toggle_pane();
+            }
+            KeyCode::BackTab
+                if self.panes.side.is_some() && !self.composer.text().starts_with('/') =>
+            {
+                self.toggle_pane();
+            }
             KeyCode::Tab
                 if self.composer.text().starts_with('/') && !self.composer.text().contains(' ') =>
             {
@@ -1415,6 +1515,7 @@ impl App {
     }
 
     fn promote_follow_up(&mut self) {
+        let _span = tracing::info_span!(target: "nanocodex", "nc.action", action.name = "promote_follow_up", session.id = self.agent.as_ref().map(|agent| agent.session_id())).entered();
         let latest = self
             .queue
             .items()
@@ -1432,6 +1533,7 @@ impl App {
     }
 
     fn open_recent_prompts(&mut self) {
+        let _span = tracing::info_span!(target: "nanocodex", "nc.action", action.name = "open_recent_prompts", session.id = self.agent.as_ref().map(|agent| agent.session_id())).entered();
         let mut seen = std::collections::HashSet::new();
         let items = self
             .composer
@@ -1466,6 +1568,7 @@ impl App {
     }
 
     fn edit_externally(&mut self, terminal: &mut TerminalSession) {
+        let _span = tracing::info_span!(target: "nanocodex", "nc.action", action.name = "edit_externally", session.id = self.agent.as_ref().map(|agent| agent.session_id())).entered();
         let editor = std::env::var("VISUAL")
             .or_else(|_| std::env::var("EDITOR"))
             .unwrap_or_else(|_| "vi".to_owned());
@@ -1508,6 +1611,7 @@ impl App {
     }
 
     fn recall_queued(&mut self) {
+        let _span = tracing::info_span!(target: "nanocodex", "nc.action", action.name = "recall_queued", session.id = self.agent.as_ref().map(|agent| agent.session_id())).entered();
         let Some(item) = self.queue.items().last().cloned() else {
             self.flash("nothing queued");
             return;
@@ -1547,9 +1651,14 @@ impl App {
     }
 
     fn submit(&mut self, text: String) {
-        self.transcript.scroll_to_bottom();
+        let _span = tracing::info_span!(target: "nanocodex", "nc.action", action.name = "submit", session.id = self.agent.as_ref().map(|agent| agent.session_id())).entered();
         self.append_history(&text);
         self.stashed_draft = None;
+        if self.panes.side_active() {
+            self.side_submit(text);
+            return;
+        }
+        self.transcript.scroll_to_bottom();
         if let Some(command) = text.strip_prefix('/')
             && !command.starts_with('/')
         {
@@ -1595,10 +1704,33 @@ impl App {
         }
     }
 
-    fn command(&mut self, command: &str) {
+    pub(crate) fn deliver_to_main(&mut self, text: String) {
+        let _span = tracing::info_span!(target: "nanocodex", "nc.action", action.name = "deliver_to_main", session.id = self.agent.as_ref().map(|agent| agent.session_id())).entered();
+        match self.turn {
+            TurnState::Idle
+                if self.agent.is_none() || self.pending_switch.is_some() || self.starting =>
+            {
+                self.enqueue_follow_up(text);
+            }
+            TurnState::Idle => self.start_turn(text),
+            _ => {
+                let id = self.local_id("steer");
+                self.queue.push(QueuedPrompt {
+                    id,
+                    kind: QueueKind::Steer,
+                    state: QueueState::Pending,
+                    text,
+                });
+                self.flush_pending_steers();
+            }
+        }
+    }
+
+    pub(crate) fn command(&mut self, command: &str) {
         let (name, argument) = command
             .split_once(' ')
             .map_or((command, ""), |(name, rest)| (name, rest.trim()));
+        let _span = tracing::info_span!(target: "nanocodex", "nc.command", command.name = name, session.id = self.agent.as_ref().map(|agent| agent.session_id())).entered();
         match name {
             "model" | "m" if self.session_started => {
                 self.flash(
@@ -1646,8 +1778,11 @@ impl App {
                 };
                 self.request_switch(self.model.clone(), self.thinking, tier);
             }
-            "btw" if argument.is_empty() => self.flash("usage: /btw <question>"),
             "btw" => self.btw(argument.to_owned()),
+            "collapse" => self.collapse_side(),
+            "split" => self.split_side(),
+            "close" => self.close_side(),
+            "zoom" => self.zoom_pane(),
             "resume" | "sessions" => self.open_session_picker(),
             "new" | "clear" => self.new_session(),
             "agents" => self.show_tree = !self.show_tree,
@@ -1672,7 +1807,14 @@ impl App {
                     ),
                 );
             }
-            "expand" | "collapse" => self.visible_transcript().toggle_expanded(),
+            "id" => match self.session_id() {
+                Some(session) => {
+                    self.notice(NoticeLevel::Info, format!("session {session}"));
+                    self.pending_copy = Some((session, "copied the session id to the clipboard"));
+                }
+                None => self.flash("no session yet; send a message to start one"),
+            },
+            "expand" => self.active_transcript().toggle_expanded(),
             "agent" | "focus" => self.focus_command(argument),
             "theme" if argument.is_empty() => self.open_theme_picker(),
             "theme" => self.set_theme(argument),
@@ -1723,6 +1865,7 @@ impl App {
     }
 
     fn runner_command(&mut self, argument: &str) {
+        let _span = tracing::info_span!(target: "nanocodex", "nc.action", action.name = "runner_command", session.id = self.agent.as_ref().map(|agent| agent.session_id())).entered();
         let Some(words) = shlex_words(argument) else {
             self.notice(NoticeLevel::Error, "unterminated quote in /runner command");
             return;
@@ -1846,6 +1989,7 @@ impl App {
     }
 
     fn overlay_key(&mut self, key: KeyEvent) {
+        let _span = tracing::info_span!(target: "nanocodex", "nc.action", action.name = "overlay_key", session.id = self.agent.as_ref().map(|agent| agent.session_id())).entered();
         let Some(overlay) = &mut self.overlay else {
             return;
         };
@@ -1910,6 +2054,7 @@ impl App {
     }
 
     pub(crate) fn open_dial(&mut self, model: ModelSelection, thinking: Thinking, then_tier: bool) {
+        let _span = tracing::info_span!(target: "nanocodex", "nc.action", action.name = "open_dial", session.id = self.agent.as_ref().map(|agent| agent.session_id())).entered();
         match models::thinking_dial(&model, thinking, &self.theme) {
             Some((dial, levels)) => {
                 self.overlay = Some(Overlay::Dial {
@@ -1940,6 +2085,7 @@ impl App {
     }
 
     fn picked(&mut self, purpose: PickerPurpose, picker: &Picker, index: usize) {
+        let _span = tracing::info_span!(target: "nanocodex", "nc.action", action.name = "picked", session.id = self.agent.as_ref().map(|agent| agent.session_id())).entered();
         match purpose {
             PickerPurpose::Model => {
                 let Some(model) = models::model_at(picker, index) else {
@@ -2016,7 +2162,11 @@ pub async fn open_session(
         .store
         .as_ref()
         .ok_or("resume requires durability; remove --ephemeral")?;
-    let stored = store.load(session_id).await?;
+    let stored = tracing::Instrument::instrument(
+        store.load(session_id),
+        tracing::info_span!(target: "nanocodex", "nc.session.load", session.id = session_id),
+    )
+    .await?;
     let model = stored.summary.record.model.clone();
     let checkpoint = stored.session_checkpoint()?;
     let checkpoint_thinking = checkpoint.as_ref().map(SessionCheckpoint::thinking);
@@ -2066,7 +2216,11 @@ pub async fn open_session(
         .filter(|turn| turn.status != nanocode::durability::TurnStatus::Pending)
         .filter_map(|turn| turn.preview.clone())
         .collect();
-    let (agent, events) = host.open(session_id).await?;
+    let (agent, events) = tracing::Instrument::instrument(
+        host.open(session_id),
+        tracing::info_span!(target: "nanocodex", "nc.session.restore", session.id = session_id),
+    )
+    .await?;
     if thinking != opened_thinking {
         agent.set_thinking(thinking).await?;
     }

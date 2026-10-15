@@ -6,8 +6,8 @@ use std::{
 };
 
 use futures_util::future::{AbortHandle, Abortable};
+use nanocode_platform::Instant;
 use tokio::sync::oneshot;
-use web_time::Instant;
 
 #[cfg(not(target_family = "wasm"))]
 pub(crate) trait TaskSend: Send {}
@@ -111,7 +111,7 @@ fn spawn_detached<F>(future: F)
 where
     F: Future<Output = ()> + 'static,
 {
-    wasm_bindgen_futures::spawn_local(future);
+    nanocode_platform::spawn_local(future);
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -119,32 +119,7 @@ pub(crate) async fn sleep(duration: Duration) {
     tokio::time::sleep(duration).await;
 }
 
-#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+#[cfg(target_family = "wasm")]
 pub(crate) async fn sleep(duration: Duration) {
-    let _ = schedule_timeout(duration).await;
-}
-
-#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-fn schedule_timeout(duration: Duration) -> oneshot::Receiver<()> {
-    use wasm_bindgen::{JsCast, closure::Closure};
-
-    let (send, receive) = oneshot::channel();
-    let callback = Closure::once_into_js(move || {
-        let _ = send.send(());
-    });
-    let milliseconds = duration.as_millis().min(i32::MAX as u128) as i32;
-    let handle = set_timeout(callback.as_ref().unchecked_ref(), milliseconds);
-    if let Ok(unref) = js_sys::Reflect::get(&handle, &wasm_bindgen::JsValue::from_str("unref"))
-        .and_then(|value| value.dyn_into::<js_sys::Function>())
-    {
-        let _ = unref.call0(&handle);
-    }
-    receive
-}
-
-#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-#[wasm_bindgen::prelude::wasm_bindgen]
-extern "C" {
-    #[wasm_bindgen::prelude::wasm_bindgen(js_namespace = globalThis, js_name = setTimeout)]
-    fn set_timeout(callback: &js_sys::Function, milliseconds: i32) -> wasm_bindgen::JsValue;
+    nanocode_platform::sleep(duration).await;
 }

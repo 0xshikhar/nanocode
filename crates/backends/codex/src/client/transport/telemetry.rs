@@ -1,8 +1,8 @@
 use std::time::Duration;
 
+use nanocode_platform::Instant;
 use serde::{Serialize, Serializer};
 use serde_json::{Value, value::RawValue};
-use web_time::Instant;
 
 use crate::client::{attempt::ResponsesAttemptKind, service_error::FailurePhase};
 

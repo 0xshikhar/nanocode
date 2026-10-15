@@ -21,7 +21,36 @@ pub struct LinkSpan {
     pub end: u16,
 }
 
+#[derive(Clone, Default)]
+pub(crate) struct Highlights {
+    blocks: Vec<HighlightedBlock>,
+}
+
+#[derive(Clone)]
+struct HighlightedBlock {
+    language: Option<String>,
+    code: String,
+    lines: Vec<Vec<Span<'static>>>,
+}
+
 pub fn render(markdown: &str, width: u16, theme: &Theme) -> Layout {
+    render_with(markdown, width, theme, &mut Highlights::default())
+}
+
+pub(crate) fn render_with(
+    markdown: &str,
+    width: u16,
+    theme: &Theme,
+    highlights: &mut Highlights,
+) -> Layout {
+    let span = tracing::info_span!(
+        "tui.markdown.render",
+        width,
+        text.bytes = markdown.len(),
+        code.blocks = tracing::field::Empty,
+        code.highlighted = tracing::field::Empty
+    );
+    let _entered = span.enter();
     if width == 0 {
         return Layout {
             lines: Vec::new(),
@@ -34,7 +63,7 @@ pub fn render(markdown: &str, width: u16, theme: &Theme) -> Layout {
         | Options::ENABLE_TASKLISTS
         | Options::ENABLE_SMART_PUNCTUATION
         | Options::ENABLE_GFM;
-    let mut renderer = Renderer::new(width, theme);
+    let mut renderer = Renderer::new(width, theme, highlights);
     let mut events = Parser::new_ext(markdown, options).peekable();
     while let Some(event) = events.next() {
         match event {
@@ -49,6 +78,8 @@ pub fn render(markdown: &str, width: u16, theme: &Theme) -> Layout {
             event => renderer.event(event),
         }
     }
+    span.record("code.blocks", renderer.block);
+    span.record("code.highlighted", renderer.highlighted);
     renderer.finish()
 }
 
@@ -102,6 +133,9 @@ struct Renderer<'a> {
     links: Vec<LinkState>,
     rendered_links: Vec<(usize, LinkSpan)>,
     image: Option<LinkState>,
+    highlights: &'a mut Highlights,
+    block: usize,
+    highlighted: usize,
 }
 
 struct ListState {
@@ -119,7 +153,7 @@ struct TaggedSpan {
 }
 
 impl<'a> Renderer<'a> {
-    fn new(width: u16, theme: &'a Theme) -> Self {
+    fn new(width: u16, theme: &'a Theme, highlights: &'a mut Highlights) -> Self {
         Self {
             width,
             theme,
@@ -131,6 +165,9 @@ impl<'a> Renderer<'a> {
             links: Vec::new(),
             rendered_links: Vec::new(),
             image: None,
+            highlights,
+            block: 0,
+            highlighted: 0,
         }
     }
 
@@ -394,29 +431,21 @@ impl<'a> Renderer<'a> {
             self.blank();
             return;
         }
+        let highlighted = self.highlight(code, language.as_deref());
         if self.width < 6 {
-            self.narrow_code_block(&code, language.as_deref());
+            self.narrow_code_block(highlighted);
             self.blank();
             return;
         }
 
         let border = Style::default().fg(self.theme.border());
-        let assets = super::highlight::assets();
-        let syntax = language.as_deref().map_or_else(
-            || assets.syntaxes.find_syntax_plain_text(),
-            |language| super::highlight::syntax_for_token(&assets.syntaxes, language),
-        );
-        let syntax_theme = super::highlight::theme();
-        let mut highlighter = HighlightLines::new(syntax, syntax_theme);
         self.lines.push(code_block_header(
             language.as_deref(),
             self.width,
             self.theme,
         ));
         let content_width = self.width.saturating_sub(4).max(1);
-        for source_line in code.trim_end_matches('\n').split('\n') {
-            let highlighted =
-                super::highlight::line(&mut highlighter, source_line, &assets.syntaxes);
+        for highlighted in highlighted {
             for (index, mut spans) in
                 super::highlight::wrap(highlighted, content_width.saturating_sub(2).max(1))
                     .into_iter()
@@ -448,19 +477,46 @@ impl<'a> Renderer<'a> {
         self.blank();
     }
 
-    fn narrow_code_block(&mut self, code: &str, language: Option<&str>) {
-        let gutter = Style::default().fg(self.theme.border());
+    fn highlight(&mut self, code: String, language: Option<&str>) -> Vec<Vec<Span<'static>>> {
+        let block = self.block;
+        self.block += 1;
+        if let Some(cached) = self.highlights.blocks.get(block)
+            && cached.code == code
+            && cached.language.as_deref() == language
+        {
+            return cached.lines.clone();
+        }
+        self.highlighted += 1;
         let assets = super::highlight::assets();
         let syntax = language.map_or_else(
             || assets.syntaxes.find_syntax_plain_text(),
             |language| super::highlight::syntax_for_token(&assets.syntaxes, language),
         );
-        let syntax_theme = super::highlight::theme();
-        let mut highlighter = HighlightLines::new(syntax, syntax_theme);
+        let mut highlighter = HighlightLines::new(syntax, super::highlight::theme());
+        let lines = code
+            .trim_end_matches('\n')
+            .split('\n')
+            .map(|source_line| {
+                super::highlight::line(&mut highlighter, source_line, &assets.syntaxes)
+            })
+            .collect::<Vec<_>>();
+        let highlighted = HighlightedBlock {
+            language: language.map(str::to_owned),
+            code,
+            lines: lines.clone(),
+        };
+        if let Some(slot) = self.highlights.blocks.get_mut(block) {
+            *slot = highlighted;
+        } else {
+            self.highlights.blocks.push(highlighted);
+        }
+        lines
+    }
+
+    fn narrow_code_block(&mut self, highlighted: Vec<Vec<Span<'static>>>) {
+        let gutter = Style::default().fg(self.theme.border());
         let content_width = self.width.saturating_sub(2).max(1);
-        for source_line in code.trim_end_matches('\n').split('\n') {
-            let highlighted =
-                super::highlight::line(&mut highlighter, source_line, &assets.syntaxes);
+        for highlighted in highlighted {
             for spans in super::highlight::wrap(highlighted, content_width) {
                 let mut line = vec![Span::styled("┃ ", gutter)];
                 line.extend(spans);
@@ -614,6 +670,7 @@ impl<'a> Renderer<'a> {
 
     fn finish(mut self) -> Layout {
         self.flush();
+        self.highlights.blocks.truncate(self.block);
         while self.lines.last().is_some_and(|line| line.width() == 0) {
             self.lines.pop();
         }

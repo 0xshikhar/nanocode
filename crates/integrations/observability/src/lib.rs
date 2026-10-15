@@ -1,13 +1,17 @@
+#![cfg(not(target_family = "wasm"))]
 #![deny(rustdoc::broken_intra_doc_links)]
 
 extern crate self as nanocode_observability;
 
 mod cli;
+mod file;
 
 use std::{fs::OpenOptions, io, path::PathBuf, time::Duration};
 
 use opentelemetry::trace::TracerProvider as _;
-use opentelemetry_otlp::{MetricExporter, Protocol, SpanExporter, WithExportConfig, WithHttpConfig};
+use opentelemetry_otlp::{
+    MetricExporter, Protocol, SpanExporter, WithExportConfig, WithHttpConfig,
+};
 use opentelemetry_sdk::{
     Resource,
     metrics::{PeriodicReader, SdkMeterProvider},
@@ -58,6 +62,7 @@ pub struct ObservabilityBuilder {
     service_version: String,
     environment: Option<String>,
     otlp_endpoint: Option<String>,
+    otlp_directory: Option<PathBuf>,
     shutdown_timeout: Option<Duration>,
 }
 
@@ -98,6 +103,7 @@ impl ObservabilityBuilder {
             service_version: service_version.into(),
             environment: None,
             otlp_endpoint: None,
+            otlp_directory: None,
             shutdown_timeout: None,
         }
     }
@@ -135,6 +141,12 @@ impl ObservabilityBuilder {
     #[must_use]
     pub fn otlp_endpoint(mut self, endpoint: impl Into<String>) -> Self {
         self.otlp_endpoint = Some(endpoint.into().trim_end_matches('/').to_owned());
+        self
+    }
+
+    #[must_use]
+    pub fn otlp_directory(mut self, directory: impl Into<PathBuf>) -> Self {
+        self.otlp_directory = Some(directory.into());
         self
     }
 
@@ -182,15 +194,22 @@ impl ObservabilityBuilder {
             }
             None => (None, None),
         };
-        let (tracer_provider, meter_provider) = match self.otlp_endpoint.as_deref() {
-            Some(endpoint) => {
+        let (tracer_provider, meter_provider) = match (
+            self.otlp_endpoint.as_deref(),
+            self.otlp_directory.as_deref(),
+        ) {
+            (endpoint, directory) if endpoint.is_some() || directory.is_some() => {
                 let resource = self.resource();
+                let files = directory.map(file::Exporters::create).transpose()?;
+                let (traces, metrics) = files.map_or((None, None), |files| {
+                    (Some(files.traces), Some(files.metrics))
+                });
                 (
-                    Some(tracer_provider(endpoint, resource.clone())?),
-                    Some(meter_provider(endpoint, resource)?),
+                    Some(tracer_provider(endpoint, traces, resource.clone())?),
+                    Some(meter_provider(endpoint, metrics, resource)?),
                 )
             }
-            None => (None, None),
+            _ => (None, None),
         };
         let tracing_layer = match &tracer_provider {
             Some(provider) => Some(
@@ -262,35 +281,45 @@ impl ObservabilityBuilder {
 }
 
 fn tracer_provider(
-    endpoint: &str,
+    endpoint: Option<&str>,
+    file: Option<file::TraceExporter>,
     resource: Resource,
 ) -> Result<SdkTracerProvider, ObservabilityError> {
-    let exporter = SpanExporter::builder()
-        .with_http()
-        .with_endpoint(signal_endpoint(endpoint, "traces"))
-        .with_protocol(Protocol::HttpBinary)
-        .with_http_client(reqwest::blocking::Client::new())
-        .build()?;
-    Ok(SdkTracerProvider::builder()
-        .with_resource(resource)
-        .with_span_processor(BatchSpanProcessor::builder(exporter).build())
-        .build())
+    let mut builder = SdkTracerProvider::builder().with_resource(resource);
+    if let Some(file) = file {
+        builder = builder.with_simple_exporter(file);
+    }
+    if let Some(endpoint) = endpoint {
+        let exporter = SpanExporter::builder()
+            .with_http()
+            .with_endpoint(signal_endpoint(endpoint, "traces"))
+            .with_protocol(Protocol::HttpBinary)
+            .with_http_client(reqwest::blocking::Client::new())
+            .build()?;
+        builder = builder.with_span_processor(BatchSpanProcessor::builder(exporter).build());
+    }
+    Ok(builder.build())
 }
 
 fn meter_provider(
-    endpoint: &str,
+    endpoint: Option<&str>,
+    file: Option<file::MetricExporter>,
     resource: Resource,
 ) -> Result<SdkMeterProvider, ObservabilityError> {
-    let exporter = MetricExporter::builder()
-        .with_http()
-        .with_endpoint(signal_endpoint(endpoint, "metrics"))
-        .with_protocol(Protocol::HttpBinary)
-        .with_http_client(reqwest::blocking::Client::new())
-        .build()?;
-    Ok(SdkMeterProvider::builder()
-        .with_resource(resource)
-        .with_reader(PeriodicReader::builder(exporter).build())
-        .build())
+    let mut builder = SdkMeterProvider::builder().with_resource(resource);
+    if let Some(file) = file {
+        builder = builder.with_reader(PeriodicReader::builder(file).build());
+    }
+    if let Some(endpoint) = endpoint {
+        let exporter = MetricExporter::builder()
+            .with_http()
+            .with_endpoint(signal_endpoint(endpoint, "metrics"))
+            .with_protocol(Protocol::HttpBinary)
+            .with_http_client(reqwest::blocking::Client::new())
+            .build()?;
+        builder = builder.with_reader(PeriodicReader::builder(exporter).build());
+    }
+    Ok(builder.build())
 }
 
 fn signal_endpoint(endpoint: &str, signal: &str) -> String {

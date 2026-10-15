@@ -6,7 +6,7 @@ pub struct OwnerId(String);
 
 impl OwnerId {
     pub fn new() -> Self {
-        Self(uuid::Uuid::now_v7().to_string())
+        Self(nanocode_platform::uuid_v7().to_string())
     }
 
     pub fn as_str(&self) -> &str {

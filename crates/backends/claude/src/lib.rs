@@ -16,8 +16,11 @@ pub use hooks::{
     ClaudeHookFuture, ClaudeLifecycleDecision, ClaudeLifecycleEvent, ClaudeLifecycleInvocation,
     ClaudeLifecycleOutcome, ClaudeToolDecision, ClaudeToolHooks,
 };
+mod subscription_identity;
 mod subscription_wire;
+pub mod transport;
 pub use subscription_wire::SubscriptionIdentity;
+use transport::{HttpClient, HttpError, HttpResponse};
 pub mod subscription;
 pub use auth::{ClaudeAccessToken, ClaudeTokenSource, RefreshingClaudeAuth};
 
@@ -39,7 +42,7 @@ pub enum ClaudeError {
         retry_after: Option<Duration>,
     },
     #[error("Messages transport: {0}")]
-    Transport(#[from] reqwest::Error),
+    Transport(#[from] HttpError),
     #[error("Messages JSON: {0}")]
     Json(#[from] serde_json::Error),
     #[error("Messages stream error {kind}: {message}")]
@@ -56,7 +59,7 @@ impl ClaudeError {
     pub(crate) fn is_transient(&self) -> bool {
         match self {
             Self::Http { status, .. } => *status == 429 || (500..600).contains(status),
-            Self::Transport(error) => error.is_timeout() || error.is_request() || error.is_body(),
+            Self::Transport(error) => transport::is_transient(error),
             Self::StreamError { kind, .. } => matches!(
                 kind.as_str(),
                 "overloaded_error" | "api_error" | "rate_limit_error" | "timeout_error"
@@ -77,9 +80,9 @@ impl nanocode_agent::BackendFailure for ClaudeError {
     }
 }
 
-fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+fn retry_after(headers: &http::header::HeaderMap) -> Option<Duration> {
     let value = headers
-        .get(reqwest::header::RETRY_AFTER)?
+        .get(http::header::RETRY_AFTER)?
         .to_str()
         .ok()?
         .trim();
@@ -90,8 +93,8 @@ fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
         .ok()?
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?;
-    let now = web_time::SystemTime::now()
-        .duration_since(web_time::UNIX_EPOCH)
+    let now = nanocode_platform::system_time()
+        .duration_since(nanocode_platform::UNIX_EPOCH)
         .ok()?;
     Some(deadline.saturating_sub(now))
 }
@@ -819,11 +822,11 @@ pub type ClaudeAuthFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 pub trait ClaudeAuthProvider: Send + Sync {
     fn headers(
         &self,
-    ) -> ClaudeAuthFuture<'_, Result<reqwest::header::HeaderMap, ClaudeAuthUnavailable>>;
+    ) -> ClaudeAuthFuture<'_, Result<http::header::HeaderMap, ClaudeAuthUnavailable>>;
 
     fn recover_unauthorized<'a>(
         &'a self,
-        _rejected: &'a reqwest::header::HeaderMap,
+        _rejected: &'a http::header::HeaderMap,
     ) -> ClaudeAuthFuture<'a, Result<bool, ClaudeAuthUnavailable>> {
         Box::pin(async { Ok(false) })
     }
@@ -850,7 +853,7 @@ impl ClaudeAuthUnavailable {
 #[derive(Clone)]
 enum ClientAuth {
     ApiKey(String),
-    Headers(reqwest::header::HeaderMap),
+    Headers(http::header::HeaderMap),
     Provider(Arc<dyn ClaudeAuthProvider>),
 }
 
@@ -867,7 +870,7 @@ pub(crate) struct FrozenWireProfile {
 
 #[derive(Clone)]
 pub struct ClaudeClient {
-    http: reqwest::Client,
+    http: HttpClient,
     endpoint: String,
     auth: ClientAuth,
     subscription_compatibility: bool,
@@ -878,26 +881,22 @@ pub struct ClaudeClient {
 }
 
 impl ClaudeClient {
-    pub fn new(
-        http: reqwest::Client,
-        endpoint: impl Into<String>,
-        api_key: impl Into<String>,
-    ) -> Self {
+    pub fn new(http: HttpClient, endpoint: impl Into<String>, api_key: impl Into<String>) -> Self {
         Self {
             http,
             endpoint: endpoint.into(),
             auth: ClientAuth::ApiKey(api_key.into()),
             subscription_compatibility: false,
             subscription_identity: SubscriptionIdentity::default(),
-            subscription_session: uuid::Uuid::new_v4().to_string(),
+            subscription_session: nanocode_platform::uuid_v4().to_string(),
             subscription_cache_tail: true,
         }
     }
 
     pub fn with_auth_headers(
-        http: reqwest::Client,
+        http: HttpClient,
         endpoint: impl Into<String>,
-        headers: reqwest::header::HeaderMap,
+        headers: http::header::HeaderMap,
     ) -> Self {
         Self {
             http,
@@ -905,13 +904,13 @@ impl ClaudeClient {
             auth: ClientAuth::Headers(headers),
             subscription_compatibility: false,
             subscription_identity: SubscriptionIdentity::default(),
-            subscription_session: uuid::Uuid::new_v4().to_string(),
+            subscription_session: nanocode_platform::uuid_v4().to_string(),
             subscription_cache_tail: true,
         }
     }
 
     pub fn with_auth_provider(
-        http: reqwest::Client,
+        http: HttpClient,
         endpoint: impl Into<String>,
         provider: Arc<dyn ClaudeAuthProvider>,
     ) -> Self {
@@ -921,16 +920,16 @@ impl ClaudeClient {
             auth: ClientAuth::Provider(provider),
             subscription_compatibility: false,
             subscription_identity: SubscriptionIdentity::default(),
-            subscription_session: uuid::Uuid::new_v4().to_string(),
+            subscription_session: nanocode_platform::uuid_v4().to_string(),
             subscription_cache_tail: true,
         }
     }
 
-    pub fn official(http: reqwest::Client, api_key: impl Into<String>) -> Self {
+    pub fn official(http: HttpClient, api_key: impl Into<String>) -> Self {
         Self::new(http, ANTHROPIC_MESSAGES_URL, api_key)
     }
 
-    pub fn subscription(http: reqwest::Client, provider: Arc<dyn ClaudeAuthProvider>) -> Self {
+    pub fn subscription(http: HttpClient, provider: Arc<dyn ClaudeAuthProvider>) -> Self {
         Self::with_auth_provider(http, ANTHROPIC_SUBSCRIPTION_MESSAGES_URL, provider)
             .subscription_compatibility()
     }
@@ -1068,7 +1067,7 @@ impl ClaudeClient {
         &self,
         request: &MessagesRequest,
         streaming: bool,
-    ) -> Result<(reqwest::Response, Vec<String>), ClaudeError> {
+    ) -> Result<(HttpResponse, Vec<String>), ClaudeError> {
         request.validate_cache_control()?;
 
         let mut wire_body = Some(self.request_body(request, streaming)?);
@@ -1079,8 +1078,8 @@ impl ClaudeClient {
             let mut provider_headers = None;
             let mut headers = match &self.auth {
                 ClientAuth::ApiKey(key) => {
-                    let mut headers = reqwest::header::HeaderMap::new();
-                    let mut value = reqwest::header::HeaderValue::from_str(key).map_err(|_| {
+                    let mut headers = http::header::HeaderMap::new();
+                    let mut value = http::header::HeaderValue::from_str(key).map_err(|_| {
                         ClaudeAuthUnavailable::new(
                             "the Claude API key is not a valid HTTP header value",
                         )
@@ -1173,7 +1172,7 @@ impl ClaudeClient {
             }
             if !betas.is_empty() {
                 let value =
-                    reqwest::header::HeaderValue::from_str(&betas.join(",")).map_err(|_| {
+                    http::header::HeaderValue::from_str(&betas.join(",")).map_err(|_| {
                         ClaudeAuthUnavailable::new("the combined anthropic-beta header is invalid")
                     })?;
                 headers.insert("anthropic-beta", value);
@@ -1208,7 +1207,7 @@ impl ClaudeClient {
                 ] {
                     headers.insert(
                         name,
-                        reqwest::header::HeaderValue::from_str(&value).map_err(|_| {
+                        http::header::HeaderValue::from_str(&value).map_err(|_| {
                             ClaudeError::Protocol("invalid subscription wire header".into())
                         })?,
                     );
@@ -1216,7 +1215,7 @@ impl ClaudeClient {
                 headers.remove("x-claude-code-request-class");
             }
             for (name, value) in &headers {
-                if name == reqwest::header::AUTHORIZATION
+                if name == http::header::AUTHORIZATION
                     || name == "x-api-key"
                     || value.is_sensitive()
                 {
@@ -1224,7 +1223,7 @@ impl ClaudeClient {
                     if !value.is_empty() && !credentials.iter().any(|item| item == &value) {
                         credentials.push(value.to_string());
                     }
-                    if name == reqwest::header::AUTHORIZATION
+                    if name == http::header::AUTHORIZATION
                         && let Some((_, token)) = value.split_once(' ')
                         && !token.trim().is_empty()
                         && !credentials.iter().any(|item| item == token.trim())
@@ -1233,21 +1232,13 @@ impl ClaudeClient {
                     }
                 }
             }
-            let builder = self
-                .http
-                .post(&self.endpoint)
-                .header("anthropic-version", ANTHROPIC_VERSION)
-                .headers(headers);
-            let response = builder
-                .header("content-type", "application/json")
-                .body(match wire_body.take() {
-                    Some(body) => body,
-                    None => self.request_body(request, streaming)?,
-                })
-                .send()
-                .await?;
+            let body = match wire_body.take() {
+                Some(body) => body,
+                None => self.request_body(request, streaming)?,
+            };
+            let response = transport::post(&self.http, &self.endpoint, headers, body).await?;
 
-            if response.status() == reqwest::StatusCode::UNAUTHORIZED
+            if response.status() == http::StatusCode::UNAUTHORIZED
                 && !retried
                 && let (ClientAuth::Provider(provider), Some(headers)) =
                     (&self.auth, provider_headers.as_ref())
@@ -1288,7 +1279,7 @@ impl ClaudeClient {
 
         let is_sse = response
             .headers()
-            .get(reqwest::header::CONTENT_TYPE)
+            .get(http::header::CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.split(';').next())
             .is_some_and(|value| value.trim().eq_ignore_ascii_case("text/event-stream"));
@@ -1429,9 +1420,9 @@ impl<T: Future> ToolFuture for T {}
 const MAX_SSE_FRAME_BYTES: usize = 32 * 1024 * 1024;
 
 #[cfg(not(target_family = "wasm"))]
-type ResponseBytes = Pin<Box<dyn Stream<Item = Result<Vec<u8>, reqwest::Error>> + Send>>;
+type ResponseBytes = Pin<Box<dyn Stream<Item = Result<Vec<u8>, HttpError>> + Send>>;
 #[cfg(target_family = "wasm")]
-type ResponseBytes = Pin<Box<dyn Stream<Item = Result<Vec<u8>, reqwest::Error>>>>;
+type ResponseBytes = Pin<Box<dyn Stream<Item = Result<Vec<u8>, HttpError>>>>;
 
 fn redact_error(error: ClaudeError, credentials: &[String]) -> ClaudeError {
     let scrub = |mut text: String| {
@@ -1473,7 +1464,7 @@ struct SseState {
 }
 
 impl SseState {
-    fn new(response: reqwest::Response, credentials: Vec<String>) -> Self {
+    fn new(response: HttpResponse, credentials: Vec<String>) -> Self {
         Self {
             credentials,
             response: Box::pin(
@@ -2006,6 +1997,9 @@ mod claude_tools;
 #[cfg(not(target_family = "wasm"))]
 mod defaults;
 #[cfg(not(target_family = "wasm"))]
-pub use defaults::{install_default_tools, install_default_tools_with_process_routes, install_default_tools_with_runner_pool, runner_tools};
+pub use defaults::{
+    install_default_tools, install_default_tools_with_process_routes,
+    install_default_tools_with_runner_pool, runner_tools,
+};
 
 pub mod tools;

@@ -1,9 +1,9 @@
+#[cfg(target_family = "wasm")]
+use nanocode_platform::Instant;
+use nanocode_platform::{SystemTime, UNIX_EPOCH};
 use std::time::Duration;
 #[cfg(not(target_family = "wasm"))]
 use tokio::time::Instant;
-#[cfg(target_family = "wasm")]
-use web_time::Instant;
-use web_time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct RetryReceipt {
@@ -12,7 +12,7 @@ pub(crate) struct RetryReceipt {
 }
 impl RetryReceipt {
     pub(crate) fn now() -> Self {
-        let wall = SystemTime::now();
+        let wall = nanocode_platform::system_time();
         Self {
             wall,
             monotonic: Instant::now(),
@@ -38,7 +38,11 @@ impl RetryAfter {
 
     #[must_use]
     pub fn from_unix_ms(deadline_unix_ms: u64) -> Option<Self> {
-        Self::from_unix_ms_at(deadline_unix_ms, SystemTime::now(), Instant::now())
+        Self::from_unix_ms_at(
+            deadline_unix_ms,
+            nanocode_platform::system_time(),
+            Instant::now(),
+        )
     }
 
     #[must_use]

@@ -537,7 +537,7 @@ fn retain_tool_definition(
 }
 
 fn new_response_item_id(prefix: &str) -> ResponseItemId {
-    ResponseItemId::with_suffix(prefix, uuid::Uuid::now_v7())
+    ResponseItemId::with_suffix(prefix, nanocode_platform::uuid_v7())
 }
 
 fn synthetic_output_id(prefix: &str, source_id: Option<&ResponseItemId>) -> Option<ResponseItemId> {

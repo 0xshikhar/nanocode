@@ -2476,7 +2476,7 @@ fn spawn_claim_ack(
     caller: Caller,
     operation_id: String,
 ) {
-    wasm_bindgen_futures::spawn_local(async move {
+    nanocode_platform::spawn_local(async move {
         if acknowledged.await.is_err() {
             let (result, _receiver) = oneshot::channel();
             drop(
@@ -2501,6 +2501,6 @@ fn spawn_driver(driver: Driver) -> Result<()> {
 
 #[cfg(target_family = "wasm")]
 fn spawn_driver(driver: Driver) -> Result<()> {
-    wasm_bindgen_futures::spawn_local(driver.run());
+    nanocode_platform::spawn_local(driver.run());
     Ok(())
 }

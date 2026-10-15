@@ -432,7 +432,7 @@ impl Nanocodex {
         }
         let key = BackendTurnKey(self.next_turn.fetch_add(1, Ordering::Relaxed));
         let (events, event_stream) = self.events.mirrored_channel();
-        let turn_id = uuid::Uuid::now_v7().to_string();
+        let turn_id = nanocode_platform::uuid_v7().to_string();
         let events = events.with_turn_id(turn_id.clone());
         let (prompt, claimed) = self.claim_seed(prompt).await?;
         let submitted = self
@@ -502,7 +502,7 @@ impl Nanocodex {
         }
         let key = BackendTurnKey(self.next_turn.fetch_add(1, Ordering::Relaxed));
         let (events, event_stream) = self.events.mirrored_channel();
-        let turn_id = uuid::Uuid::now_v7().to_string();
+        let turn_id = nanocode_platform::uuid_v7().to_string();
         let events = events.with_turn_id(turn_id.clone());
         let (prompt, claimed) = self.claim_seed(prompt).await?;
         let routed = self
