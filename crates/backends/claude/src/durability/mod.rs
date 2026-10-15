@@ -292,6 +292,10 @@ impl ClaudeExecutionPolicy for LazyClaudeExecution {
         Box::pin(async move { self.get().await?.fail(id, checkpoint, error).await })
     }
 
+    fn fail_attempt(&self, id: String, checkpoint: Value, error: String) -> PolicyFuture<'_, ()> {
+        Box::pin(async move { self.get().await?.fail_attempt(id, checkpoint, error).await })
+    }
+
     fn cancel(&self, id: String, checkpoint: Value) -> PolicyFuture<'_, ()> {
         Box::pin(async move { self.get().await?.cancel(id, checkpoint).await })
     }
@@ -585,6 +589,15 @@ impl ClaudeExecutionPolicy for ClaudeExecution {
         Box::pin(async move {
             self.owner
                 .fail(id, payload(&checkpoint)?, error)
+                .await
+                .map_err(agent_error)
+        })
+    }
+
+    fn fail_attempt(&self, id: String, _checkpoint: Value, error: String) -> PolicyFuture<'_, ()> {
+        Box::pin(async move {
+            self.owner
+                .fail_attempt(id, error)
                 .await
                 .map_err(agent_error)
         })

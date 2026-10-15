@@ -8,6 +8,7 @@ use std::{
 
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::sync::{mpsc, oneshot};
+use tracing::Instrument;
 
 use crate::{
     DurableState, EncodedPayload, Error, OperationStatus, OwnerId, OwnerToken, Result, StateStore,
@@ -169,7 +170,7 @@ enum Command {
         operation_id: String,
         input: EncodedPayload,
         acknowledged: oneshot::Receiver<()>,
-        release_commands: mpsc::Sender<Self>,
+        release_commands: mpsc::Sender<CommandRequest>,
         result: oneshot::Sender<Result<StoredAdmission>>,
     },
     AdmitAutomatic {
@@ -177,7 +178,7 @@ enum Command {
         candidate_operation_id: String,
         input: EncodedPayload,
         acknowledged: oneshot::Receiver<()>,
-        release_commands: mpsc::Sender<Self>,
+        release_commands: mpsc::Sender<CommandRequest>,
         result: oneshot::Sender<Result<(String, StoredAdmission)>>,
     },
     Release {
@@ -282,6 +283,20 @@ enum Command {
     },
 }
 
+struct CommandRequest {
+    command: Command,
+    span: tracing::Span,
+}
+
+impl From<Command> for CommandRequest {
+    fn from(command: Command) -> Self {
+        Self {
+            command,
+            span: tracing::Span::current(),
+        }
+    }
+}
+
 struct Driver {
     store: Box<dyn StateStore>,
     state_id: Arc<str>,
@@ -295,7 +310,7 @@ struct Driver {
     poisoned: bool,
 
     committed_records: HashSet<String>,
-    commands: mpsc::Receiver<Command>,
+    commands: mpsc::Receiver<CommandRequest>,
     releases: mpsc::UnboundedReceiver<ReleaseSignal>,
 }
 
@@ -352,7 +367,7 @@ impl Driver {
                     continue;
                 }
             };
-            let Some(command) = command else {
+            let Some(CommandRequest { command, span }) = command else {
                 break;
             };
 
@@ -362,486 +377,488 @@ impl Driver {
                 };
                 self.handle_release(release);
             }
-            match command {
-                Command::LoadPayloads {
-                    caller,
-                    payloads,
-                    result,
-                } => {
-                    let outcome = match caller
-                        .as_ref()
-                        .map_or(Ok(()), |caller| self.authorize(caller))
-                    {
-                        Ok(()) => {
-                            EncodedPayload::load_many(&payloads, &mut *self.store, &self.state_id)
-                                .await
-                        }
-                        Err(error) => Err(error),
-                    };
-                    drop(result.send(outcome));
-                }
-                Command::LoadPayload {
-                    caller,
-                    payload,
-                    result,
-                } => {
-                    let outcome = match caller
-                        .as_ref()
-                        .map_or(Ok(()), |caller| self.authorize(caller))
-                    {
-                        Ok(()) => payload.load(&mut *self.store, &self.state_id).await,
-                        Err(error) => Err(error),
-                    };
-                    drop(result.send(outcome));
-                }
-                Command::Continuation {
-                    caller,
-                    operation_id,
-                    result,
-                } => {
-                    let outcome = async {
-                        self.authorize(&caller)?;
-                        self.require_claimed(&caller, &operation_id)?;
-                        self.require_running(&operation_id)?;
-                        match self
-                            .state
-                            .operation(&operation_id)
-                            .and_then(|op| op.continuation.as_ref())
-                        {
-                            Some(value) => {
-                                Ok(Some(value.load(&mut *self.store, &self.state_id).await?))
-                            }
-                            None => Ok(None),
-                        }
-                    }
-                    .await;
-                    drop(result.send(outcome));
-                }
-                Command::Advance {
-                    caller,
-                    operation_id,
-                    continuation,
-                    result,
-                } => {
-                    let outcome = async {
-                        self.authorize(&caller)?;
-                        self.require_claimed(&caller, &operation_id)?;
-                        self.require_running(&operation_id)?;
-                        self.apply(Transition::ExecutionAdvanced {
-                            operation_id,
-                            continuation,
-                        })
-                        .await
-                    }
-                    .await;
-                    drop(result.send(outcome));
-                }
-                Command::RecoverFailure {
-                    caller,
-                    operation_id,
-                    result,
-                } => {
-                    let outcome = self.authorize(&caller).and_then(|()| {
-                        let operation = self.state.operation(&operation_id);
-                        if operation.is_some_and(|operation| !operation.status.is_terminal())
-                            && let Some((pending_id, _)) = self.state.first_pending_operation()
-                            && pending_id != operation_id
-                        {
-                            return Err(Error::OperationBlocked {
-                                operation_id,
-                                pending_id: pending_id.to_owned(),
-                            });
-                        }
-                        Ok(operation.map(|operation| operation.status.clone()))
-                    });
-                    drop(result.send(outcome));
-                }
-                Command::State { result } => drop(result.send(self.state.clone())),
-                Command::LatestCheckpoint { result } => {
-                    let outcome = match self.state.latest_checkpoint() {
-                        Some(value) => value.load(&mut *self.store, &self.state_id).await.map(Some),
-                        None => Ok(None),
-                    };
-                    drop(result.send(outcome));
-                }
-                Command::AcquireAgent { result } => {
-                    let outcome = self.acquire_agent().await;
-                    let generation = outcome.as_ref().ok().map(|owner| owner.generation);
-                    if result.send(outcome).is_err()
-                        && let Some(generation) = generation
-                        && self.active_agent_generation == Some(generation)
-                    {
-                        self.active_agent_generation = None;
-                        self.claimed.clear();
-                        self.running.clear();
-                    }
-                }
-                Command::Admit {
-                    caller,
-                    operation_id,
-                    input,
-                    acknowledged,
-                    release_commands,
-                    result,
-                } => {
-                    let admitted_id = operation_id.clone();
-                    let outcome = match self.authorize(&caller) {
-                        Ok(()) => self.admit(&caller, operation_id, input).await,
-                        Err(error) => Err(error),
-                    };
-                    let claimed = matches!(
-                        &outcome,
-                        Ok(StoredAdmission::Accepted | StoredAdmission::Pending)
-                    );
-                    if result.send(outcome).is_err() {
-                        self.release_claim_if_owned(&caller, &admitted_id);
-                    } else if claimed {
-                        spawn_claim_ack(release_commands, acknowledged, caller, admitted_id);
-                    }
-                }
-                Command::AdmitAutomatic {
-                    caller,
-                    candidate_operation_id,
-                    input,
-                    acknowledged,
-                    release_commands,
-                    result,
-                } => {
-                    let outcome = match self.authorize(&caller) {
-                        Ok(()) => {
-                            self.admit_automatic(&caller, candidate_operation_id, input)
-                                .await
-                        }
-                        Err(error) => Err(error),
-                    };
-                    let claimed_id = match &outcome {
-                        Ok((
-                            operation_id,
-                            StoredAdmission::Accepted | StoredAdmission::Pending,
-                        )) => Some(operation_id.clone()),
-                        _ => None,
-                    };
-                    if let Err(Ok((operation_id, _))) = result.send(outcome) {
-                        self.release_claim_if_owned(&caller, &operation_id);
-                    } else if let Some(operation_id) = claimed_id {
-                        spawn_claim_ack(release_commands, acknowledged, caller, operation_id);
-                    }
-                }
-                Command::Release {
-                    caller,
-                    operation_id,
-                    result,
-                } => {
-                    let outcome = self
-                        .authorize(&caller)
-                        .and_then(|()| self.release_claim(&caller, &operation_id));
-                    drop(result.send(outcome));
-                }
-                Command::BeginAttempt {
-                    caller,
-                    operation_id,
-                    result,
-                } => {
-                    let outcome = match self.authorize(&caller) {
-                        Ok(()) => self.begin_attempt(&caller, operation_id).await,
-                        Err(error) => Err(error),
-                    };
-                    drop(result.send(outcome));
-                }
-                Command::AcceptSteer {
-                    message_id,
-                    caller,
-                    operation_id,
-                    accepted_after_model_call_index,
-                    input,
-                    result,
-                } => {
-                    let outcome = match self.authorize(&caller) {
-                        Ok(()) => {
-                            self.accept_steer(
-                                &caller,
-                                operation_id,
-                                accepted_after_model_call_index,
-                                input,
-                                message_id,
-                            )
-                            .await
-                        }
-                        Err(error) => Err(error),
-                    };
-                    drop(result.send(outcome));
-                }
-                Command::IdentifiedSteerAccepted {
-                    caller,
-                    message_id,
-                    input,
-                    result,
-                } => {
-                    let outcome = self.authorize(&caller).and_then(|()| {
-                        let mut accepted = false;
-                        for operation in self.state.operations().values() {
-                            if let Some(receipt) = operation.steer_receipts.get(&message_id) {
-                                if receipt.input_key != input.key.as_ref() {
-                                    return Err(Error::SteerConflict { message_id });
-                                }
-                                if receipt.withdrawn {
-                                    return Err(Error::SteerWithdrawn { message_id });
-                                }
-                                accepted = true;
-                            }
-                        }
-                        Ok(accepted)
-                    });
-                    drop(result.send(outcome));
-                }
-                Command::RetainedSteers {
-                    caller,
-                    operation_id,
-                    result,
-                } => {
-                    let outcome = self
-                        .authorize(&caller)
-                        .and_then(|()| self.retained_steers(&caller, &operation_id));
-                    let outcome = match outcome {
-                        Ok(mut steers) => {
-                            let mut error = None;
-                            for steer in &mut steers {
-                                match steer
-                                    .state
-                                    .input
-                                    .load(&mut *self.store, &self.state_id)
-                                    .await
-                                {
-                                    Ok(value) => steer.state.input = value,
-                                    Err(failure) => {
-                                        error = Some(failure);
-                                        break;
-                                    }
-                                }
-                            }
-                            error.map_or(Ok(steers), Err)
-                        }
-                        Err(error) => Err(error),
-                    };
-                    drop(result.send(outcome));
-                }
-                Command::WithdrawSteer {
-                    caller,
-                    operation_id,
-                    steer_index,
-                    result,
-                } => {
-                    let outcome = match self.authorize(&caller) {
-                        Ok(()) => {
-                            self.withdraw_steer(&caller, operation_id, steer_index)
-                                .await
-                        }
-                        Err(error) => Err(error),
-                    };
-                    drop(result.send(outcome));
-                }
-                Command::BindSteer {
-                    caller,
-                    operation_id,
-                    steer_index,
-                    model_call_index,
-                    result,
-                } => {
-                    let outcome = match self.authorize(&caller) {
-                        Ok(()) => {
-                            self.bind_steer(&caller, operation_id, steer_index, model_call_index)
-                                .await
-                        }
-                        Err(error) => Err(error),
-                    };
-                    drop(result.send(outcome));
-                }
-                Command::BeginStep {
-                    caller,
-                    operation_id,
-                    step_id,
-                    kind,
-                    input,
-                    result,
-                } => {
-                    let outcome = match self.authorize(&caller) {
-                        Ok(()) => {
-                            self.begin_step(&caller, operation_id, step_id, kind, input)
-                                .await
-                        }
-                        Err(error) => Err(error),
-                    };
-                    drop(result.send(outcome));
-                }
-                Command::CompleteStep {
-                    caller,
-                    operation_id,
-                    step_id,
-                    output,
-                    result,
-                } => {
-                    let outcome = match self.authorize(&caller) {
-                        Ok(()) => {
-                            self.complete_step(&caller, operation_id, step_id, output)
-                                .await
-                        }
-                        Err(error) => Err(error),
-                    };
-                    drop(result.send(outcome));
-                }
-                Command::Complete {
-                    caller,
-                    operation_id,
-                    checkpoint,
-                    output,
-                    result,
-                } => {
-                    let outcome = match self.authorize(&caller) {
-                        Ok(()) => {
-                            self.complete(&caller, operation_id, checkpoint, output)
-                                .await
-                        }
-                        Err(error) => Err(error),
-                    };
-                    drop(result.send(outcome));
-                }
-                Command::Fail {
-                    caller,
-                    operation_id,
-                    checkpoint,
-                    error,
-                    result,
-                } => {
-                    let outcome = match self.authorize(&caller) {
-                        Ok(()) => self.fail(&caller, operation_id, checkpoint, error).await,
-                        Err(error) => Err(error),
-                    };
-                    drop(result.send(outcome));
-                }
-                Command::FailAttempt {
-                    caller,
-                    operation_id,
-                    result,
-                } => {
-                    let outcome = match self.authorize(&caller) {
-                        Ok(()) => {
-                            let outcome = match self.require_claimed(&caller, &operation_id) {
-                                Ok(()) => self.require_running(&operation_id),
-                                Err(error) => Err(error),
-                            };
-                            if finishing_attempt_releases_claim(&outcome) {
-                                self.release_claim_if_owned(&caller, &operation_id);
-                            }
-                            outcome
-                        }
-                        Err(error) => Err(error),
-                    };
-                    drop(result.send(outcome));
-                }
-                Command::Cancel {
-                    caller,
-                    operation_id,
-                    checkpoint,
-                    result,
-                } => {
-                    let outcome = match self.authorize(&caller) {
-                        Ok(()) => {
-                            let outcome = match self.require_claimed(&caller, &operation_id) {
-                                Ok(()) => {
-                                    let admissible = match checkpoint.as_ref() {
-                                        Some(_) => self.require_running(&operation_id),
-                                        None if self.running.contains(&operation_id)
-                                            || self.state.operation(&operation_id).is_some_and(
-                                                |operation| {
-                                                    operation.cancellation_requires_checkpoint()
-                                                },
-                                            ) =>
-                                        {
-                                            Err(Error::CancellationCheckpointRequired {
-                                                operation_id: operation_id.clone(),
-                                            })
-                                        }
-                                        None => Ok(()),
-                                    }
-                                    .and_then(|()| {
-                                        self.state
-                                            .operation(&operation_id)
-                                            .filter(|operation| !operation.status.is_terminal())
-                                            .ok_or_else(|| Error::OperationTerminal {
-                                                operation_id: operation_id.clone(),
-                                            })
-                                            .map(|_| ())
-                                    });
-                                    match admissible {
-                                        Ok(()) => {
-                                            self.apply_terminal(Transition::OperationCancelled {
-                                                operation_id: operation_id.clone(),
-                                                checkpoint,
-                                            })
-                                            .await
-                                        }
-                                        Err(error) => Err(error),
-                                    }
-                                }
-                                Err(error) => Err(error),
-                            };
-                            if finishing_attempt_releases_claim(&outcome) {
-                                self.release_claim_if_owned(&caller, &operation_id);
-                            }
-                            outcome
-                        }
-                        Err(error) => Err(error),
-                    };
-                    drop(result.send(outcome));
-                }
-                Command::PruneReceipts { caller, result } => {
-                    let outcome = match self.authorize(&caller) {
-                        Ok(()) => self.prune_retained(true).await,
-                        Err(error) => Err(error),
-                    };
-                    drop(result.send(outcome));
-                }
-                Command::CommitCheckpoint {
-                    caller,
-                    checkpoint,
-                    result,
-                } => {
-                    let outcome = match self.authorize(&caller) {
-                        Ok(()) => match self.state.first_pending_operation() {
-                            Some((pending_id, _)) => Err(Error::OperationBlocked {
-                                operation_id: "standalone-checkpoint".to_owned(),
-                                pending_id: pending_id.to_owned(),
-                            }),
-                            None => {
-                                self.apply_terminal(Transition::CheckpointCommitted { checkpoint })
-                                    .await
-                            }
-                        },
-                        Err(error) => Err(error),
-                    };
-                    drop(result.send(outcome));
-                }
-                Command::DiscardUnused { caller, result } => {
-                    let outcome = match self.authorize(&caller) {
-                        Ok(()) => self.discard_unused().await,
-                        Err(error) => Err(error),
-                    };
-                    drop(result.send(outcome));
-                }
-                Command::Describe {
-                    caller,
-                    record,
-                    result,
-                } => {
-                    let outcome = match self.authorize(&caller) {
-                        Ok(()) => self.describe(record).await,
-                        Err(error) => Err(error),
-                    };
-                    drop(result.send(outcome));
-                }
-            }
+            self.handle_command(command).instrument(span).await;
             if self.poisoned {
                 break;
+            }
+        }
+    }
+
+    async fn handle_command(&mut self, command: Command) {
+        match command {
+            Command::LoadPayloads {
+                caller,
+                payloads,
+                result,
+            } => {
+                let outcome = match caller
+                    .as_ref()
+                    .map_or(Ok(()), |caller| self.authorize(caller))
+                {
+                    Ok(()) => {
+                        EncodedPayload::load_many(&payloads, &mut *self.store, &self.state_id).await
+                    }
+                    Err(error) => Err(error),
+                };
+                drop(result.send(outcome));
+            }
+            Command::LoadPayload {
+                caller,
+                payload,
+                result,
+            } => {
+                let outcome = match caller
+                    .as_ref()
+                    .map_or(Ok(()), |caller| self.authorize(caller))
+                {
+                    Ok(()) => payload.load(&mut *self.store, &self.state_id).await,
+                    Err(error) => Err(error),
+                };
+                drop(result.send(outcome));
+            }
+            Command::Continuation {
+                caller,
+                operation_id,
+                result,
+            } => {
+                let outcome = async {
+                    self.authorize(&caller)?;
+                    self.require_claimed(&caller, &operation_id)?;
+                    self.require_running(&operation_id)?;
+                    match self
+                        .state
+                        .operation(&operation_id)
+                        .and_then(|op| op.continuation.as_ref())
+                    {
+                        Some(value) => {
+                            Ok(Some(value.load(&mut *self.store, &self.state_id).await?))
+                        }
+                        None => Ok(None),
+                    }
+                }
+                .await;
+                drop(result.send(outcome));
+            }
+            Command::Advance {
+                caller,
+                operation_id,
+                continuation,
+                result,
+            } => {
+                let outcome = async {
+                    self.authorize(&caller)?;
+                    self.require_claimed(&caller, &operation_id)?;
+                    self.require_running(&operation_id)?;
+                    self.apply(Transition::ExecutionAdvanced {
+                        operation_id,
+                        continuation,
+                    })
+                    .await
+                }
+                .await;
+                drop(result.send(outcome));
+            }
+            Command::RecoverFailure {
+                caller,
+                operation_id,
+                result,
+            } => {
+                let outcome = self.authorize(&caller).and_then(|()| {
+                    let operation = self.state.operation(&operation_id);
+                    if operation.is_some_and(|operation| !operation.status.is_terminal())
+                        && let Some((pending_id, _)) = self.state.first_pending_operation()
+                        && pending_id != operation_id
+                    {
+                        return Err(Error::OperationBlocked {
+                            operation_id,
+                            pending_id: pending_id.to_owned(),
+                        });
+                    }
+                    Ok(operation.map(|operation| operation.status.clone()))
+                });
+                drop(result.send(outcome));
+            }
+            Command::State { result } => drop(result.send(self.state.clone())),
+            Command::LatestCheckpoint { result } => {
+                let outcome = match self.state.latest_checkpoint() {
+                    Some(value) => value.load(&mut *self.store, &self.state_id).await.map(Some),
+                    None => Ok(None),
+                };
+                drop(result.send(outcome));
+            }
+            Command::AcquireAgent { result } => {
+                let outcome = self.acquire_agent().await;
+                let generation = outcome.as_ref().ok().map(|owner| owner.generation);
+                if result.send(outcome).is_err()
+                    && let Some(generation) = generation
+                    && self.active_agent_generation == Some(generation)
+                {
+                    self.active_agent_generation = None;
+                    self.claimed.clear();
+                    self.running.clear();
+                }
+            }
+            Command::Admit {
+                caller,
+                operation_id,
+                input,
+                acknowledged,
+                release_commands,
+                result,
+            } => {
+                let admitted_id = operation_id.clone();
+                let outcome = match self.authorize(&caller) {
+                    Ok(()) => self.admit(&caller, operation_id, input).await,
+                    Err(error) => Err(error),
+                };
+                let claimed = matches!(
+                    &outcome,
+                    Ok(StoredAdmission::Accepted | StoredAdmission::Pending)
+                );
+                if result.send(outcome).is_err() {
+                    self.release_claim_if_owned(&caller, &admitted_id);
+                } else if claimed {
+                    spawn_claim_ack(release_commands, acknowledged, caller, admitted_id);
+                }
+            }
+            Command::AdmitAutomatic {
+                caller,
+                candidate_operation_id,
+                input,
+                acknowledged,
+                release_commands,
+                result,
+            } => {
+                let outcome = match self.authorize(&caller) {
+                    Ok(()) => {
+                        self.admit_automatic(&caller, candidate_operation_id, input)
+                            .await
+                    }
+                    Err(error) => Err(error),
+                };
+                let claimed_id = match &outcome {
+                    Ok((operation_id, StoredAdmission::Accepted | StoredAdmission::Pending)) => {
+                        Some(operation_id.clone())
+                    }
+                    _ => None,
+                };
+                if let Err(Ok((operation_id, _))) = result.send(outcome) {
+                    self.release_claim_if_owned(&caller, &operation_id);
+                } else if let Some(operation_id) = claimed_id {
+                    spawn_claim_ack(release_commands, acknowledged, caller, operation_id);
+                }
+            }
+            Command::Release {
+                caller,
+                operation_id,
+                result,
+            } => {
+                let outcome = self
+                    .authorize(&caller)
+                    .and_then(|()| self.release_claim(&caller, &operation_id));
+                drop(result.send(outcome));
+            }
+            Command::BeginAttempt {
+                caller,
+                operation_id,
+                result,
+            } => {
+                let outcome = match self.authorize(&caller) {
+                    Ok(()) => self.begin_attempt(&caller, operation_id).await,
+                    Err(error) => Err(error),
+                };
+                drop(result.send(outcome));
+            }
+            Command::AcceptSteer {
+                message_id,
+                caller,
+                operation_id,
+                accepted_after_model_call_index,
+                input,
+                result,
+            } => {
+                let outcome = match self.authorize(&caller) {
+                    Ok(()) => {
+                        self.accept_steer(
+                            &caller,
+                            operation_id,
+                            accepted_after_model_call_index,
+                            input,
+                            message_id,
+                        )
+                        .await
+                    }
+                    Err(error) => Err(error),
+                };
+                drop(result.send(outcome));
+            }
+            Command::IdentifiedSteerAccepted {
+                caller,
+                message_id,
+                input,
+                result,
+            } => {
+                let outcome = self.authorize(&caller).and_then(|()| {
+                    let mut accepted = false;
+                    for operation in self.state.operations().values() {
+                        if let Some(receipt) = operation.steer_receipts.get(&message_id) {
+                            if receipt.input_key != input.key.as_ref() {
+                                return Err(Error::SteerConflict { message_id });
+                            }
+                            if receipt.withdrawn {
+                                return Err(Error::SteerWithdrawn { message_id });
+                            }
+                            accepted = true;
+                        }
+                    }
+                    Ok(accepted)
+                });
+                drop(result.send(outcome));
+            }
+            Command::RetainedSteers {
+                caller,
+                operation_id,
+                result,
+            } => {
+                let outcome = self
+                    .authorize(&caller)
+                    .and_then(|()| self.retained_steers(&caller, &operation_id));
+                let outcome = match outcome {
+                    Ok(mut steers) => {
+                        let mut error = None;
+                        for steer in &mut steers {
+                            match steer
+                                .state
+                                .input
+                                .load(&mut *self.store, &self.state_id)
+                                .await
+                            {
+                                Ok(value) => steer.state.input = value,
+                                Err(failure) => {
+                                    error = Some(failure);
+                                    break;
+                                }
+                            }
+                        }
+                        error.map_or(Ok(steers), Err)
+                    }
+                    Err(error) => Err(error),
+                };
+                drop(result.send(outcome));
+            }
+            Command::WithdrawSteer {
+                caller,
+                operation_id,
+                steer_index,
+                result,
+            } => {
+                let outcome = match self.authorize(&caller) {
+                    Ok(()) => {
+                        self.withdraw_steer(&caller, operation_id, steer_index)
+                            .await
+                    }
+                    Err(error) => Err(error),
+                };
+                drop(result.send(outcome));
+            }
+            Command::BindSteer {
+                caller,
+                operation_id,
+                steer_index,
+                model_call_index,
+                result,
+            } => {
+                let outcome = match self.authorize(&caller) {
+                    Ok(()) => {
+                        self.bind_steer(&caller, operation_id, steer_index, model_call_index)
+                            .await
+                    }
+                    Err(error) => Err(error),
+                };
+                drop(result.send(outcome));
+            }
+            Command::BeginStep {
+                caller,
+                operation_id,
+                step_id,
+                kind,
+                input,
+                result,
+            } => {
+                let outcome = match self.authorize(&caller) {
+                    Ok(()) => {
+                        self.begin_step(&caller, operation_id, step_id, kind, input)
+                            .await
+                    }
+                    Err(error) => Err(error),
+                };
+                drop(result.send(outcome));
+            }
+            Command::CompleteStep {
+                caller,
+                operation_id,
+                step_id,
+                output,
+                result,
+            } => {
+                let outcome = match self.authorize(&caller) {
+                    Ok(()) => {
+                        self.complete_step(&caller, operation_id, step_id, output)
+                            .await
+                    }
+                    Err(error) => Err(error),
+                };
+                drop(result.send(outcome));
+            }
+            Command::Complete {
+                caller,
+                operation_id,
+                checkpoint,
+                output,
+                result,
+            } => {
+                let outcome = match self.authorize(&caller) {
+                    Ok(()) => {
+                        self.complete(&caller, operation_id, checkpoint, output)
+                            .await
+                    }
+                    Err(error) => Err(error),
+                };
+                drop(result.send(outcome));
+            }
+            Command::Fail {
+                caller,
+                operation_id,
+                checkpoint,
+                error,
+                result,
+            } => {
+                let outcome = match self.authorize(&caller) {
+                    Ok(()) => self.fail(&caller, operation_id, checkpoint, error).await,
+                    Err(error) => Err(error),
+                };
+                drop(result.send(outcome));
+            }
+            Command::FailAttempt {
+                caller,
+                operation_id,
+                result,
+            } => {
+                let outcome = match self.authorize(&caller) {
+                    Ok(()) => {
+                        let outcome = match self.require_claimed(&caller, &operation_id) {
+                            Ok(()) => self.require_running(&operation_id),
+                            Err(error) => Err(error),
+                        };
+                        if finishing_attempt_releases_claim(&outcome) {
+                            self.release_claim_if_owned(&caller, &operation_id);
+                        }
+                        outcome
+                    }
+                    Err(error) => Err(error),
+                };
+                drop(result.send(outcome));
+            }
+            Command::Cancel {
+                caller,
+                operation_id,
+                checkpoint,
+                result,
+            } => {
+                let outcome = match self.authorize(&caller) {
+                    Ok(()) => {
+                        let outcome = match self.require_claimed(&caller, &operation_id) {
+                            Ok(()) => {
+                                let admissible = match checkpoint.as_ref() {
+                                    Some(_) => self.require_running(&operation_id),
+                                    None if self.running.contains(&operation_id)
+                                        || self.state.operation(&operation_id).is_some_and(
+                                            |operation| {
+                                                operation.cancellation_requires_checkpoint()
+                                            },
+                                        ) =>
+                                    {
+                                        Err(Error::CancellationCheckpointRequired {
+                                            operation_id: operation_id.clone(),
+                                        })
+                                    }
+                                    None => Ok(()),
+                                }
+                                .and_then(|()| {
+                                    self.state
+                                        .operation(&operation_id)
+                                        .filter(|operation| !operation.status.is_terminal())
+                                        .ok_or_else(|| Error::OperationTerminal {
+                                            operation_id: operation_id.clone(),
+                                        })
+                                        .map(|_| ())
+                                });
+                                match admissible {
+                                    Ok(()) => {
+                                        self.apply_terminal(Transition::OperationCancelled {
+                                            operation_id: operation_id.clone(),
+                                            checkpoint,
+                                        })
+                                        .await
+                                    }
+                                    Err(error) => Err(error),
+                                }
+                            }
+                            Err(error) => Err(error),
+                        };
+                        if finishing_attempt_releases_claim(&outcome) {
+                            self.release_claim_if_owned(&caller, &operation_id);
+                        }
+                        outcome
+                    }
+                    Err(error) => Err(error),
+                };
+                drop(result.send(outcome));
+            }
+            Command::PruneReceipts { caller, result } => {
+                let outcome = match self.authorize(&caller) {
+                    Ok(()) => self.prune_retained(true).await,
+                    Err(error) => Err(error),
+                };
+                drop(result.send(outcome));
+            }
+            Command::CommitCheckpoint {
+                caller,
+                checkpoint,
+                result,
+            } => {
+                let outcome = match self.authorize(&caller) {
+                    Ok(()) => match self.state.first_pending_operation() {
+                        Some((pending_id, _)) => Err(Error::OperationBlocked {
+                            operation_id: "standalone-checkpoint".to_owned(),
+                            pending_id: pending_id.to_owned(),
+                        }),
+                        None => {
+                            self.apply_terminal(Transition::CheckpointCommitted { checkpoint })
+                                .await
+                        }
+                    },
+                    Err(error) => Err(error),
+                };
+                drop(result.send(outcome));
+            }
+            Command::DiscardUnused { caller, result } => {
+                let outcome = match self.authorize(&caller) {
+                    Ok(()) => self.discard_unused().await,
+                    Err(error) => Err(error),
+                };
+                drop(result.send(outcome));
+            }
+            Command::Describe {
+                caller,
+                record,
+                result,
+            } => {
+                let outcome = match self.authorize(&caller) {
+                    Ok(()) => self.describe(record).await,
+                    Err(error) => Err(error),
+                };
+                drop(result.send(outcome));
             }
         }
     }
@@ -1480,7 +1497,7 @@ pub struct DurableSession {
     state_id: Arc<str>,
     store: SharedStore,
     terminal_receipt_limit: Option<usize>,
-    commands: mpsc::Sender<Command>,
+    commands: mpsc::Sender<CommandRequest>,
     releases: mpsc::UnboundedSender<ReleaseSignal>,
     caller_id: OwnerId,
     active_claims: AtomicUsize,
@@ -1998,7 +2015,7 @@ impl DurableSession {
 
     async fn send(&self, command: Command) -> Result<()> {
         self.commands
-            .send(command)
+            .send(command.into())
             .await
             .map_err(|_| Error::DriverStopped)
     }
@@ -2014,7 +2031,7 @@ impl DurableSession {
 
 pub struct DurableOwner {
     generation: u64,
-    commands: mpsc::Sender<Command>,
+    commands: mpsc::Sender<CommandRequest>,
     releases: mpsc::UnboundedSender<ReleaseSignal>,
     release: Arc<OwnerReleaseState>,
 }
@@ -2089,7 +2106,7 @@ impl DurableOwner {
 
     async fn send(&self, command: Command) -> Result<()> {
         self.commands
-            .send(command)
+            .send(command.into())
             .await
             .map_err(|_| Error::DriverStopped)
     }
@@ -2446,7 +2463,7 @@ async fn receive<T>(receiver: oneshot::Receiver<Result<T>>) -> Result<T> {
 
 #[cfg(not(target_family = "wasm"))]
 fn spawn_claim_ack(
-    commands: mpsc::Sender<Command>,
+    commands: mpsc::Sender<CommandRequest>,
     acknowledged: oneshot::Receiver<()>,
     caller: Caller,
     operation_id: String,
@@ -2457,11 +2474,14 @@ fn spawn_claim_ack(
                 let (result, _receiver) = oneshot::channel();
                 drop(
                     commands
-                        .send(Command::Release {
-                            caller,
-                            operation_id,
-                            result,
-                        })
+                        .send(
+                            Command::Release {
+                                caller,
+                                operation_id,
+                                result,
+                            }
+                            .into(),
+                        )
                         .await,
                 );
             }
@@ -2471,7 +2491,7 @@ fn spawn_claim_ack(
 
 #[cfg(target_family = "wasm")]
 fn spawn_claim_ack(
-    commands: mpsc::Sender<Command>,
+    commands: mpsc::Sender<CommandRequest>,
     acknowledged: oneshot::Receiver<()>,
     caller: Caller,
     operation_id: String,
@@ -2481,11 +2501,14 @@ fn spawn_claim_ack(
             let (result, _receiver) = oneshot::channel();
             drop(
                 commands
-                    .send(Command::Release {
-                        caller,
-                        operation_id,
-                        result,
-                    })
+                    .send(
+                        Command::Release {
+                            caller,
+                            operation_id,
+                            result,
+                        }
+                        .into(),
+                    )
                     .await,
             );
         }

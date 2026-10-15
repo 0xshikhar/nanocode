@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use nanocode_tools::{Tool, ToolContext, ToolDefinition, ToolInput, ToolOutput, ToolResult};
+use nanocode_tool_contracts::{
+    Tool, ToolContext, ToolDefinition, ToolInput, ToolOutput, ToolResult,
+};
 use serde_json::{Value, json};
 
 use crate::{DecisionModel, DecisionRequest};

@@ -2,6 +2,46 @@ use super::execution::{
     finish_tool_execution_span, panicked_tool_output, record_tool_content, tool_execution_span,
 };
 use super::*;
+use crate::attachment::{ProcessRouteStore, RemoteRoute, RunnerRouting};
+
+pub struct RoutingCatalog<'a> {
+    registry: &'a mut ToolRegistry,
+}
+
+impl RoutingCatalog<'_> {
+    pub fn add(&mut self, tool: Arc<dyn Tool>, exposure: ToolExposure) {
+        self.registry.extend([(tool, exposure)]);
+    }
+
+    #[must_use]
+    pub fn contains(&self, name: &str) -> bool {
+        self.registry.by_name.contains_key(name)
+    }
+
+    #[must_use]
+    pub fn names(&self) -> HashSet<Box<str>> {
+        self.registry.by_name.keys().cloned().collect()
+    }
+
+    #[must_use]
+    pub fn providers(&self) -> &[Arc<dyn DynamicToolProvider>] {
+        &self.registry.providers
+    }
+
+    pub fn wrap(&mut self, mut wrap: impl FnMut(&Arc<dyn Tool>) -> Option<Arc<dyn Tool>>) {
+        let registry = &mut *self.registry;
+        for (index, tool) in registry.ordered.iter_mut().enumerate() {
+            if let Some(wrapped) = wrap(tool) {
+                *tool = wrapped;
+                registry.definitions[index] = tool.definition();
+            }
+        }
+    }
+
+    pub fn insert_provider_first(&mut self, provider: Arc<dyn DynamicToolProvider>) {
+        self.registry.providers.insert(0, provider);
+    }
+}
 
 #[derive(Clone)]
 pub(crate) struct ToolRegistry {
@@ -259,86 +299,16 @@ impl ToolRegistry {
 
     pub(super) fn route_workspaces(
         &mut self,
-        routes: &[crate::attachment::routing::Route],
-        store: Option<Arc<dyn crate::attachment::ProcessRouteStore>>,
-        pool: Option<crate::attachment::RunnerPool>,
+        routes: &[RemoteRoute],
+        store: Option<Arc<dyn ProcessRouteStore>>,
+        pool: Option<&RunnerRouting>,
     ) {
-        if routes.is_empty() && pool.is_none() {
-            return;
-        }
-        if let Some(pool) = &pool {
-            if pool.model_management_enabled() {
-                self.extend([(
-                    Arc::new(crate::attachment::management::RunnerManagement { pool: pool.clone() })
-                        as Arc<dyn Tool>,
-                    ToolExposure::CodeModeOnly,
-                )]);
-            }
-        }
-        let local_names = self.by_name.keys().cloned().collect::<HashSet<_>>();
-        for remote in routes.iter().flat_map(|route| route.tools.iter()) {
-            let definition = remote.native_definition();
-            if !self.by_name.contains_key(definition.name()) {
-                let local: Arc<dyn Tool> = Arc::new(crate::attachment::routing::RemoteOnlyTool {
-                    definition,
-                    providers: self.providers.clone(),
-                });
-                self.extend([(local, ToolExposure::CodeModeOnly)]);
-            }
-        }
-        let routes = Arc::new(routes.to_vec());
-        let sessions = Arc::new(crate::attachment::process_routes::ProcessRoutes::new(store));
-        let local_runtime_id: Arc<str> = uuid::Uuid::new_v4().to_string().into();
-        for (index, tool) in self.ordered.iter_mut().enumerate() {
-            let name = tool.definition().name().to_owned();
-            if matches!(
-                name.as_str(),
-                "exec_command" | "write_stdin" | "apply_patch" | "view_image"
-            ) || (pool.is_some()
-                && (name.starts_with("mcp__")
-                    || matches!(
-                        name.as_str(),
-                        "Read"
-                            | "Write"
-                            | "Edit"
-                            | "Glob"
-                            | "Grep"
-                            | "Bash"
-                            | "TaskOutput"
-                            | "TaskStop"
-                    )))
-                || routes.iter().any(|route| {
-                    route
-                        .tools
-                        .iter()
-                        .any(|remote| remote.remote_name() == name)
-                })
-            {
-                *tool = Arc::new(crate::attachment::routing::RoutedTool {
-                    local: Arc::clone(tool),
-                    local_desktop: local_names.contains(name.as_str())
-                        || self
-                            .providers
-                            .iter()
-                            .any(|provider| provider.contains(&name)),
-                    routes: Arc::clone(&routes),
-                    pool: pool.clone(),
-                    sessions: Arc::clone(&sessions),
-                    local_runtime_id: Arc::clone(&local_runtime_id),
-                });
-                self.definitions[index] = tool.definition();
-            }
-        }
-        if let Some(pool) = pool {
-            let provider = Arc::new(crate::attachment::routing::RunnerProvider {
-                pool,
-                routes,
-                sessions,
-                local_runtime_id,
-                providers: self.providers.clone(),
-            });
-            self.providers.insert(0, provider);
-        }
+        let router = match (pool, routes.first()) {
+            (Some(pool), _) => Arc::clone(pool.router()),
+            (None, Some(route)) => route.tools.router(),
+            (None, None) => return,
+        };
+        router.route(&mut RoutingCatalog { registry: self }, routes, store, pool);
     }
 
     pub(super) fn set_all_exposures(&mut self, exposure: ToolExposure) {

@@ -30,7 +30,7 @@ pub use crate::embedded::{
 };
 pub use crate::{CodeModeToolObservation, CodeModeToolset};
 use nanocode_code_mode_engine::{EmbeddedHost as ExecutionWorker, RuntimeEvent};
-use nanocode_tools::ToolProcessTraceWire;
+use nanocode_tool_contracts::ToolProcessTraceWire;
 pub use spec::{exec_spec, wait_spec};
 
 const INITIAL_YIELD: Duration = Duration::from_secs(10);

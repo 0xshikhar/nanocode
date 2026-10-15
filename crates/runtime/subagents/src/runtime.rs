@@ -31,6 +31,7 @@ use std::{
     time::Duration,
 };
 use tokio::sync::{mpsc, oneshot, watch};
+use tracing::Instrument;
 
 mod focus;
 
@@ -1433,6 +1434,12 @@ impl Registry {
                     let contents = records.iter().map(|(_, json)| Arc::clone(json)).collect();
                     match store
                         .save(&root_session_id, payload.clone(), contents)
+                        .instrument(tracing::info_span!(
+                            "subagent.journal.save",
+                            session.root_id = root_session_id,
+                            payload.bytes = payload.len(),
+                            record.count = records.len()
+                        ))
                         .await
                     {
                         Ok(()) => {
@@ -1904,6 +1911,18 @@ impl Registry {
         self: &Arc<Self>,
         root_session_id: &str,
     ) -> std::io::Result<RestoreReport> {
+        self.restore_inner(root_session_id)
+            .instrument(tracing::info_span!(
+                "subagent.restore",
+                session.root_id = root_session_id
+            ))
+            .await
+    }
+
+    async fn restore_inner(
+        self: &Arc<Self>,
+        root_session_id: &str,
+    ) -> std::io::Result<RestoreReport> {
         let store = self
             .store_for(root_session_id)
             .ok_or_else(|| std::io::Error::other("no subagent store is installed"))?;
@@ -2014,6 +2033,19 @@ impl Registry {
         root_session_id: &str,
         store: &dyn SubagentStore,
     ) -> std::io::Result<()> {
+        self.save_scope_inner(root_session_id, store)
+            .instrument(tracing::info_span!(
+                "subagent.journal.snapshot",
+                session.root_id = root_session_id
+            ))
+            .await
+    }
+
+    async fn save_scope_inner(
+        &self,
+        root_session_id: &str,
+        store: &dyn SubagentStore,
+    ) -> std::io::Result<()> {
         let _write_guard = self.journal_write_lock.lock().await;
         let payload = {
             let state = self.state.lock().await;
@@ -2041,12 +2073,30 @@ impl Registry {
     ) -> std::io::Result<()> {
         let JournalWrite { payload, records } = write;
         let contents = records.iter().map(|(_, json)| Arc::clone(json)).collect();
-        store.save(root_session_id, payload, contents).await?;
+        store
+            .save(root_session_id, payload, contents)
+            .instrument(tracing::info_span!(
+                "subagent.journal.save",
+                session.root_id = root_session_id
+            ))
+            .await?;
         self.acknowledge(root_session_id, &records);
         Ok(())
     }
 
     pub async fn resume_interrupted(
+        self: &Arc<Self>,
+        root_session_id: &str,
+    ) -> Vec<(AgentId, std::io::Result<MessageReceipt>)> {
+        self.resume_interrupted_inner(root_session_id)
+            .instrument(tracing::info_span!(
+                "subagent.resume",
+                session.root_id = root_session_id
+            ))
+            .await
+    }
+
+    async fn resume_interrupted_inner(
         self: &Arc<Self>,
         root_session_id: &str,
     ) -> Vec<(AgentId, std::io::Result<MessageReceipt>)> {
@@ -2227,6 +2277,21 @@ impl Registry {
         instruction_revision: Option<u64>,
         output: Value,
     ) -> std::io::Result<(SubmissionOutcome, bool)> {
+        self.submit_result_durably_inner(session_id, instruction_revision, output)
+            .instrument(tracing::info_span!(
+                "subagent.submit",
+                session.id = session_id,
+                instruction.revision = instruction_revision
+            ))
+            .await
+    }
+
+    async fn submit_result_durably_inner(
+        self: &Arc<Self>,
+        session_id: &str,
+        instruction_revision: Option<u64>,
+        output: Value,
+    ) -> std::io::Result<(SubmissionOutcome, bool)> {
         self.await_restored(session_id).await?;
         let (outcome, root) = {
             let mut state = self.state.lock().await;
@@ -2397,6 +2462,15 @@ impl Registry {
     }
 
     async fn persist_now(&self, root_session_id: &str) -> std::io::Result<()> {
+        self.persist_now_inner(root_session_id)
+            .instrument(tracing::info_span!(
+                "subagent.journal.persist",
+                session.root_id = root_session_id
+            ))
+            .await
+    }
+
+    async fn persist_now_inner(&self, root_session_id: &str) -> std::io::Result<()> {
         let Some(store) = self.store_for(root_session_id) else {
             return Err(std::io::Error::other("no subagent store is installed"));
         };
@@ -3461,6 +3535,21 @@ impl Registry {
     }
 
     pub async fn wait(
+        &self,
+        session_id: &str,
+        ids: &[AgentId],
+        duration: Duration,
+    ) -> std::io::Result<(Vec<AgentSummary>, bool)> {
+        self.wait_inner(session_id, ids, duration)
+            .instrument(tracing::info_span!(
+                "subagent.wait",
+                session.id = session_id,
+                agent.count = ids.len()
+            ))
+            .await
+    }
+
+    async fn wait_inner(
         &self,
         session_id: &str,
         ids: &[AgentId],

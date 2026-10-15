@@ -503,6 +503,11 @@ impl State {
                 Err(NanocodexError::TurnCancelled) => {
                     policy.cancel(operation.clone(), checkpoint).await
                 }
+                Err(NanocodexError::Response(error)) if self.code_only && error.retryable() => {
+                    policy
+                        .fail_attempt(operation.clone(), checkpoint, error.to_string())
+                        .await
+                }
                 Err(error) => {
                     policy
                         .fail(operation.clone(), checkpoint, error.to_string())

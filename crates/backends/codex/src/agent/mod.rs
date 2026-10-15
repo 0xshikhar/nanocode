@@ -12,9 +12,9 @@ use crate::client::{
 };
 use crate::client::{Model, Prompt, Thinking, events::AgentEvents, pricing::ServiceTier};
 
-use nanocode_tool_runtime::Tools;
+use nanocode_tool_host::Tools;
 
-use nanocode_tool_runtime::ToolsBuildError;
+use nanocode_tool_host::ToolsBuildError;
 
 use tokio::sync::oneshot;
 

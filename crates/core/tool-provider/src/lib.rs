@@ -3,7 +3,7 @@ use async_trait::async_trait;
 #[cfg(not(target_family = "wasm"))]
 pub use nanocode_home::SessionEnvironment;
 #[cfg(not(target_family = "wasm"))]
-use nanocode_tools::{Tool, ToolContext, ToolDefinition, ToolOutput};
+use nanocode_tool_contracts::{Tool, ToolContext, ToolDefinition, ToolOutput};
 #[cfg(not(target_family = "wasm"))]
 use serde_json::Value;
 #[cfg(not(target_family = "wasm"))]

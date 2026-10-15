@@ -97,7 +97,8 @@ impl ToolRuntime {
         }
     }
 
-    pub(crate) fn registered_code_mode_definitions(&self) -> Vec<ToolDefinition> {
+    #[doc(hidden)]
+    pub fn registered_code_mode_definitions(&self) -> Vec<ToolDefinition> {
         match &self.inner {
             Runtime::Native(runtime) => runtime.registry.registered_code_mode_definitions(),
             Runtime::Host(runtime) => runtime.registered_code_mode_definitions(),
@@ -382,7 +383,7 @@ impl NativeToolRuntime {
         executor: Option<Arc<dyn crate::workspace_runtime::WorkspaceExecutor>>,
     ) -> Self {
         let current_turn = Arc::new(AtomicU64::new(0));
-        let default_shell_name = Arc::from(crate::shell::default_shell_name());
+        let default_shell_name = Arc::from(nanocode_home::shell::default_shell_name());
         let working_directory = Arc::from(workspace.to_string_lossy().into_owned());
         let mut handlers = executor
             .as_ref()
@@ -426,7 +427,7 @@ impl NativeToolRuntime {
         registry.route_workspaces(
             &tools.remote_runners,
             tools.process_route_store.clone(),
-            tools.runner_pool.clone(),
+            tools.runner_pool.as_ref(),
         );
         if let Some(working_directory) = &tools.working_directory {
             self.working_directory = Arc::clone(working_directory);

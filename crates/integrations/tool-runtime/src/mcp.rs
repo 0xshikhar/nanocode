@@ -47,6 +47,12 @@ impl McpBuilder {
     }
 }
 
+impl crate::ToolSource for Mcp {
+    fn install(self, builder: crate::ToolsBuilder) -> crate::ToolsBuilder {
+        builder.attachable_provider(Arc::new(self))
+    }
+}
+
 #[async_trait]
 impl DynamicToolProvider for Mcp {
     fn start(&self) {

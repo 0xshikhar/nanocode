@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use nanocode_tools::{Tool, ToolCollection};
+use nanocode_tool_contracts::{Tool, ToolCollection};
 
 use crate::AgentHandle;
 

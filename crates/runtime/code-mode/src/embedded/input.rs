@@ -1,4 +1,4 @@
-use nanocode_tools::ToolOutputBody;
+use nanocode_tool_contracts::ToolOutputBody;
 use nanocode_types::{PromptInput, responses::ContentItem};
 
 #[allow(

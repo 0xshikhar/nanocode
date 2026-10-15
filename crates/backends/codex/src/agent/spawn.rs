@@ -161,7 +161,7 @@ where
         .materialize(child_handle.clone())?
         .for_session(&child_handle.session_environment());
 
-    if tools.exposure() == nanocode_tool_runtime::ToolExposure::Hidden {
+    if tools.exposure() == nanocode_tool_host::ToolExposure::Hidden {
         return Err(NanocodexError::InvalidRequest(
             "Nanocodex agents require Code Mode or direct tool exposure".to_owned(),
         ));

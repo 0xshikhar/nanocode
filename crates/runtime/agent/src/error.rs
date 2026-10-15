@@ -158,7 +158,7 @@ pub enum NanocodexError {
     Response(BackendError),
 
     #[error("failed to build tools for an agent driver: {0}")]
-    Tools(#[from] nanocode_tools::ToolsBuildError),
+    Tools(#[from] nanocode_tool_contracts::ToolsBuildError),
 }
 
 impl NanocodexError {

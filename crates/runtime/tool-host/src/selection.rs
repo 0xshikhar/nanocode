@@ -4,9 +4,13 @@ use std::{
     sync::Arc,
 };
 
+#[cfg(not(target_family = "wasm"))]
+use crate::attachment::{
+    AttachmentError, ProcessRouteStore, RemoteMode, RemoteRoute, RemoteRunnerCatalog, RunnerRouting,
+};
 use crate::{Tool, ToolDefinition};
 #[cfg(not(target_family = "wasm"))]
-use std::ffi::OsString;
+use std::{any::Any, ffi::OsString, path::PathBuf};
 
 #[cfg(not(target_family = "wasm"))]
 pub use nanocode_tool_provider::DynamicToolProvider;
@@ -43,24 +47,23 @@ impl ToolSource for crate::WorkspaceTools {
 }
 
 #[cfg(not(target_family = "wasm"))]
-impl ToolSource for crate::mcp::Mcp {
-    fn install(self, mut builder: ToolsBuilder) -> ToolsBuilder {
-        let provider = Arc::new(self);
-        builder
-            .tools
-            .providers
-            .push(Arc::clone(&provider) as Arc<dyn DynamicToolProvider>);
-        builder.tools.attachment_mcps.push(provider);
-        builder.refresh_provider_direct();
-        builder
-    }
+pub trait RemoteRunnerTools: Sized {
+    #[doc(hidden)]
+    fn namespace(&self) -> Option<Arc<str>>;
+
+    #[doc(hidden)]
+    fn advertised_workspace(&self) -> Option<PathBuf>;
+
+    #[doc(hidden)]
+    fn into_catalog(self) -> Arc<dyn RemoteRunnerCatalog>;
 }
 
 #[cfg(not(target_family = "wasm"))]
-impl ToolSource for crate::attachment::RemoteTools {
-    fn install(self, builder: ToolsBuilder) -> ToolsBuilder {
-        self.into_iter().fold(builder, ToolsBuilder::tool)
-    }
+pub trait AttachTarget {
+    type Connector;
+
+    #[doc(hidden)]
+    fn connect_tools(self, tools: Tools) -> Self::Connector;
 }
 
 #[derive(Clone)]
@@ -85,15 +88,15 @@ pub struct Tools {
     #[cfg(not(target_family = "wasm"))]
     pub(super) providers: Vec<Arc<dyn DynamicToolProvider>>,
     #[cfg(not(target_family = "wasm"))]
-    pub(crate) attachment_mcps: Vec<Arc<crate::mcp::Mcp>>,
+    attachable_providers: Vec<Arc<dyn Any + Send + Sync>>,
     #[cfg(not(target_family = "wasm"))]
     pub(crate) workspace_tools: Option<crate::WorkspaceTools>,
     #[cfg(not(target_family = "wasm"))]
-    pub(crate) remote_runners: Vec<crate::attachment::routing::Route>,
+    pub(crate) remote_runners: Vec<RemoteRoute>,
     #[cfg(not(target_family = "wasm"))]
-    pub(crate) process_route_store: Option<Arc<dyn crate::attachment::ProcessRouteStore>>,
+    pub(crate) process_route_store: Option<Arc<dyn ProcessRouteStore>>,
     #[cfg(not(target_family = "wasm"))]
-    pub(crate) runner_pool: Option<crate::attachment::RunnerPool>,
+    pub(crate) runner_pool: Option<RunnerRouting>,
     #[cfg(not(target_family = "wasm"))]
     pub(super) deferred_tools_guidance_enabled: bool,
 
@@ -125,7 +128,7 @@ impl Default for Tools {
             #[cfg(not(target_family = "wasm"))]
             providers: Vec::new(),
             #[cfg(not(target_family = "wasm"))]
-            attachment_mcps: Vec::new(),
+            attachable_providers: Vec::new(),
             #[cfg(not(target_family = "wasm"))]
             workspace_tools: None,
             #[cfg(not(target_family = "wasm"))]
@@ -242,26 +245,37 @@ impl Tools {
     }
 
     #[cfg(not(target_family = "wasm"))]
-    pub fn with_runner_pool(mut self, pool: crate::attachment::RunnerPool) -> Self {
-        self.runner_pool = Some(pool);
+    pub fn with_runner_pool(mut self, pool: impl Into<RunnerRouting>) -> Self {
+        self.runner_pool = Some(pool.into());
         self
     }
 
     #[cfg(not(target_family = "wasm"))]
-    pub fn with_process_route_store(
-        self,
-        store: Arc<dyn crate::attachment::ProcessRouteStore>,
-    ) -> Self {
+    pub fn with_process_route_store(self, store: Arc<dyn ProcessRouteStore>) -> Self {
         self.into_builder().process_route_store(store).tools
     }
 
     #[cfg(not(target_family = "wasm"))]
-    pub fn with_default_process_route_store(
-        mut self,
-        store: Arc<dyn crate::attachment::ProcessRouteStore>,
-    ) -> Self {
+    pub fn with_default_process_route_store(mut self, store: Arc<dyn ProcessRouteStore>) -> Self {
         self.process_route_store.get_or_insert(store);
         self
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub fn attach<T: AttachTarget>(self, target: T) -> T::Connector {
+        target.connect_tools(self)
+    }
+
+    #[doc(hidden)]
+    #[cfg(not(target_family = "wasm"))]
+    pub fn registered_tools(&self) -> impl Iterator<Item = &Arc<dyn Tool>> {
+        self.registered.iter().map(|registered| &registered.handler)
+    }
+
+    #[doc(hidden)]
+    #[cfg(not(target_family = "wasm"))]
+    pub fn attachable_providers(&self) -> &[Arc<dyn Any + Send + Sync>] {
+        &self.attachable_providers
     }
 
     #[must_use]
@@ -312,8 +326,9 @@ impl Tools {
         self.session.as_ref()
     }
 
+    #[doc(hidden)]
     #[cfg(not(target_family = "wasm"))]
-    pub(super) fn process_environment(&self) -> Arc<Vec<(OsString, OsString)>> {
+    pub fn process_environment(&self) -> Arc<Vec<(OsString, OsString)>> {
         Arc::clone(&self.process_environment)
     }
 
@@ -343,14 +358,15 @@ impl Tools {
     #[cfg(target_family = "wasm")]
     pub const fn start_providers(&self) {}
 
+    #[doc(hidden)]
     #[cfg(not(target_family = "wasm"))]
-    pub(crate) fn has_unattachable_provider(&self) -> bool {
+    pub fn has_unattachable_provider(&self) -> bool {
         self.providers.len() != self.attachment_mcp_count()
     }
 
     #[cfg(not(target_family = "wasm"))]
     const fn attachment_mcp_count(&self) -> usize {
-        self.attachment_mcps.len()
+        self.attachable_providers.len()
     }
 }
 
@@ -379,72 +395,65 @@ impl ToolsBuilder {
     }
 
     #[cfg(not(target_family = "wasm"))]
-    pub fn runner_pool(mut self, pool: crate::attachment::RunnerPool) -> Self {
-        self.tools.runner_pool = Some(pool);
+    pub fn runner_pool(mut self, pool: impl Into<RunnerRouting>) -> Self {
+        self.tools.runner_pool = Some(pool.into());
         self
     }
 
     #[cfg(not(target_family = "wasm"))]
-    pub fn process_route_store(
-        mut self,
-        store: Arc<dyn crate::attachment::ProcessRouteStore>,
-    ) -> Self {
+    pub fn process_route_store(mut self, store: Arc<dyn ProcessRouteStore>) -> Self {
         self.tools.process_route_store = Some(store);
         self
     }
 
     #[cfg(not(target_family = "wasm"))]
-    pub fn remote_runner_discovered(
+    pub fn remote_runner_discovered<R: RemoteRunnerTools>(
         self,
-        tools: crate::attachment::RemoteTools,
-        mode: crate::attachment::RemoteMode,
-    ) -> Result<Self, crate::attachment::AttachmentError> {
-        let workspace = tools
-            .workspace()
-            .ok_or_else(|| {
-                crate::attachment::AttachmentError::Catalog(
-                    "runner did not advertise a workspace; supply an explicit workspace override"
-                        .into(),
-                )
-            })?
-            .to_path_buf();
+        tools: R,
+        mode: RemoteMode,
+    ) -> Result<Self, AttachmentError> {
+        let workspace = tools.advertised_workspace().ok_or_else(|| {
+            AttachmentError::Catalog(
+                "runner did not advertise a workspace; supply an explicit workspace override"
+                    .into(),
+            )
+        })?;
         self.remote_runner(tools, workspace, mode)
     }
 
     #[cfg(not(target_family = "wasm"))]
-    pub fn remote_runner(
+    pub fn remote_runner<R: RemoteRunnerTools>(
         mut self,
-        tools: crate::attachment::RemoteTools,
-        workspace: impl Into<std::path::PathBuf>,
-        mode: crate::attachment::RemoteMode,
-    ) -> Result<Self, crate::attachment::AttachmentError> {
+        tools: R,
+        workspace: impl Into<PathBuf>,
+        mode: RemoteMode,
+    ) -> Result<Self, AttachmentError> {
         let workspace = workspace.into();
-        if !workspace.is_absolute() || tools.iter().next().is_none() {
-            return Err(crate::attachment::AttachmentError::Catalog(
+        let namespace = tools.namespace().filter(|_| workspace.is_absolute());
+        let Some(namespace) = namespace else {
+            return Err(AttachmentError::Catalog(
                 "remote routing requires an absolute workspace and nonempty catalog".into(),
             ));
-        }
-        let namespace = tools.iter().next().unwrap().namespace();
+        };
         if self.tools.remote_runners.iter().any(|route| {
-            route.tools.iter().next().unwrap().namespace() == namespace
-                || route.mode == crate::attachment::RemoteMode::Replace
-                || mode == crate::attachment::RemoteMode::Replace
+            route.namespace == namespace
+                || route.mode == RemoteMode::Replace
+                || mode == RemoteMode::Replace
         }) {
-            return Err(crate::attachment::AttachmentError::Catalog(
+            return Err(AttachmentError::Catalog(
                 "duplicate runner or replacement mixed with other runners".into(),
             ));
         }
         self.tools.workspace = true;
-        if mode == crate::attachment::RemoteMode::Replace {
+        if mode == RemoteMode::Replace {
             self.tools.working_directory = Some(Arc::from(format!("/{namespace}")));
         }
-        self.tools
-            .remote_runners
-            .push(crate::attachment::routing::Route {
-                tools,
-                workspace,
-                mode,
-            });
+        self.tools.remote_runners.push(RemoteRoute {
+            tools: tools.into_catalog(),
+            namespace,
+            workspace,
+            mode,
+        });
         Ok(self)
     }
 
@@ -550,6 +559,21 @@ impl ToolsBuilder {
 
             exposure: Some(exposure),
         });
+        self
+    }
+
+    #[doc(hidden)]
+    #[must_use]
+    #[cfg(not(target_family = "wasm"))]
+    pub fn attachable_provider<P: DynamicToolProvider + 'static>(
+        mut self,
+        provider: Arc<P>,
+    ) -> Self {
+        self.tools
+            .providers
+            .push(Arc::clone(&provider) as Arc<dyn DynamicToolProvider>);
+        self.tools.attachable_providers.push(provider);
+        self.refresh_provider_direct();
         self
     }
 
@@ -699,7 +723,7 @@ impl ToolsBuilder {
 
 #[cfg(not(target_family = "wasm"))]
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum PublicToolCatalogError {
+pub enum PublicToolCatalogError {
     #[error("invalid public tool name `{0}`")]
     InvalidName(Box<str>),
     #[error(
@@ -713,7 +737,7 @@ pub(crate) enum PublicToolCatalogError {
 }
 
 #[cfg(not(target_family = "wasm"))]
-pub(crate) fn validate_public_tool_catalog_names<'a>(
+pub fn validate_public_tool_catalog_names<'a>(
     names: impl IntoIterator<Item = &'a str>,
 ) -> Result<(), PublicToolCatalogError> {
     let mut normalized_names = HashMap::new();
@@ -777,7 +801,7 @@ fn insert_code_mode_name(
     Ok(())
 }
 
-pub(crate) fn normalize_public_tool_name(name: &str) -> String {
+pub fn normalize_public_tool_name(name: &str) -> String {
     name.chars()
         .enumerate()
         .map(|(index, character)| {

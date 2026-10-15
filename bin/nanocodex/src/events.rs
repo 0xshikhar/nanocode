@@ -1187,16 +1187,17 @@ fn agent_lines(value: &Value, lines: &mut Vec<String>) {
                 .map(Value::to_string)
                 .unwrap_or_default();
             let role = map.get("role").and_then(Value::as_str).unwrap_or("agent");
-            let state = map["status"]["state"].as_str().unwrap_or("unknown");
+            let status = &value["status"];
+            let state = status["state"].as_str().unwrap_or("unknown");
             let mut line = format!("#{id} {role} · {state}");
-            match &map["status"]["output"] {
+            match &status["output"] {
                 Value::Null => {}
                 Value::String(output) => {
                     line.push_str(&format!(" · {}", output.lines().next().unwrap_or_default()));
                 }
                 other => line.push_str(&format!(" · {other}")),
             }
-            if let Some(error) = map["status"]["error"].as_str() {
+            if let Some(error) = status["error"].as_str() {
                 line.push_str(&format!(" · {error}"));
             }
             lines.push(line);

@@ -18,6 +18,9 @@ categories = ["development-tools", "filesystem"]
 serde.workspace = true
 thiserror.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+nix.workspace = true
+
 [lints]
 workspace = true
 

@@ -1,4 +1,4 @@
-use nanocode_tools::ToolDefinition;
+use nanocode_tool_contracts::ToolDefinition;
 
 pub fn sort_definitions(definitions: &mut [ToolDefinition]) {
     definitions.sort_by(|left, right| {

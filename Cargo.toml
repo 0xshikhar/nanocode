@@ -2,6 +2,7 @@
 members = [
     "crates/nanocode",
     "crates/runtime/agent",
+    "crates/runtime/tool-host",
     "crates/runtime/code-mode",
     "crates/runtime/code-mode-engine",
     "crates/runtime/durability",
@@ -21,6 +22,7 @@ members = [
     "crates/core/audio",
     "crates/core/tls",
     "crates/core/tools",
+    "crates/core/tool-contracts",
     "crates/core/tools-macros",
     "crates/core/types",
     "crates/integrations/tool-runtime",
@@ -53,6 +55,7 @@ publish = true
 [workspace.dependencies]
 nanocode-backend-codex = { version = "0.6.7", path = "crates/backends/codex" }
 nanocode-agent = { version = "0.6.7", path = "crates/runtime/agent" }
+nanocode-tool-host = { version = "0.6.7", path = "crates/runtime/tool-host" }
 nanocode-media = { version = "0.6.7", path = "crates/core/media" }
 nanocode-image = { version = "0.6.7", path = "crates/core/image" }
 nanocode-audio = { version = "0.6.7", path = "crates/core/audio" }
@@ -61,6 +64,7 @@ nanocode-types = { version = "0.6.7", path = "crates/core/types" }
 nanocode-cua = { version = "0.6.7", path = "crates/integrations/cua" }
 nanocode-decisions = { version = "0.6.7", path = "crates/integrations/decisions" }
 nanocode-tools = { version = "0.6.7", path = "crates/core/tools" }
+nanocode-tool-contracts = { version = "0.6.7", path = "crates/core/tool-contracts" }
 nanocode-store-jsonl = { version = "0.6.7", path = "crates/integrations/store-jsonl" }
 nanocode-store-sqlite = { version = "0.6.7", path = "crates/integrations/store-sqlite" }
 nanocode-store-postgres = { version = "0.6.7", path = "crates/integrations/store-postgres" }

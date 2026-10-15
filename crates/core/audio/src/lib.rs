@@ -1,14 +1,15 @@
+mod bytes;
+mod matroska;
+mod mp4;
+mod mpeg;
+mod ogg;
+mod wav;
+
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use sha1::{Digest, Sha1};
 use std::collections::VecDeque;
-use std::io::Cursor;
 use std::sync::Mutex;
-use symphonia::core::{
-    formats::{FormatOptions, TrackType, probe::Hint},
-    io::MediaSourceStream,
-    meta::MetadataOptions,
-};
 
 const AUDIO_TOKEN_ESTIMATE_CACHE_SIZE: usize = 32;
 const AUDIO_TOKENS_PER_SECOND: f64 = 10.0;
@@ -54,34 +55,27 @@ const fn approx_token_count(text: &str) -> usize {
         / APPROX_BYTES_PER_TOKEN
 }
 
-const fn canonical_audio_mime(mime: &str) -> Option<&'static str> {
-    if mime.eq_ignore_ascii_case("audio/wav")
+const fn is_supported_audio_mime(mime: &str) -> bool {
+    mime.eq_ignore_ascii_case("audio/wav")
         || mime.eq_ignore_ascii_case("audio/x-wav")
         || mime.eq_ignore_ascii_case("audio/wave")
         || mime.eq_ignore_ascii_case("audio/vnd.wave")
-    {
-        Some("audio/wav")
-    } else if mime.eq_ignore_ascii_case("audio/mpeg") || mime.eq_ignore_ascii_case("audio/mp3") {
-        Some("audio/mpeg")
-    } else if mime.eq_ignore_ascii_case("audio/mp4")
+        || mime.eq_ignore_ascii_case("audio/mpeg")
+        || mime.eq_ignore_ascii_case("audio/mp3")
+        || mime.eq_ignore_ascii_case("audio/mp4")
         || mime.eq_ignore_ascii_case("audio/m4a")
         || mime.eq_ignore_ascii_case("audio/x-m4a")
-    {
-        Some("audio/mp4")
-    } else if mime.eq_ignore_ascii_case("audio/webm") {
-        Some("audio/webm")
-    } else if mime.eq_ignore_ascii_case("audio/ogg") {
-        Some("audio/ogg")
-    } else {
-        None
-    }
+        || mime.eq_ignore_ascii_case("audio/webm")
+        || mime.eq_ignore_ascii_case("audio/ogg")
 }
 
 fn audio_duration_seconds(audio_url: &str) -> Option<f64> {
     let (metadata, payload) = audio_url.split_once(',')?;
     let metadata = metadata.get("data:".len()..)?;
     let mut metadata_parts = metadata.split(';');
-    let canonical_mime = canonical_audio_mime(metadata_parts.next()?)?;
+    if !is_supported_audio_mime(metadata_parts.next()?) {
+        return None;
+    }
     if !metadata_parts.any(|part| part.eq_ignore_ascii_case("base64")) {
         return None;
     }
@@ -93,30 +87,41 @@ fn audio_duration_seconds(audio_url: &str) -> Option<f64> {
             return None;
         }
     };
-    let media_source = MediaSourceStream::new(Box::new(Cursor::new(bytes)), Default::default());
-    let mut hint = Hint::new();
-    hint.mime_type(canonical_mime);
-    let format = match symphonia::default::get_probe().probe(
-        &hint,
-        media_source,
-        FormatOptions::default(),
-        MetadataOptions::default(),
-    ) {
-        Ok(format) => format,
-        Err(error) => {
-            tracing::trace!(%error, "failed to read audio duration for token estimation");
-            return None;
-        }
+    let Some(duration_seconds) = container_duration_seconds(&bytes) else {
+        tracing::trace!("failed to read audio duration for token estimation");
+        return None;
     };
-    let track = format.default_track(TrackType::Audio)?;
-    let timing = track.time_base.zip(track.duration).or_else(|| {
-        format
-            .media_info()
-            .time_base
-            .zip(format.media_info().duration)
-    });
-    let (time_base, duration) = timing?;
-    let duration_seconds =
-        duration.get() as f64 * f64::from(time_base.numer.get()) / f64::from(time_base.denom.get());
     duration_seconds.is_finite().then_some(duration_seconds)
+}
+
+fn container_duration_seconds(bytes: &[u8]) -> Option<f64> {
+    let start = bytes.windows(4).position(|magic| {
+        magic == b"RIFF"
+            || magic == b"OggS"
+            || magic == matroska::EBML_MAGIC
+            || magic == b"ftyp"
+            || magic[0] == 0xff && magic[1] & 0xe0 == 0xe0
+            || magic.starts_with(b"ID3")
+    })?;
+    let start = if bytes.get(start..start + 4) == Some(b"ftyp") {
+        start.checked_sub(4)?
+    } else {
+        start
+    };
+    let bytes = &bytes[start..];
+    if bytes.starts_with(b"RIFF") {
+        wav::duration_seconds(bytes)
+    } else if bytes.starts_with(b"OggS") {
+        ogg::duration_seconds(bytes)
+    } else if bytes.starts_with(&matroska::EBML_MAGIC) {
+        matroska::duration_seconds(bytes)
+    } else if bytes.get(4..8) == Some(b"ftyp") {
+        mp4::duration_seconds(bytes)
+    } else {
+        mpeg::duration_seconds(bytes)
+    }
+}
+
+fn ticks_to_seconds(ticks: u64, numer: u64, denom: u64) -> Option<f64> {
+    (denom != 0).then(|| ticks as f64 * numer as f64 / denom as f64)
 }

@@ -207,11 +207,7 @@ pub struct ClaudeTools {
     pub(crate) code_turn_preempt: Vec<ToolCleanup>,
     pub(crate) code_turn_settle: Vec<ToolCleanup>,
     pub(crate) nested_tools: Option<NestedToolLookup>,
-    pub(crate) shared_catalog: Option<(
-        nanocode_tool_runtime::Tools,
-        std::path::PathBuf,
-        AgentHandle,
-    )>,
+    pub(crate) shared_catalog: Option<(nanocode_tool_host::Tools, std::path::PathBuf, AgentHandle)>,
     pub(crate) shared_tool_names: HashSet<String>,
     pub(crate) shared_shutdown: Option<ToolCleanup>,
 }

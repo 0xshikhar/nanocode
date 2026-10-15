@@ -5,7 +5,7 @@ use serde::Deserialize;
 
 use super::{StandardTool, Tool, ToolContext, ToolInput, ToolOutput, ToolResult};
 
-use nanocode_tool_runtime::shell::{ExecCommand, ExecCommandResult, ShellSessions, WriteStdin};
+use nanocode_process::{ExecCommand, ExecCommandResult, ShellSessions, WriteStdin};
 
 pub(crate) struct ExecCommandHandler {
     workspace: PathBuf,

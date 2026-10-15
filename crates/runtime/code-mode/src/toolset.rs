@@ -1,4 +1,4 @@
-use nanocode_tools::{ToolContext, ToolOutput, ToolOutputContent, ToolProcessTraceWire};
+use nanocode_tool_contracts::{ToolContext, ToolOutput, ToolOutputContent, ToolProcessTraceWire};
 use serde_json::Value;
 
 use crate::embedded::{HostFuture, NestedToolCall};

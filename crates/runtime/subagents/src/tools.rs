@@ -15,7 +15,7 @@ use futures_util::future::join_all;
 use nanocode_agent::{
     AgentHandle, ForkRequest, HarnessFamily, ModelSelection, ReasoningMode, SpawnOptions, Thinking,
 };
-use nanocode_tools::{
+use nanocode_tool_contracts::{
     Tool, ToolCollection, ToolContext, ToolDefinition, ToolInput, ToolOutput, ToolResult,
 };
 use serde::{Deserialize, Serialize};
@@ -93,10 +93,11 @@ impl OutputContractNode {
             Self::String => json!({ "type": "string" }),
             Self::StringEnum { values } => {
                 if values.is_empty() {
-                    json!({ "type": "string" })
-                } else {
-                    json!({ "type": "string", "enum": values })
+                    return Err(std::io::Error::other(
+                        "output_contract string_enum requires at least one value",
+                    ));
                 }
+                json!({ "type": "string", "enum": values })
             }
             Self::Integer => json!({ "type": "integer" }),
             Self::Number => json!({ "type": "number" }),
@@ -923,7 +924,7 @@ fn spawn_agent_parameters() -> Value {
                 "type": "object",
                 "properties": {
                     "kind": { "type": "string", "const": "string_enum" },
-                    "values": { "type": "array", "items": { "type": "string" } }
+                    "values": { "type": "array", "minItems": 1, "items": { "type": "string" } }
                 },
                 "required": ["kind", "values"], "additionalProperties": false
             },
@@ -1328,7 +1329,7 @@ pub fn install_tools<T: ToolCollection>(
     Ok(tools)
 }
 
-pub fn install_claude_tools<T: nanocode_tools::ToolCollection>(
+pub fn install_claude_tools<T: nanocode_tool_contracts::ToolCollection>(
     mut tools: T,
     parent: AgentHandle,
     registry: Arc<Registry>,

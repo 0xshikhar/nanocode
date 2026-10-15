@@ -1,4 +1,4 @@
-use nanocode_tools::ToolDefinition;
+use nanocode_tool_contracts::ToolDefinition;
 use nanocode_types::responses::CustomToolFormat;
 use serde_json::json;
 

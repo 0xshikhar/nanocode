@@ -10,7 +10,7 @@ publish.workspace = true
 description = "Typed Anthropic Messages protocol and streaming transport"
 
 [dependencies]
-nanocode-tool-runtime.workspace = true
+nanocode-tool-host.workspace = true
 nanocode-platform.workspace = true
 nanocode-agent.workspace = true
 nanocode-durability.workspace = true
@@ -46,6 +46,7 @@ regex.workspace = true
 chrono = { workspace = true, features = ["clock"] }
 reqwest = { workspace = true, features = ["stream", "gzip", "deflate"] }
 nanocode-http.workspace = true
+nanocode-process.workspace = true
 tokio = { workspace = true, features = ["fs", "process", "rt-multi-thread"] }
 nanocode-tls.workspace = true
 ignore = { workspace = true  }

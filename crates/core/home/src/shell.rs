@@ -19,17 +19,17 @@ enum ShellType {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct Shell {
+pub struct Shell {
     shell_type: ShellType,
     path: PathBuf,
 }
 
 impl Shell {
-    pub(super) fn path(&self) -> &Path {
+    pub fn path(&self) -> &Path {
         &self.path
     }
 
-    pub(super) const fn name(&self) -> &'static str {
+    pub const fn name(&self) -> &'static str {
         match self.shell_type {
             ShellType::Zsh => "zsh",
             ShellType::Bash => "bash",
@@ -39,7 +39,7 @@ impl Shell {
         }
     }
 
-    pub(super) fn args(&self, script: &str, login: bool) -> Vec<String> {
+    pub fn args(&self, script: &str, login: bool) -> Vec<String> {
         match self.shell_type {
             ShellType::Zsh | ShellType::Bash | ShellType::Sh => vec![
                 if login { "-lc" } else { "-c" }.to_owned(),
@@ -199,18 +199,18 @@ fn ultimate_fallback_shell() -> Shell {
     }
 }
 
-pub(super) fn bash_shell() -> Option<Shell> {
+pub fn bash_shell() -> Option<Shell> {
     shell(ShellType::Bash, None)
 }
 
-pub(super) fn get_shell_by_model_provided_path(path: &str) -> Shell {
+pub fn get_shell_by_model_provided_path(path: &str) -> Shell {
     let path = Path::new(path);
     detect_shell_type(path)
         .and_then(|shell_type| shell(shell_type, Some(path)))
         .unwrap_or_else(ultimate_fallback_shell)
 }
 
-pub(super) fn default_user_shell() -> Shell {
+pub fn default_user_shell() -> Shell {
     let user_shell_path = user_shell_path();
     default_user_shell_from_path(user_shell_path.as_deref())
 }
@@ -236,4 +236,8 @@ fn default_user_shell_from_path(user_shell_path: Option<&Path>) -> Shell {
     };
 
     shell_with_fallback.unwrap_or_else(ultimate_fallback_shell)
+}
+
+pub fn default_shell_name() -> &'static str {
+    default_user_shell().name()
 }

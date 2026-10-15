@@ -62,7 +62,7 @@ use crate::{
     prompt_cache::ModelPromptCache,
     usage::TurnUsage,
 };
-use nanocode_tool_runtime::{
+use nanocode_tool_host::{
     ToolContext, Tools,
     code_mode::{CodeModeExecution, CodeModeObserver, CodeModeUpdate},
     contract::{DEFAULT_TOOL_OUTPUT_TOKENS, ToolInput, ToolOutput, ToolOutputBody},

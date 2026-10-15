@@ -1,0 +1,1 @@
+Own backend-independent tool selection, registration and execution here. Depend only on core and runtime crates. Keep provider schemas and handlers in backends, and concrete MCP, remote socket and process adapters in integrations. Preserve nanocode-tool-runtime compatibility reexports and native/WASM host contracts.

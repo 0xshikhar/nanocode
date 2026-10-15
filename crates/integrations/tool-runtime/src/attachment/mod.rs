@@ -10,10 +10,11 @@ pub use pool::{
 };
 pub(crate) mod process_routes;
 mod protocol;
-pub use process_routes::ProcessRouteStore;
+pub use nanocode_tool_host::attachment::{
+    AttachmentCallOutcome, AttachmentError, ProcessRouteStore, RemoteMode, RunnerRouting,
+};
 pub(crate) mod routing;
 mod runner;
-pub use routing::RemoteMode;
 pub use runner::{RunnerConfig, RunnerEndpoint, run_runner, run_runner_with_tools};
 
 pub use host::{RemoteRunner, RemoteTool, RemoteTools, RunnerConnection, RunnerHost};
@@ -282,12 +283,13 @@ pub struct AttachmentConnector {
     metadata: Option<AttachmentMetadata>,
 }
 
-impl Tools {
-    #[must_use]
-    pub const fn attach(self, target: AttachmentTarget) -> AttachmentConnector {
+impl nanocode_tool_host::AttachTarget for AttachmentTarget {
+    type Connector = AttachmentConnector;
+
+    fn connect_tools(self, tools: Tools) -> AttachmentConnector {
         AttachmentConnector {
-            tools: self,
-            target,
+            tools,
+            target: self,
             metadata: None,
         }
     }
@@ -386,7 +388,7 @@ async fn initialize_and_run(
                     .collect::<Option<Vec<_>>>()
             })
             .ok_or_else(|| AttachmentError::Catalog("catalog tool name is missing".into()))?;
-        crate::selection::validate_public_tool_catalog_names(names)
+        crate::host::validate_public_tool_catalog_names(names)
             .map_err(|error| AttachmentError::Catalog(error.to_string().into()))?;
         Ok::<_, AttachmentError>(driver::Config {
             endpoint: target.endpoint,
@@ -565,53 +567,6 @@ pub enum AttachmentEvent {
     Fenced {
         reason: Box<str>,
     },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum AttachmentCallOutcome {
-    Completed,
-
-    Unavailable,
-
-    Ambiguous,
-
-    Cancelled,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
-#[non_exhaustive]
-pub enum AttachmentError {
-    #[error("attachment authentication failed: {0}")]
-    Authentication(Box<str>),
-
-    #[error("attached catalog failed: {0}")]
-    Catalog(Box<str>),
-
-    #[error("attachment was fenced: {0}")]
-    Fenced(Box<str>),
-
-    #[error("attachment transport failed: {0}")]
-    Transport(Box<str>),
-
-    #[error(
-        "attachment call `{call_id}` timed out on runner `{runner}` (outcome: {outcome:?}); a dispatched call may have executed"
-    )]
-    Timeout {
-        runner: Box<str>,
-        call_id: Box<str>,
-        outcome: AttachmentCallOutcome,
-    },
-
-    #[error("attachment is closed")]
-    Closed,
-}
-
-impl AttachmentError {
-    #[must_use]
-    pub fn is_revoked(&self) -> bool {
-        matches!(self, Self::Fenced(reason) if &**reason == driver::ATTACHMENT_REVOKED_REASON)
-    }
 }
 
 impl From<PreparedToolError> for AttachmentError {

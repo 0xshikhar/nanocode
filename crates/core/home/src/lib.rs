@@ -4,6 +4,8 @@ mod instructions;
 mod link;
 mod project;
 mod session_environment;
+#[cfg(not(target_family = "wasm"))]
+pub mod shell;
 mod skills;
 
 use std::{

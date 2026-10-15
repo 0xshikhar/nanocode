@@ -6,6 +6,8 @@ pub use crate::selection::{
     DynamicToolProvider, ToolExposure, ToolSource, Tools, ToolsBuildError, ToolsBuilder,
 };
 pub use execution::{ToolRuntime, ToolRuntimeControl};
+#[doc(hidden)]
+pub use registry::RoutingCatalog;
 pub(crate) use registry::ToolRegistry;
 pub use schema::schema_for;
 

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use nanocode_agent::{NanocodexError, Result};
-use nanocode_tool_runtime::{Tool, ToolContext, ToolInput, contract::ToolOutputBody};
+use nanocode_tool_host::{Tool, ToolContext, ToolInput, contract::ToolOutputBody};
 use serde_json::Value;
 
 use super::{ClaudeToolInvocation, ClaudeToolReply, Handler};

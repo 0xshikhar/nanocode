@@ -1443,7 +1443,7 @@ fn claude_recipe(
                         process_routes.clone().map(|store| {
                             store as Arc<dyn nanocode_tool_runtime::attachment::ProcessRouteStore>
                         }),
-                        Some(runner_pool.clone()),
+                        Some(runner_pool.clone().into()),
                     )
                 }
                 #[cfg(target_family = "wasm")]

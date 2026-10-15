@@ -6,7 +6,7 @@ mod foreground;
 pub use foreground::{ForegroundOutput, run_bash};
 mod output;
 mod process;
-mod selection;
+use nanocode_home::shell as selection;
 
 pub use process::ProcessGroupGuard;
 
@@ -559,6 +559,4 @@ impl Drop for CancelExecution {
     }
 }
 
-pub fn default_shell_name() -> &'static str {
-    selection::default_user_shell().name()
-}
+pub use nanocode_home::shell::default_shell_name;

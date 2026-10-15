@@ -5,7 +5,7 @@ use crate::{
     ToolDefinition, ToolResultContent,
 };
 use nanocode_agent::{AgentHandle, NanocodexError, Result};
-use nanocode_tool_runtime::{
+use nanocode_tool_host::{
     ToolContext, ToolDefinition as RuntimeDefinition, ToolInput, Tools,
     contract::{ToolOutputBody, ToolOutputContent},
     embedded::{
@@ -167,7 +167,7 @@ enum Call {
 }
 
 struct RuntimeGuard {
-    control: nanocode_tool_runtime::runtime::ToolRuntimeControl,
+    control: nanocode_tool_host::runtime::ToolRuntimeControl,
     #[cfg(not(target_family = "wasm"))]
     cancel_on_drop: bool,
 }

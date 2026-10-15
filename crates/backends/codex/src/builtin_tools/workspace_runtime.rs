@@ -2,8 +2,8 @@ use std::{ffi::OsString, path::PathBuf, sync::Arc};
 
 use nanocode_code_mode::embedded::HostFuture;
 use nanocode_home::SessionEnvironment;
-use nanocode_tool_runtime::shell::{MAX_EXEC_YIELD_MS, MAX_POLL_YIELD_MS, ShellSessions};
-use nanocode_tool_runtime::workspace_runtime::{WorkspaceExecutor, WorkspaceToolFactory};
+use nanocode_process::{MAX_EXEC_YIELD_MS, MAX_POLL_YIELD_MS, ShellSessions};
+use nanocode_tool_host::workspace_runtime::{WorkspaceExecutor, WorkspaceToolFactory};
 
 use super::{
     StandardTool, Tool, ToolContext, ToolInput, ToolOutput,
@@ -22,7 +22,7 @@ pub struct WorkspaceToolRuntime {
 
 #[derive(Clone)]
 pub struct WorkspaceTools {
-    pub(crate) source: nanocode_tool_runtime::WorkspaceTools,
+    pub(crate) source: nanocode_tool_host::WorkspaceTools,
 }
 
 impl std::fmt::Debug for WorkspaceTools {
@@ -38,7 +38,7 @@ impl WorkspaceTools {
     #[must_use]
     pub fn new(workspace: impl Into<PathBuf>) -> Self {
         Self {
-            source: nanocode_tool_runtime::WorkspaceTools::with_factory(
+            source: nanocode_tool_host::WorkspaceTools::with_factory(
                 workspace,
                 CodexWorkspaceFactory,
             ),
@@ -51,11 +51,11 @@ impl WorkspaceTools {
     }
 }
 
-impl nanocode_tool_runtime::ToolSource for WorkspaceTools {
+impl nanocode_tool_host::ToolSource for WorkspaceTools {
     fn install(
         self,
-        builder: nanocode_tool_runtime::ToolsBuilder,
-    ) -> nanocode_tool_runtime::ToolsBuilder {
+        builder: nanocode_tool_host::ToolsBuilder,
+    ) -> nanocode_tool_host::ToolsBuilder {
         builder.add(self.source)
     }
 }

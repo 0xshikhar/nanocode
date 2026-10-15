@@ -3,7 +3,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use crate::tools::{ClaudeWorkspaceFiles, ImageSource, ToolContent, ToolResultBlock};
 use nanocode_agent::input::ImageDetail;
-use nanocode_tool_runtime::{
+use nanocode_tool_host::{
     SessionEnvironment, Tool, ToolContext, ToolDefinition, ToolInput, ToolOutput, ToolResult,
     Tools, ToolsBuildError, contract::ToolOutputContent,
 };

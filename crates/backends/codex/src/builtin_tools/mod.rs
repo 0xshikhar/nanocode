@@ -9,8 +9,6 @@ pub mod contract {
 pub use nanocode_media::image;
 
 pub mod apply_patch;
-#[cfg(not(target_family = "wasm"))]
-pub mod attachment;
 pub mod extensions;
 pub mod standard;
 pub use standard::StandardTool;
@@ -41,11 +39,11 @@ pub use nanocode_tools::__private;
 pub fn tool_runtime(
     workspace: impl AsRef<std::path::Path>,
     config: &crate::client::tower::ResponsesServiceConfig,
-    tools: &nanocode_tool_runtime::Tools,
-) -> nanocode_tool_runtime::runtime::ToolRuntime {
+    tools: &nanocode_tool_host::Tools,
+) -> nanocode_tool_host::runtime::ToolRuntime {
     let workspace = workspace.as_ref();
     if tools.has_code_mode_host() {
-        return nanocode_tool_runtime::runtime::ToolRuntime::new_with_tools(
+        return nanocode_tool_host::runtime::ToolRuntime::new_with_tools(
             workspace,
             Vec::new(),
             tools,
@@ -82,12 +80,12 @@ pub fn tool_runtime(
         if tools.workspace_enabled() {
             handlers.push(std::sync::Arc::new(plan::UpdatePlanTool::new()));
         }
-        nanocode_tool_runtime::runtime::ToolRuntime::new_with_tools(workspace, handlers, &tools)
+        nanocode_tool_host::runtime::ToolRuntime::new_with_tools(workspace, handlers, &tools)
     }
     #[cfg(target_family = "wasm")]
     {
         let _ = config;
-        nanocode_tool_runtime::runtime::ToolRuntime::new_with_tools(workspace, Vec::new(), tools)
+        nanocode_tool_host::runtime::ToolRuntime::new_with_tools(workspace, Vec::new(), tools)
     }
 }
 

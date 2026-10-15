@@ -134,6 +134,9 @@ pub trait ClaudeExecutionPolicy: Send + Sync {
     fn complete_step(&self, id: String, step_id: String, output: Value) -> PolicyFuture<'_, ()>;
     fn complete(&self, id: String, checkpoint: Value, output: Value) -> PolicyFuture<'_, ()>;
     fn fail(&self, id: String, checkpoint: Value, error: String) -> PolicyFuture<'_, ()>;
+    fn fail_attempt(&self, id: String, checkpoint: Value, error: String) -> PolicyFuture<'_, ()> {
+        self.fail(id, checkpoint, error)
+    }
     fn cancel(&self, id: String, checkpoint: Value) -> PolicyFuture<'_, ()>;
 
     fn cancel_unstarted(&self, _id: String) -> PolicyFuture<'_, bool> {

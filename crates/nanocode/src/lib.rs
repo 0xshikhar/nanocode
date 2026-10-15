@@ -99,11 +99,10 @@ pub use nanocode_backend_codex::client as oai;
 
 pub use nanocode_backend_codex::client as codex;
 
-#[doc(inline)]
-pub use nanocode_backend_codex::tools;
+pub mod tools;
 
 #[doc(inline)]
-pub use nanocode_backend_codex::tools as oai_tools;
+pub use tools as oai_tools;
 
 #[cfg(not(target_family = "wasm"))]
 #[doc(inline)]
@@ -142,9 +141,13 @@ pub mod __private {
     pub use nanocode_tool_runtime::__private::*;
 }
 
-pub use nanocode_backend_codex::builtin_tools as codex_tools;
+pub mod codex_tools {
+    #[cfg(not(target_family = "wasm"))]
+    pub use crate::tools::attachment;
+    pub use nanocode_backend_codex::builtin_tools::*;
+}
 
-pub use nanocode_backend_codex::tools as code_mode;
+pub use tools as code_mode;
 
 pub use nanocode_tools as tool_contract;
 

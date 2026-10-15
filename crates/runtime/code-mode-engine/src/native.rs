@@ -21,7 +21,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
-use nanocode_tools::ToolOutputContent;
+use nanocode_tool_contracts::ToolOutputContent;
 
 pub enum RuntimeEvent {
     ToolCall {

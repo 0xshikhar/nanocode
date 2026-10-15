@@ -34,8 +34,7 @@ const STABLE_CONNECTION: Duration = Duration::from_secs(30);
 
 const HEARTBEAT_TIMEOUT_REASON: &str = "attachment heartbeat timed out";
 
-pub(crate) const ATTACHMENT_REVOKED_REASON: &str =
-    "attachment endpoint permanently revoked this attachment";
+pub(crate) use nanocode_tool_host::attachment::ATTACHMENT_REVOKED_REASON;
 
 const MAX_REJECTED_BACKOFF: Duration = Duration::from_secs(60);
 
@@ -652,12 +651,7 @@ fn record_attachment_call_completion(outcome: AttachmentCallOutcome) {
 }
 
 const fn attachment_call_outcome_name(outcome: AttachmentCallOutcome) -> &'static str {
-    match outcome {
-        AttachmentCallOutcome::Completed => "completed",
-        AttachmentCallOutcome::Unavailable => "unavailable",
-        AttachmentCallOutcome::Ambiguous => "ambiguous",
-        AttachmentCallOutcome::Cancelled => "cancelled",
-    }
+    outcome.as_str()
 }
 
 #[derive(Clone, PartialEq)]

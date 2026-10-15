@@ -103,7 +103,7 @@ async fn connect(
         .insert(http::header::AUTHORIZATION, bearer);
     tokio::time::timeout(
         policy.request_timeout,
-        tokio_tungstenite::connect_async_with_config(request, Some(config(policy)), false),
+        tokio_tungstenite::connect_async_with_config(request, Some(config(policy)), true),
     )
     .await
     .map_err(error)?
@@ -126,6 +126,7 @@ async fn accept(
         return Err(error("runner bearer must not be empty"));
     }
     let (stream, _) = listener.accept().await.map_err(error)?;
+    stream.set_nodelay(true).map_err(error)?;
     let authenticate = |request: &tungstenite::handshake::server::Request,
                         response: tungstenite::handshake::server::Response| {
         if request

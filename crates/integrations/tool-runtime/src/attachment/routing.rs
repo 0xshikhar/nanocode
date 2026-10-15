@@ -1,19 +1,161 @@
 use super::{
-    RemoteTool, RemoteTools,
+    ProcessRouteStore, RemoteMode, RemoteTool, RemoteTools, RunnerPool, RunnerRouting,
+    management::RunnerManagement,
     process_routes::{ProcessRoutes, SessionMapping},
 };
-use crate::{Tool, ToolContext, ToolDefinition, ToolInput, ToolResult};
+use crate::{
+    Tool, ToolContext, ToolDefinition, ToolExposure, ToolInput, ToolResult, ToolSource,
+    ToolsBuilder, host::RoutingCatalog,
+};
 use async_trait::async_trait;
+use nanocode_tool_host::attachment::{RemoteRoute, RemoteRunnerCatalog, WorkspaceRouter};
 use serde_json::Value;
 use std::{
+    any::Any,
     path::{Component, Path, PathBuf},
     sync::Arc,
 };
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RemoteMode {
-    Alongside,
-    Replace,
+struct RemoteCatalog(RemoteTools);
+
+impl RemoteRunnerCatalog for RemoteCatalog {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn router(&self) -> Arc<dyn WorkspaceRouter> {
+        Arc::new(AttachmentRouter)
+    }
+}
+
+impl crate::RemoteRunnerTools for RemoteTools {
+    fn namespace(&self) -> Option<Arc<str>> {
+        self.iter().next().map(|tool| Arc::from(tool.namespace()))
+    }
+
+    fn advertised_workspace(&self) -> Option<PathBuf> {
+        self.workspace().map(Path::to_path_buf)
+    }
+
+    fn into_catalog(self) -> Arc<dyn RemoteRunnerCatalog> {
+        Arc::new(RemoteCatalog(self))
+    }
+}
+
+impl ToolSource for RemoteTools {
+    fn install(self, builder: ToolsBuilder) -> ToolsBuilder {
+        self.into_iter().fold(builder, ToolsBuilder::tool)
+    }
+}
+
+impl From<RunnerPool> for RunnerRouting {
+    fn from(pool: RunnerPool) -> Self {
+        Self::new(Arc::new(pool), Arc::new(AttachmentRouter))
+    }
+}
+
+struct AttachmentRouter;
+
+impl WorkspaceRouter for AttachmentRouter {
+    fn route(
+        &self,
+        catalog: &mut RoutingCatalog<'_>,
+        routes: &[RemoteRoute],
+        store: Option<Arc<dyn ProcessRouteStore>>,
+        pool: Option<&RunnerRouting>,
+    ) {
+        let pool = pool.map(|pool| {
+            pool.pool()
+                .downcast_ref::<RunnerPool>()
+                .expect("runner routing is constructed only from RunnerPool")
+                .clone()
+        });
+        let routes = routes
+            .iter()
+            .map(|route| Route {
+                tools: route
+                    .tools
+                    .as_any()
+                    .downcast_ref::<RemoteCatalog>()
+                    .expect("remote routes are constructed only from RemoteTools")
+                    .0
+                    .clone(),
+                workspace: route.workspace.clone(),
+                mode: route.mode,
+            })
+            .collect::<Vec<_>>();
+        if let Some(pool) = &pool
+            && pool.model_management_enabled()
+        {
+            catalog.add(
+                Arc::new(RunnerManagement { pool: pool.clone() }),
+                ToolExposure::CodeModeOnly,
+            );
+        }
+        let local_names = catalog.names();
+        let providers = catalog.providers().to_vec();
+        for remote in routes.iter().flat_map(|route| route.tools.iter()) {
+            let definition = remote.native_definition();
+            if !catalog.contains(definition.name()) {
+                catalog.add(
+                    Arc::new(RemoteOnlyTool {
+                        definition,
+                        providers: providers.clone(),
+                    }),
+                    ToolExposure::CodeModeOnly,
+                );
+            }
+        }
+        let routes = Arc::new(routes);
+        let sessions = Arc::new(ProcessRoutes::new(store));
+        let local_runtime_id: Arc<str> = uuid::Uuid::new_v4().to_string().into();
+        catalog.wrap(|tool| {
+            let name = tool.definition().name().to_owned();
+            let routed = matches!(
+                name.as_str(),
+                "exec_command" | "write_stdin" | "apply_patch" | "view_image"
+            ) || (pool.is_some()
+                && (name.starts_with("mcp__")
+                    || matches!(
+                        name.as_str(),
+                        "Read"
+                            | "Write"
+                            | "Edit"
+                            | "Glob"
+                            | "Grep"
+                            | "Bash"
+                            | "TaskOutput"
+                            | "TaskStop"
+                    )))
+                || routes.iter().any(|route| {
+                    route
+                        .tools
+                        .iter()
+                        .any(|remote| remote.remote_name() == name)
+                });
+            routed.then(|| {
+                Arc::new(RoutedTool {
+                    local: Arc::clone(tool),
+                    local_desktop: local_names.contains(name.as_str())
+                        || providers.iter().any(|provider| provider.contains(&name)),
+                    routes: Arc::clone(&routes),
+                    pool: pool.clone(),
+                    sessions: Arc::clone(&sessions),
+                    local_runtime_id: Arc::clone(&local_runtime_id),
+                }) as Arc<dyn Tool>
+            })
+        });
+        if let Some(pool) = pool {
+            let provider = Arc::new(RunnerProvider {
+                pool,
+                routes,
+                sessions,
+                local_runtime_id,
+                providers: catalog.providers().to_vec(),
+            });
+            catalog.insert_provider_first(provider);
+        }
+    }
 }
 
 #[derive(Clone)]

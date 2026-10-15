@@ -11,12 +11,11 @@ publish.workspace = true
 description = "Shared tool traits, invocation contracts and macros for both harnesses"
 
 [dependencies]
-nanocode-types.workspace = true
+nanocode-tool-contracts.workspace = true
 nanocode-tools-macros.workspace = true
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-thiserror.workspace = true
 schemars.workspace = true
 
 [lints]

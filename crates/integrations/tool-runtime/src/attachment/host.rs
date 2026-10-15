@@ -1079,7 +1079,7 @@ fn parse_catalog(
 ) -> Result<Arc<[Arc<RemoteSpec>]>, AttachmentError> {
     let entries: Vec<CatalogEntry> = serde_json::from_value(tools.clone())
         .map_err(|error| AttachmentError::Catalog(error.to_string().into()))?;
-    crate::selection::validate_public_tool_catalog_names(
+    crate::host::validate_public_tool_catalog_names(
         entries.iter().map(|entry| entry.definition.name()),
     )
     .map_err(|error| AttachmentError::Catalog(error.to_string().into()))?;

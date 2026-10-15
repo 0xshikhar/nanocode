@@ -1,18 +1,11 @@
+use super::ProcessRouteStore;
 use crate::contract::ToolError;
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
 };
 use tokio::sync::Mutex;
-
-#[async_trait]
-pub trait ProcessRouteStore: Send + Sync {
-    async fn load(&self, session_id: &str) -> Result<Option<Value>, ToolError>;
-    async fn save(&self, session_id: &str, routes: Value) -> Result<(), ToolError>;
-}
 
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct SessionMapping {
