@@ -32,17 +32,21 @@ impl McpOAuthCredentials {
 }
 
 impl OAuthRuntime {
-    pub async fn refresh_if_needed(self: &Arc<Self>) -> Result<(), String> {
-        let refresh_needed = self
-            .credentials
-            .lock()
-            .await
-            .as_ref()
-            .is_none_or(McpOAuthCredentials::needs_refresh);
-        if !refresh_needed {
-            return Ok(());
-        }
-        self.spawn_refresh("expiry", None).await
+    pub fn refresh_if_needed<'call>(
+        self: &'call Arc<Self>,
+    ) -> futures_util::future::BoxFuture<'call, Result<(), String>> {
+        Box::pin(async move {
+            let refresh_needed = self
+                .credentials
+                .lock()
+                .await
+                .as_ref()
+                .is_none_or(McpOAuthCredentials::needs_refresh);
+            if !refresh_needed {
+                return Ok(());
+            }
+            self.spawn_refresh("expiry", None).await
+        })
     }
 
     pub(crate) async fn refresh_after_rejection(

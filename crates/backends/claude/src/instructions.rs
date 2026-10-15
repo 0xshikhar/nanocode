@@ -1,10 +1,9 @@
-const NANOCLAUDE: &str = include_str!("../prompts/nanoclaude.md");
 const CODE_MODE: &str = include_str!("../prompts/code_mode.md");
 
-pub(crate) fn default_system(code_only: bool) -> String {
+pub(crate) fn default_system_blocks(code_only: bool) -> Vec<serde_json::Value> {
+    let mut blocks = crate::upstream::system_blocks();
     if code_only {
-        format!("{}\n\n{}", NANOCLAUDE.trim_end(), CODE_MODE.trim_end())
-    } else {
-        NANOCLAUDE.trim_end().to_owned()
+        blocks.push(serde_json::json!({"type": "text", "text": CODE_MODE}));
     }
+    blocks
 }

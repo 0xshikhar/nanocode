@@ -1473,6 +1473,11 @@ impl ClaudeBuilder {
         let round_boundary = Arc::new(round_boundary);
         let (runtime, events) = BackendRuntime::new(session_id.clone());
         let runtime = runtime.with_lineage(lineage.clone());
+        let system_blocks = self.system_blocks.or_else(|| {
+            self.system
+                .is_empty()
+                .then(|| crate::instructions::default_system_blocks(self.code_only))
+        });
         let state = Arc::new(State {
             subagent_type: self.subagent_type,
             subagent_type_resolver: self.subagent_type_resolver,
@@ -1497,12 +1502,8 @@ impl ClaudeBuilder {
             child_workspace_init: self.child_workspace_init,
             system_resolver: self.system_resolver,
             host_context: self.host_context,
-            system: if self.system.is_empty() {
-                crate::instructions::default_system(self.code_only)
-            } else {
-                self.system
-            },
-            system_blocks: self.system_blocks,
+            system: self.system,
+            system_blocks,
             tools: definitions,
             adapter_cleanup,
             adapter_shutdown,

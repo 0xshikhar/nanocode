@@ -65,12 +65,18 @@ struct OutputContractField {
 }
 
 impl OutputContractNode {
-    fn into_schema(self) -> Value {
-        match self {
+    fn into_schema(self) -> std::io::Result<Value> {
+        Ok(match self {
             Self::Object { fields } => {
                 let mut deduplicated = BTreeMap::new();
                 for field in fields {
-                    deduplicated.insert(field.name, (field.schema, field.required));
+                    let name = field.name;
+                    if deduplicated.contains_key(&name) {
+                        return Err(std::io::Error::other(format!(
+                            "duplicate output_contract field name: {name}"
+                        )));
+                    }
+                    deduplicated.insert(name, (field.schema, field.required));
                 }
                 let mut properties = Map::new();
                 let mut required = Vec::new();
@@ -78,12 +84,12 @@ impl OutputContractNode {
                     if is_required {
                         required.push(name.clone());
                     }
-                    properties.insert(name, schema.into_schema());
+                    properties.insert(name, schema.into_schema()?);
                 }
                 json!({ "type": "object", "properties": properties,
                     "required": required, "additionalProperties": false })
             }
-            Self::Array { items } => json!({ "type": "array", "items": items.into_schema() }),
+            Self::Array { items } => json!({ "type": "array", "items": items.into_schema()? }),
             Self::String => json!({ "type": "string" }),
             Self::StringEnum { values } => {
                 if values.is_empty() {
@@ -97,7 +103,7 @@ impl OutputContractNode {
             Self::Boolean => json!({ "type": "boolean" }),
             Self::Null => json!({ "type": "null" }),
             Self::Any => Value::Bool(true),
-        }
+        })
     }
 }
 
@@ -127,7 +133,7 @@ impl SpawnAgentTask {
         parent: Option<HarnessFamily>,
     ) -> std::io::Result<(AgentTask, SpawnOptions)> {
         let output_schema = match (self.output_contract, self.output_schema) {
-            (Some(contract), None) => contract.into_schema(),
+            (Some(contract), None) => contract.into_schema()?,
             (None, Some(schema)) => schema,
             _ => {
                 return Err(std::io::Error::other(

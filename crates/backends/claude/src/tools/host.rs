@@ -250,43 +250,28 @@ impl<H: ClaudeHost> ClaudeHostTools<H> {
         {
             return Err("host tools require real session, turn and call identities".into());
         }
-        if serde_json::to_vec(&input).map_err(|e| e.to_string())?.len() > MAX_HOST_INPUT_BYTES {
-            return Err("host tool input exceeds 64 KiB".into());
-        }
         let request = match tool {
             HostTool::Agent => {
                 let request: AgentRequest = decode(input)?;
-                text(&request.prompt, "prompt", 48 * 1024)?;
-                text(&request.description, "description", 1024)?;
-                text(&request.subagent_type, "subagent_type", 256)?;
-                if let Some(resume) = &request.resume {
-                    text(resume, "resume", 256)?;
-                }
                 if request.max_turns.is_some_and(|turns| turns == 0) {
                     return Err("max_turns must be positive".into());
                 }
-                if request.run_in_background
-                    && !(self.enabled.contains(&HostTool::TaskOutput)
-                        && self.enabled.contains(&HostTool::TaskStop))
+                if matches!(request.isolation, Some(AgentIsolation::Remote))
+                    && !request.run_in_background
                 {
-                    return Err(
-                        "background Agent requires installed TaskOutput and TaskStop capabilities"
-                            .into(),
-                    );
+                    return Err("remote Agent isolation requires background execution".into());
+                }
+                if request.run_in_background && !self.enabled.contains(&HostTool::TaskStop) {
+                    return Err("background Agent requires an installed TaskStop capability".into());
                 }
                 HostRequest::Agent(request)
             }
             HostTool::TaskOutput => {
                 let request: TaskOutputRequest = decode(input)?;
-                text(&request.task_id, "task_id", 256)?;
-                if request.timeout > 600_000 {
-                    return Err("timeout must be 0..600000 milliseconds".into());
-                }
                 HostRequest::TaskOutput(request)
             }
             HostTool::TaskStop => {
                 let request: TaskStopRequest = decode(input)?;
-                text(&request.task_id, "task_id", 256)?;
                 HostRequest::TaskStop(request)
             }
             HostTool::AskUserQuestion => {
@@ -294,26 +279,15 @@ impl<H: ClaudeHost> ClaudeHostTools<H> {
                 if !(1..=4).contains(&request.questions.len()) {
                     return Err("questions requires 1..4 entries".into());
                 }
-                let mut questions = BTreeSet::new();
                 for question in &request.questions {
-                    text(&question.question, "question", 8192)?;
-                    text(&question.header, "header", 48)?;
                     if question.header.chars().count() > 12 {
                         return Err("header must contain at most 12 characters".into());
-                    }
-                    if !questions.insert(&question.question) {
-                        return Err("duplicate question".into());
                     }
                     if !(2..=4).contains(&question.options.len()) {
                         return Err("question requires 2..4 options".into());
                     }
                     let mut labels = BTreeSet::new();
                     for option in &question.options {
-                        text(&option.label, "label", 1024)?;
-                        text(&option.description, "description", 8192)?;
-                        if let Some(markdown) = &option.markdown {
-                            text(markdown, "markdown", 8192)?;
-                        }
                         if !labels.insert(&option.label) {
                             return Err("duplicate option label".into());
                         }
@@ -327,24 +301,12 @@ impl<H: ClaudeHost> ClaudeHostTools<H> {
             }
             HostTool::ExitPlanMode => {
                 let request: ExitPlanRequest = decode(input)?;
-                if request.allowed_prompts.len() > 32 {
-                    return Err("too many allowedPrompts".into());
-                }
-                for prompt in &request.allowed_prompts {
-                    text(&prompt.prompt, "prompt", 8192)?;
-                }
                 HostRequest::ExitPlanMode(request)
             }
             HostTool::EnterWorktree => {
                 let request: EnterWorktreeRequest = decode(input)?;
                 if request.name.is_some() && request.path.is_some() {
                     return Err("name and path are mutually exclusive".into());
-                }
-                if let Some(name) = &request.name {
-                    text(name, "name", 256)?;
-                }
-                if let Some(path) = &request.path {
-                    text(path, "path", 4096)?;
                 }
                 HostRequest::EnterWorktree(request)
             }
@@ -356,53 +318,18 @@ impl<H: ClaudeHost> ClaudeHostTools<H> {
 fn decode<T: serde::de::DeserializeOwned>(input: Value) -> Result<T, String> {
     serde_json::from_value(input).map_err(|e| format!("invalid Claude host input: {e}"))
 }
-fn text(value: &str, field: &str, max: usize) -> Result<(), String> {
-    if value.trim().is_empty() || value.len() > max || value.contains('\0') {
-        return Err(format!(
-            "{field} must be nonblank, NUL-free and at most {max} bytes"
-        ));
-    }
-    Ok(())
-}
 fn schema<T: JsonSchema>() -> Value {
     serde_json::to_value(schemars::schema_for!(T)).expect("JSON schema serialization")
 }
 fn definition(tool: HostTool) -> Value {
-    let (description, input_schema) = match tool {
-        HostTool::Agent => (
-            "Start or resume an authorized host-owned agent; return its actual result or background task identity.",
-            schema::<AgentRequest>(),
-        ),
-        HostTool::TaskOutput => (
-            "Read a host-owned background task's status and output, optionally waiting up to timeout milliseconds.",
-            schema::<TaskOutputRequest>(),
-        ),
-        HostTool::TaskStop => (
-            "Stop an authorized host-owned background task and report the host's observed result.",
-            schema::<TaskStopRequest>(),
-        ),
-        HostTool::AskUserQuestion => (
-            "Present structured questions and await the user's answers through the host UI.",
-            schema::<QuestionsRequest>(),
-        ),
-        HostTool::EnterPlanMode => (
-            "Enter host-enforced planning mode.",
-            schema::<EmptyRequest>(),
-        ),
-        HostTool::ExitPlanMode => (
-            "Present the host's current plan for approval; requested prompts are not grants.",
-            schema::<ExitPlanRequest>(),
-        ),
-        HostTool::EnterWorktree => (
-            "Create or enter an authorized git worktree and switch the host execution context.",
-            schema::<EnterWorktreeRequest>(),
-        ),
-        HostTool::ExitWorktree => (
-            "Leave the current host worktree, keeping it or requesting authorized removal.",
-            schema::<ExitWorktreeRequest>(),
-        ),
-    };
-    json!({"name":tool.name(), "description":description, "input_schema":input_schema})
+    if tool != HostTool::TaskOutput {
+        return crate::upstream::tool_value(tool.name());
+    }
+    json!({
+        "name": tool.name(),
+        "description": "SDK extension: read a host-owned background task's status and output, optionally waiting up to timeout milliseconds.",
+        "input_schema": schema::<TaskOutputRequest>()
+    })
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
@@ -412,6 +339,7 @@ pub struct AgentRequest {
 
     pub description: String,
 
+    #[serde(default = "default_subagent_type")]
     pub subagent_type: String,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -420,7 +348,7 @@ pub struct AgentRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume: Option<String>,
 
-    #[serde(default)]
+    #[serde(default = "default_block")]
     pub run_in_background: bool,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -438,12 +366,16 @@ pub enum AgentModel {
     Opus,
 
     Haiku,
+
+    Fable,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum AgentIsolation {
     Worktree,
+
+    Remote,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
@@ -457,6 +389,9 @@ pub struct TaskOutputRequest {
     #[serde(default = "default_timeout")]
     pub timeout: u64,
 }
+fn default_subagent_type() -> String {
+    "general-purpose".to_owned()
+}
 const fn default_block() -> bool {
     true
 }
@@ -467,6 +402,7 @@ const fn default_timeout() -> u64 {
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct TaskStopRequest {
+    #[serde(alias = "shell_id")]
     pub task_id: String,
 }
 
@@ -496,7 +432,12 @@ pub struct QuestionOption {
 
     pub description: String,
 
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "preview",
+        alias = "markdown",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub markdown: Option<String>,
 }
 #[derive(Deserialize, JsonSchema)]

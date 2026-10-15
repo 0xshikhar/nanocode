@@ -1,24 +1,70 @@
 {
-  "status": "Exact upstream core system prompt unavailable from the inspected official sources; nanoclaude.md remains project-authored.",
   "package": "@anthropic-ai/claude-code",
-  "version": "2.1.280",
-  "metadata_url": "https://registry.npmjs.org/@anthropic-ai/claude-code/2.1.280",
-  "tarball_url": "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.280.tgz",
-  "tarball_integrity": "sha512-EZlX8jqNf+e7q9v+UoPbLYAbEGth7aDbcTytHzPYYohbP/fCfrjboCbcv85ZYGEq1Rq7Amm8hXLhuCKxLsabwA==",
-  "verified_artifacts": [
+  "version": "2.1.283",
+  "platform_package": "@anthropic-ai/claude-code-darwin-arm64",
+  "platform_tarball": "https://registry.npmjs.org/@anthropic-ai/claude-code-darwin-arm64/-/claude-code-darwin-arm64-2.1.283.tgz",
+  "platform_integrity": "sha512-GczpJ+FvnOYvxn6XPGHbdqJEZMves6Vc0WKS/g1N2eG39EKKAHxG77e+w4Rjtmf8xgCxNY36Jf/IOfbcyus4zA==",
+  "executable_sha256": "d8cb1e5c79684cc12a8bfc813e3a2073406921b6245744b3009be3ab5651d21e",
+  "model": "claude-opus-5-5",
+  "capture_flags": [
+    "-p",
+    "--no-session-persistence",
+    "--setting-sources",
+    "--strict-mcp-config",
+    "--no-chrome",
+    "--disable-slash-commands",
+    "--exclude-dynamic-system-prompt-sections"
+  ],
+  "profiles": {
+    "full": [],
+    "expanded": [
+      "--tools",
+      "Agent,Bash,Glob,Grep,Read,Write,Edit,NotebookEdit,TaskOutput,TaskStop,AskUserQuestion,EnterPlanMode,ExitPlanMode,EnterWorktree,ExitWorktree,TaskCreate,TaskGet,TaskList,TaskUpdate,TodoWrite,Skill,WebFetch,WebSearch,ToolSearch"
+    ],
+    "host": [
+      "--permission-prompt-tool",
+      "stdio"
+    ]
+  },
+  "tool_profiles": {
+    "Agent": "expanded",
+    "Bash": "expanded",
+    "CronCreate": "host",
+    "CronDelete": "host",
+    "CronList": "host",
+    "Edit": "expanded",
+    "EnterWorktree": "expanded",
+    "ExitWorktree": "expanded",
+    "ListAgents": "host",
+    "NotebookEdit": "expanded",
+    "Read": "expanded",
+    "ReportFindings": "host",
+    "ScheduleWakeup": "host",
+    "SendMessage": "host",
+    "TaskStop": "expanded",
+    "WebFetch": "expanded",
+    "WebSearch": "expanded",
+    "Workflow": "host",
+    "Write": "expanded",
+    "AskUserQuestion": "host",
+    "EnterPlanMode": "host",
+    "ExitPlanMode": "host",
+    "Glob": "expanded",
+    "Grep": "expanded",
+    "TaskCreate": "expanded",
+    "TaskGet": "expanded",
+    "TaskList": "expanded",
+    "TaskUpdate": "expanded"
+  },
+  "artifacts": [
     {
-      "path": "package/sdk-tools.d.ts",
-      "sha256": "4fdbd64f76e190800f48e93ddf4edcf6f3c87187396b586a75de808a78d8c1c4",
-      "scope": "Generated tool input/output TypeScript declarations; not full model-visible tool descriptions or JSON schemas."
+      "path": "prompts/claude-code-system.json",
+      "sha256": "1e7f77aa3df014730edb8b43a9f3366ec2c9cdbc54d00b1c8ea0df007d3c24da"
+    },
+    {
+      "path": "src/tools/upstream.json",
+      "sha256": "c59ad0a65d053d1afa2f5a2eacb6da7dea2843ef3b5d6ec4d0b6f978d088abcb"
     }
   ],
-  "repository_revision": "94506ff0d3bd9185f1752da36e968775021fb48f",
-  "repository_url": "https://github.com/anthropics/claude-code",
-  "blocker": "The official npm package contains cli-wrapper.cjs, install.cjs, bin/claude.exe, package metadata, license, documentation and sdk-tools.d.ts. Execution is delegated to version-pinned platform native packages. Neither this package nor the inspected official repository tree exposes the core prompt construction source or a rendered core system prompt. Generated tool types cannot establish exact tool wire schemas or descriptions. No prompt was reconstructed or substituted.",
-  "composition": {
-    "base": "nanoclaude.md",
-    "base_sha256": "781410936c1f4e8bda44da9b042b8723127c7c492aa766f5a9e0f4c895775940",
-    "code_mode_addition": "code_mode.md",
-    "explicit_override": "The existing builder uses the caller system string when nonempty, bypassing default_system."
-  }
+  "scope": "Exact SDK identity and core text blocks, and model-visible tool names, descriptions and input schemas from official CLI requests to a local Messages stub with a dummy API key. Request-specific billing, authentication, cache policy, environment, project memory and attribution remain separate host context. Bash uses the upstream expanded catalog profile with Glob and Grep. Captured contract availability is not a claim of implementing every Claude Code host action. TaskOutput, TodoWrite and Skill remain separately supplied SDK extensions when registered."
 }

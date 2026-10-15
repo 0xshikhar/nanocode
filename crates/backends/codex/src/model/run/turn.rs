@@ -466,9 +466,11 @@ where
             if update.full {
                 session
                     .conversation
-                    .append_canonical_context(developer_context(), update.item);
+                    .append_canonical_context(developer_context(&self.config), update.item);
             } else {
-                session.conversation.append([update.item]);
+                session
+                    .conversation
+                    .append([update.item, host_context(&self.config)]);
                 session
                     .conversation
                     .set_canonical_context(canonical_context);
@@ -477,6 +479,7 @@ where
             session
                 .conversation
                 .set_canonical_context(canonical_context);
+            session.conversation.append([host_context(&self.config)]);
         }
         let user_content = prepare_user_input(&task.instruction).await;
         session
@@ -535,7 +538,7 @@ where
                 tools.default_shell_name(),
                 self.context_source.execution_environment(),
             );
-            let mut history = task_input(&task, user_content, &context_snapshot);
+            let mut history = task_input(&self.config, &task, user_content, &context_snapshot);
             let mut pending = std::mem::take(&mut self.pending_developer_messages);
             for item in &mut pending {
                 assign_missing_response_item_id(item);

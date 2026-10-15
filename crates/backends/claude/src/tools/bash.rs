@@ -94,22 +94,10 @@ impl<E: BashExecutor> ClaudeBash<E> {
 
     #[must_use]
     pub fn definitions() -> Vec<Value> {
-        vec![json!({
-            "name": "Bash",
-            "description": "Run a foreground command in the host-authorized execution environment. Use run_in_background for a task ID, then TaskOutput or TaskStop. Sandbox bypass is unavailable.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "command": {"type": "string", "minLength": 1, "maxLength": MAX_COMMAND_BYTES},
-                    "description": {"type": "string", "maxLength": MAX_DESCRIPTION_BYTES},
-                    "timeout": {"type": "integer", "minimum": 1, "maximum": 7_200_000, "default": DEFAULT_TIMEOUT_MS},
-                    "run_in_background": {"type": "boolean", "description": "Return a task ID immediately; retrieve or stop it with TaskOutput/TaskStop."},
-                    "dangerouslyDisableSandbox": {"type": "boolean", "description": "Unsupported: sandbox bypass is never permitted."}
-                },
-                "required": ["command"],
-                "additionalProperties": false
-            }
-        })]
+        ["Bash"]
+            .into_iter()
+            .map(crate::upstream::tool_value)
+            .collect()
     }
 
     pub async fn execute(&self, name: &str, input: Value) -> Result<String, String> {
@@ -139,8 +127,12 @@ impl<E: BashExecutor> ClaudeBash<E> {
             }
         }
 
-        if fields.contains_key("dangerouslyDisableSandbox") {
-            return Err("dangerouslyDisableSandbox is never supported".into());
+        if fields
+            .get("dangerouslyDisableSandbox")
+            .map_or(Some(false), Value::as_bool)
+            .ok_or("invalid dangerouslyDisableSandbox")?
+        {
+            return Err("this host does not authorize disabling the sandbox".into());
         }
         let background = fields
             .get("run_in_background")
@@ -167,20 +159,9 @@ impl<E: BashExecutor> ClaudeBash<E> {
         };
         let timeout_ms = fields
             .get("timeout")
-            .map_or(
-                Some(if background {
-                    1_800_000
-                } else {
-                    DEFAULT_TIMEOUT_MS
-                }),
-                Value::as_u64,
-            )
+            .map_or(Some(DEFAULT_TIMEOUT_MS), Value::as_u64)
             .ok_or("invalid timeout")?;
-        let maximum = if background {
-            7_200_000
-        } else {
-            MAX_TIMEOUT_MS
-        };
+        let maximum = MAX_TIMEOUT_MS;
         if !(1..=maximum).contains(&timeout_ms) {
             return Err(format!("timeout must be 1 to {maximum} milliseconds"));
         }

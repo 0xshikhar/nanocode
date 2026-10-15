@@ -71,10 +71,10 @@ impl ClaudeTasks {
     #[must_use]
     pub fn definitions() -> Vec<Value> {
         vec![
-            json!({"name":"TaskCreate","description":"Create a session-local task.","input_schema":{"type":"object","properties":{"subject":{"type":"string"},"description":{"type":"string"},"activeForm":{"type":"string"},"metadata":{"type":"object"}},"required":["subject","description"],"additionalProperties":false}}),
-            json!({"name":"TaskGet","description":"Retrieve a session-local task by ID.","input_schema":{"type":"object","properties":{"taskId":{"type":"string"}},"required":["taskId"],"additionalProperties":false}}),
-            json!({"name":"TaskList","description":"List session-local tasks.","input_schema":{"type":"object","properties":{},"additionalProperties":false}}),
-            json!({"name":"TaskUpdate","description":"Update or delete a session-local task; null metadata values delete keys.","input_schema":{"type":"object","properties":{"taskId":{"type":"string"},"subject":{"type":"string"},"description":{"type":"string"},"activeForm":{"type":"string"},"status":{"type":"string","enum":["pending","in_progress","completed","deleted"]},"addBlocks":{"type":"array","items":{"type":"string"}},"addBlockedBy":{"type":"array","items":{"type":"string"}},"owner":{"type":"string"},"metadata":{"type":"object"}},"required":["taskId"],"additionalProperties":false}}),
+            crate::upstream::tool_value("TaskCreate"),
+            crate::upstream::tool_value("TaskGet"),
+            crate::upstream::tool_value("TaskList"),
+            crate::upstream::tool_value("TaskUpdate"),
             json!({"name":"TodoWrite","description":"Replace the session-local todo list.","input_schema":{"type":"object","properties":{"todos":{"type":"array","maxItems":MAX_TODOS,"items":{"type":"object","properties":{"content":{"type":"string"},"status":{"type":"string","enum":["pending","in_progress","completed"]},"activeForm":{"type":"string"}},"required":["content","status","activeForm"],"additionalProperties":false}}},"required":["todos"],"additionalProperties":false}}),
         ]
     }

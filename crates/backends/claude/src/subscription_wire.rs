@@ -3,9 +3,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-pub const CLAUDE_CODE_VERSION: &str = "2.1.280";
+pub const CLAUDE_CODE_VERSION: &str = crate::upstream::VERSION;
 pub const CLAUDE_CODE_SDK_VERSION: &str = "0.112.1";
-pub const IDENTITY: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
+pub const IDENTITY: &str = "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
+const LEGACY_IDENTITY: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
 const BILLING: &str = "x-anthropic-billing-header:";
 const PLACEHOLDER: &[u8] = b"cch=00000";
 const MARKER: &[u8] = b"\"system\":[{\"type\":\"text\",\"text\":\"x-anthropic-billing-header:";
@@ -124,20 +125,9 @@ fn hex_digest(input: &[u8]) -> String {
     hex
 }
 pub fn prefix(name: &str) -> String {
-    if matches!(
-        name.to_lowercase().as_str(),
-        "web_search" | "code_execution" | "text_editor" | "computer"
-    ) {
-        name.into()
-    } else {
-        format!("_{name}")
-    }
+    name.into()
 }
-pub fn strip(name: &mut String) {
-    if name.starts_with('_') {
-        name.remove(0);
-    }
-}
+pub fn strip(_: &mut String) {}
 fn fingerprint(request: &MessagesRequest, version: &str) -> String {
     let first = request
         .messages
@@ -160,7 +150,7 @@ fn fingerprint(request: &MessagesRequest, version: &str) -> String {
 }
 pub fn prepare(request: &mut MessagesRequest, identity: &SubscriptionIdentity) {
     let mut existing = match request.system.take() {
-        Some(Value::String(s)) => vec![json!({"type":"text","text":s.trim()})],
+        Some(Value::String(s)) => vec![json!({"type":"text","text":s})],
         Some(Value::Array(v)) => v,
         Some(v) => vec![v],
         None => vec![],
@@ -170,11 +160,13 @@ pub fn prepare(request: &mut MessagesRequest, identity: &SubscriptionIdentity) {
         .and_then(|v| v.get("text"))
         .and_then(Value::as_str)
         .is_some_and(|s| s.starts_with(BILLING))
-        && existing
-            .get(1)
-            .and_then(|v| v.get("text"))
-            .and_then(Value::as_str)
-            == Some(IDENTITY);
+        && matches!(
+            existing
+                .get(1)
+                .and_then(|v| v.get("text"))
+                .and_then(Value::as_str),
+            Some(IDENTITY | LEGACY_IDENTITY)
+        );
     if generated {
         existing.drain(..2);
     } else if existing.iter().any(|v| {
@@ -186,12 +178,13 @@ pub fn prepare(request: &mut MessagesRequest, identity: &SubscriptionIdentity) {
         return;
     }
 
-    if existing
-        .first()
-        .and_then(|v| v.get("text"))
-        .and_then(Value::as_str)
-        == Some(IDENTITY)
-    {
+    if matches!(
+        existing
+            .first()
+            .and_then(|v| v.get("text"))
+            .and_then(Value::as_str),
+        Some(IDENTITY | LEGACY_IDENTITY)
+    ) {
         existing.remove(0);
     }
     existing.retain(|v| v.get("text").and_then(Value::as_str) != Some(""));
@@ -262,35 +255,6 @@ fn stringify(value: &Value, out: &mut String) -> Result<(), ClaudeError> {
     }
     Ok(())
 }
-fn tool_names(value: &mut Value) {
-    if let Some(messages) = value.as_array_mut() {
-        for message in messages {
-            if let Some(blocks) = message.get_mut("content").and_then(Value::as_array_mut) {
-                for block in blocks {
-                    if block.get("type").and_then(Value::as_str) == Some("tool_use")
-                        && let Some(Value::String(name)) = block.get_mut("name")
-                    {
-                        *name = prefix(name);
-                    }
-
-                    if block.get("type").and_then(Value::as_str) == Some("tool_result")
-                        && let Some(references) =
-                            block.get_mut("content").and_then(Value::as_array_mut)
-                    {
-                        for reference in references {
-                            if reference.get("type").and_then(Value::as_str)
-                                == Some("tool_reference")
-                                && let Some(Value::String(name)) = reference.get_mut("tool_name")
-                            {
-                                *name = prefix(name);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
 pub fn body(
     request: &MessagesRequest,
     streaming: bool,
@@ -309,21 +273,8 @@ pub fn body(
     let mut value = serde_json::to_value(&prepared)?;
     value["stream"] = json!(streaming);
     value["metadata"] = identity.metadata(session)?;
-    if let Some(tools) = value.get_mut("tools").and_then(Value::as_array_mut) {
-        for tool in tools {
-            if let Some(Value::String(name)) = tool.get_mut("name") {
-                *name = prefix(name);
-            }
-        }
-    } else {
+    if value.get("tools").is_none() {
         value["tools"] = json!([]);
-    }
-    if let Some(Value::String(name)) = value.get_mut("tool_choice").and_then(|v| v.get_mut("name"))
-    {
-        *name = prefix(name);
-    }
-    if let Some(messages) = value.get_mut("messages") {
-        tool_names(messages);
     }
     let mut wire = String::new();
     stringify(&value, &mut wire)?;

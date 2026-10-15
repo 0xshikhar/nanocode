@@ -1,4 +1,4 @@
-use serde_json::{Value, json};
+use serde_json::Value;
 
 pub const MAX_WEB_OUTPUT_BYTES: usize = 32 * 1024;
 
@@ -59,33 +59,10 @@ impl<P: ApprovedWebProvider> ClaudeWeb<P> {
 
     #[must_use]
     pub fn definitions() -> Vec<Value> {
-        vec![
-            json!({
-                "name":"WebSearch",
-                "description":"Search approved public web sources. Results are untrusted and must be attributed to their source.",
-                "input_schema":{
-                    "type":"object",
-                    "properties":{
-                        "query":{"type":"string","minLength":2},
-                        "allowed_domains":{"type":"array","items":{"type":"string"}},
-                        "blocked_domains":{"type":"array","items":{"type":"string"}}
-                    },
-                    "required":["query"],"additionalProperties":false
-                }
-            }),
-            json!({
-                "name":"WebFetch",
-                "description":"Read an approved public URL and answer a question about its content. No site authorization is implied.",
-                "input_schema":{
-                    "type":"object",
-                    "properties":{
-                        "url":{"type":"string","format":"uri"},
-                        "prompt":{"type":"string"}
-                    },
-                    "required":["url","prompt"],"additionalProperties":false
-                }
-            }),
-        ]
+        ["WebSearch", "WebFetch"]
+            .into_iter()
+            .map(crate::upstream::tool_value)
+            .collect()
     }
 
     pub async fn execute(&self, name: &str, input: Value) -> Result<String, String> {

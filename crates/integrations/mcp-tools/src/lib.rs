@@ -149,19 +149,21 @@ impl Mcp {
         }
     }
 
-    pub async fn prepared_snapshot(
-        &self,
+    pub fn prepared_snapshot<'call>(
+        &'call self,
         max_timeout: Duration,
-    ) -> Result<Vec<PreparedMcpTool>, String> {
-        DynamicToolProvider::start(self);
-        self.state.prepared_entries().await.map(|entries| {
-            entries
-                .into_iter()
-                .map(|entry| PreparedMcpTool {
-                    timeout: entry.timeout.min(max_timeout),
-                    entry,
-                })
-                .collect()
+    ) -> futures_util::future::BoxFuture<'call, Result<Vec<PreparedMcpTool>, String>> {
+        Box::pin(async move {
+            DynamicToolProvider::start(self);
+            self.state.prepared_entries().await.map(|entries| {
+                entries
+                    .into_iter()
+                    .map(|entry| PreparedMcpTool {
+                        timeout: entry.timeout.min(max_timeout),
+                        entry,
+                    })
+                    .collect()
+            })
         })
     }
 }
@@ -187,8 +189,12 @@ impl PreparedMcpTool {
         self.timeout
     }
 
-    pub async fn execute(&self, input: Value, context: ToolContext<'_>) -> ToolOutput {
-        execute_mcp_entry(&self.entry, input, self.timeout, context).await
+    pub fn execute<'call>(
+        &'call self,
+        input: Value,
+        context: ToolContext<'call>,
+    ) -> futures_util::future::BoxFuture<'call, ToolOutput> {
+        Box::pin(async move { execute_mcp_entry(&self.entry, input, self.timeout, context).await })
     }
 }
 
@@ -260,35 +266,40 @@ impl McpBuilder {
 }
 
 impl McpHandle {
-    pub async fn reload(&self, server_name: &str) -> Result<usize, McpControlError> {
-        let span = info_span!(
-            target: "nanocode_code_mode",
-            parent: None,
-            "mcp.server_reload",
-            otel.kind = "client",
-            otel.status_code = tracing::field::Empty,
-            mcp.server = server_name,
-            status = tracing::field::Empty,
-            tool.count = tracing::field::Empty,
-        );
+    pub fn reload<'call>(
+        &'call self,
+        server_name: &'call str,
+    ) -> futures_util::future::BoxFuture<'call, Result<usize, McpControlError>> {
+        Box::pin(async move {
+            let span = info_span!(
+                target: "nanocode_code_mode",
+                parent: None,
+                "mcp.server_reload",
+                otel.kind = "client",
+                otel.status_code = tracing::field::Empty,
+                mcp.server = server_name,
+                status = tracing::field::Empty,
+                tool.count = tracing::field::Empty,
+            );
 
-        let result = self.reload_inner(server_name, &span).await;
-        span.record(
-            "status",
-            if result.is_ok() {
-                "completed"
-            } else {
-                "failed"
-            },
-        );
-        span.record(
-            "otel.status_code",
-            if result.is_ok() { "OK" } else { "ERROR" },
-        );
-        if let Ok(tool_count) = &result {
-            span.record("tool.count", tool_count);
-        }
-        result
+            let result = self.reload_inner(server_name, &span).await;
+            span.record(
+                "status",
+                if result.is_ok() {
+                    "completed"
+                } else {
+                    "failed"
+                },
+            );
+            span.record(
+                "otel.status_code",
+                if result.is_ok() { "OK" } else { "ERROR" },
+            );
+            if let Ok(tool_count) = &result {
+                span.record("tool.count", tool_count);
+            }
+            result
+        })
     }
 
     async fn reload_inner(
@@ -342,18 +353,23 @@ impl McpHandle {
         }
     }
 
-    pub async fn login(&self, server_name: &str) -> Result<McpLogin, McpControlError> {
-        let span = info_span!(
-            target: "nanocode_code_mode",
-            parent: None,
-            "mcp.oauth.login",
-            otel.kind = "client",
-            otel.status_code = tracing::field::Empty,
-            mcp.server = server_name,
-            status = tracing::field::Empty,
-            tool.count = tracing::field::Empty,
-        );
-        self.login_inner(server_name, span).await
+    pub fn login<'call>(
+        &'call self,
+        server_name: &'call str,
+    ) -> futures_util::future::BoxFuture<'call, Result<McpLogin, McpControlError>> {
+        Box::pin(async move {
+            let span = info_span!(
+                target: "nanocode_code_mode",
+                parent: None,
+                "mcp.oauth.login",
+                otel.kind = "client",
+                otel.status_code = tracing::field::Empty,
+                mcp.server = server_name,
+                status = tracing::field::Empty,
+                tool.count = tracing::field::Empty,
+            );
+            self.login_inner(server_name, span).await
+        })
     }
 
     async fn login_inner(
@@ -437,10 +453,12 @@ impl McpLogin {
         &self.authorization_url
     }
 
-    pub async fn wait(self) -> Result<usize, McpControlError> {
-        self.completion
-            .await
-            .map_err(|error| McpControlError::LoginTask(error.to_string()))?
+    pub fn wait(self) -> futures_util::future::BoxFuture<'static, Result<usize, McpControlError>> {
+        Box::pin(async move {
+            self.completion
+                .await
+                .map_err(|error| McpControlError::LoginTask(error.to_string()))?
+        })
     }
 }
 

@@ -34,22 +34,10 @@ impl ClaudeNotebook {
 
     #[must_use]
     pub fn definitions() -> Vec<Value> {
-        vec![json!({
-            "name": "NotebookEdit",
-            "description": "Replace, insert, or delete a cell in an existing Jupyter notebook. Inserts are after cell_id, or at the beginning when omitted; replacements and deletes require cell_id in this safe subset.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "notebook_path": {"type": "string", "description": "Path of an existing .ipynb notebook within the authorized workspace."},
-                    "new_source": {"type": "string", "description": "New cell source; required even for delete (ignored on delete)."},
-                    "cell_id": {"type": "string", "description": "Existing cell ID (or zero-based cell index as a string)."},
-                    "cell_type": {"type": "string", "enum": ["code", "markdown"]},
-                    "edit_mode": {"type": "string", "enum": ["replace", "insert", "delete"], "default": "replace"}
-                },
-                "required": ["notebook_path", "new_source"],
-                "additionalProperties": false
-            }
-        })]
+        ["NotebookEdit"]
+            .into_iter()
+            .map(crate::upstream::tool_value)
+            .collect()
     }
 
     #[must_use]

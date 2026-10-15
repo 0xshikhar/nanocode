@@ -205,9 +205,13 @@ pub struct OAuthRuntime {
 }
 
 impl OAuthRuntime {
-    pub async fn access_token(self: &Arc<Self>) -> Result<String, String> {
-        self.refresh_if_needed().await?;
-        self.current_access_token().await
+    pub fn access_token<'call>(
+        self: &'call Arc<Self>,
+    ) -> futures_util::future::BoxFuture<'call, Result<String, String>> {
+        Box::pin(async move {
+            self.refresh_if_needed().await?;
+            self.current_access_token().await
+        })
     }
 
     async fn current_access_token(&self) -> Result<String, String> {
@@ -344,44 +348,47 @@ fn validate_authorization_server_endpoints(metadata: &AuthorizationMetadata) -> 
     Ok(())
 }
 
-pub async fn transport_from_credentials(
-    server_name: &str,
-    server_url: &str,
+pub fn transport_from_credentials<'call>(
+    server_name: &'call str,
+    server_url: &'call str,
     http_client: reqwest::Client,
     store: Arc<dyn McpOAuthStore>,
     credentials: McpOAuthCredentials,
-    metadata_cache: &OAuthMetadataCache,
-) -> Result<OAuthTransport, String> {
-    let base_url = Url::parse(server_url).map_err(|error| {
-        format!("failed to initialize MCP OAuth state: URL parse error: {error}")
-    })?;
-    let (metadata, metadata_cache_hit) =
-        if let Some(metadata) = metadata_cache.get(server_name, server_url).await {
-            (metadata, true)
-        } else {
-            let metadata = discover(&http_client, &base_url)
-                .await
-                .map_err(|error| format!("failed to discover MCP OAuth metadata: {error}"))?
-                .metadata;
-            metadata_cache
-                .insert(server_name, server_url, metadata.clone())
-                .await;
-            (metadata, false)
-        };
-    validate_authorization_server_endpoints(&metadata)?;
-    let authorization_issuer = authorization_issuer(&metadata)?;
-    let staged_credentials = credentials_for_manager(&credentials, authorization_issuer.as_deref());
-    let runtime = Arc::new(OAuthRuntime {
-        server_name: server_name.to_owned(),
-        server_url: server_url.to_owned(),
-        base_url,
-        http: http_client,
-        store,
-        credentials: Mutex::new(Some(staged_credentials)),
-    });
-    Ok(OAuthTransport {
-        runtime,
-        metadata_cache_hit,
+    metadata_cache: &'call OAuthMetadataCache,
+) -> futures_util::future::BoxFuture<'call, Result<OAuthTransport, String>> {
+    Box::pin(async move {
+        let base_url = Url::parse(server_url).map_err(|error| {
+            format!("failed to initialize MCP OAuth state: URL parse error: {error}")
+        })?;
+        let (metadata, metadata_cache_hit) =
+            if let Some(metadata) = metadata_cache.get(server_name, server_url).await {
+                (metadata, true)
+            } else {
+                let metadata = discover(&http_client, &base_url)
+                    .await
+                    .map_err(|error| format!("failed to discover MCP OAuth metadata: {error}"))?
+                    .metadata;
+                metadata_cache
+                    .insert(server_name, server_url, metadata.clone())
+                    .await;
+                (metadata, false)
+            };
+        validate_authorization_server_endpoints(&metadata)?;
+        let authorization_issuer = authorization_issuer(&metadata)?;
+        let staged_credentials =
+            credentials_for_manager(&credentials, authorization_issuer.as_deref());
+        let runtime = Arc::new(OAuthRuntime {
+            server_name: server_name.to_owned(),
+            server_url: server_url.to_owned(),
+            base_url,
+            http: http_client,
+            store,
+            credentials: Mutex::new(Some(staged_credentials)),
+        });
+        Ok(OAuthTransport {
+            runtime,
+            metadata_cache_hit,
+        })
     })
 }
 
@@ -764,74 +771,76 @@ pub struct OAuthLoginFlow {
     pub completion: JoinHandle<Result<(), String>>,
 }
 
-pub async fn begin_login(
+pub fn begin_login(
     server_name: String,
     server_url: String,
     headers: BTreeMap<String, SecretSource>,
     store: Arc<dyn McpOAuthStore>,
-) -> Result<OAuthLoginFlow, String> {
-    let client = oauth_http_client(headers)?;
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .map_err(|error| format!("failed to bind MCP OAuth callback: {error}"))?;
-    let address = listener
-        .local_addr()
-        .map_err(|error| format!("failed to inspect MCP OAuth callback: {error}"))?;
-    let redirect_uri = format!("http://{address}/callback");
-    let authorization_span = info_span!(
-        target: "nanocode_code_mode",
-        "mcp.oauth.authorization_start",
-        otel.kind = "client",
-        otel.status_code = tracing::field::Empty,
-        status = tracing::field::Empty,
-    );
-    let authorization = async {
-        let base_url = Url::parse(&server_url).map_err(|error| {
-            format!("failed to discover MCP OAuth metadata: URL parse error: {error}")
-        })?;
-        let discovery = discover(&client, &base_url)
+) -> futures_util::future::BoxFuture<'static, Result<OAuthLoginFlow, String>> {
+    Box::pin(async move {
+        let client = oauth_http_client(headers)?;
+        let listener = TcpListener::bind("127.0.0.1:0")
             .await
-            .map_err(|error| format!("failed to discover MCP OAuth metadata: {error}"))?;
-        validate_authorization_server_endpoints(&discovery.metadata)?;
-        let authorization_issuer = authorization_issuer(&discovery.metadata)?;
-        let session = LoginSession::start(&client, &base_url, discovery, &redirect_uri)
-            .await
-            .map_err(|error| format!("failed to start MCP OAuth authorization: {error}"))?;
-        Ok::<_, String>((session, authorization_issuer))
-    }
-    .instrument(authorization_span.clone())
-    .await;
-    authorization_span.record(
-        "status",
-        if authorization.is_ok() {
-            "completed"
-        } else {
-            "failed"
-        },
-    );
-    authorization_span.record(
-        "otel.status_code",
-        if authorization.is_ok() { "OK" } else { "ERROR" },
-    );
-    let (session, authorization_issuer) = authorization?;
-    let authorization_url = session.authorization_url.clone();
+            .map_err(|error| format!("failed to bind MCP OAuth callback: {error}"))?;
+        let address = listener
+            .local_addr()
+            .map_err(|error| format!("failed to inspect MCP OAuth callback: {error}"))?;
+        let redirect_uri = format!("http://{address}/callback");
+        let authorization_span = info_span!(
+            target: "nanocode_code_mode",
+            "mcp.oauth.authorization_start",
+            otel.kind = "client",
+            otel.status_code = tracing::field::Empty,
+            status = tracing::field::Empty,
+        );
+        let authorization = async {
+            let base_url = Url::parse(&server_url).map_err(|error| {
+                format!("failed to discover MCP OAuth metadata: URL parse error: {error}")
+            })?;
+            let discovery = discover(&client, &base_url)
+                .await
+                .map_err(|error| format!("failed to discover MCP OAuth metadata: {error}"))?;
+            validate_authorization_server_endpoints(&discovery.metadata)?;
+            let authorization_issuer = authorization_issuer(&discovery.metadata)?;
+            let session = LoginSession::start(&client, &base_url, discovery, &redirect_uri)
+                .await
+                .map_err(|error| format!("failed to start MCP OAuth authorization: {error}"))?;
+            Ok::<_, String>((session, authorization_issuer))
+        }
+        .instrument(authorization_span.clone())
+        .await;
+        authorization_span.record(
+            "status",
+            if authorization.is_ok() {
+                "completed"
+            } else {
+                "failed"
+            },
+        );
+        authorization_span.record(
+            "otel.status_code",
+            if authorization.is_ok() { "OK" } else { "ERROR" },
+        );
+        let (session, authorization_issuer) = authorization?;
+        let authorization_url = session.authorization_url.clone();
 
-    let parent = tracing::Span::current();
-    let completion = tokio::spawn(
-        complete_login(
-            listener,
-            client,
-            session,
-            authorization_issuer,
-            store,
-            server_name,
-            server_url,
-        )
-        .instrument(parent),
-    );
-    Ok(OAuthLoginFlow {
-        authorization_url,
-        completion,
+        let parent = tracing::Span::current();
+        let completion = tokio::spawn(
+            complete_login(
+                listener,
+                client,
+                session,
+                authorization_issuer,
+                store,
+                server_name,
+                server_url,
+            )
+            .instrument(parent),
+        );
+        Ok(OAuthLoginFlow {
+            authorization_url,
+            completion,
+        })
     })
 }
 

@@ -1,5 +1,5 @@
 use crate::client::{
-    Prompt, PromptMessageRole,
+    ModelConfig, Prompt, PromptMessageRole,
     responses::{
         ContentItem, FunctionOutputBody, FunctionOutputContent, MessageRole, ResponseItem,
     },
@@ -10,11 +10,12 @@ use serde_json::Value;
 use super::context::ContextSnapshot;
 
 pub(in crate::model) fn task_input(
+    config: &ModelConfig,
     prompt: &Prompt,
     user_content: Vec<ContentItem>,
     context: &ContextSnapshot,
 ) -> Vec<ResponseItem> {
-    let mut input = vec![developer_context(), context.full_item()];
+    let mut input = vec![developer_context(config), context.full_item()];
     input.extend(prompt_messages(prompt, user_content));
     input
 }
@@ -55,12 +56,24 @@ pub(in crate::model) fn turn_aborted() -> ResponseItem {
     )
 }
 
-pub(in crate::model) fn developer_context() -> ResponseItem {
+pub(in crate::model) fn developer_context(config: &ModelConfig) -> ResponseItem {
     ResponseItem::message(
         MessageRole::Developer,
         [ContentItem::InputText {
-            text: permissions_instructions().into(),
+            text: format!(
+                "{}\n\n{}",
+                permissions_instructions(),
+                config.host_instructions()
+            )
+            .into(),
         }],
+    )
+}
+
+pub(in crate::model) fn host_context(config: &ModelConfig) -> ResponseItem {
+    ResponseItem::message(
+        MessageRole::Developer,
+        [ContentItem::input_text(config.host_instructions())],
     )
 }
 

@@ -127,128 +127,145 @@ impl ShellSessions {
         self.default_shell.name()
     }
 
-    pub async fn execute(&self, command: ExecCommand, workspace: &Path) -> ExecCommandResult {
-        let started_at = Instant::now();
-        let session_id = self.next_session_id.fetch_add(1, Ordering::Relaxed);
-        let workdir = resolve_workdir(workspace, command.workdir.as_deref());
-        let shell = command.shell.as_deref().map_or_else(
-            || self.default_shell.clone(),
-            selection::get_shell_by_model_provided_path,
-        );
-        let (environment, secrets) = process::sanitized_environment(&self.environment);
+    pub fn execute<'call>(
+        &'call self,
+        command: ExecCommand,
+        workspace: &'call Path,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ExecCommandResult> + Send + 'call>>
+    {
+        Box::pin(async move {
+            let started_at = Instant::now();
+            let session_id = self.next_session_id.fetch_add(1, Ordering::Relaxed);
+            let workdir = resolve_workdir(workspace, command.workdir.as_deref());
+            let shell = command.shell.as_deref().map_or_else(
+                || self.default_shell.clone(),
+                selection::get_shell_by_model_provided_path,
+            );
+            let (environment, secrets) = process::sanitized_environment(&self.environment);
 
-        let lifecycle_guard = self.lifecycle.lock().await;
-        let spawned = match process::spawn(
-            &command.script,
-            &workdir,
-            &shell,
-            command.login.unwrap_or(true),
-            command.tty,
-            &environment,
-        ) {
-            Ok(spawned) => spawned,
-            Err(error) => {
+            let lifecycle_guard = self.lifecycle.lock().await;
+            let spawned = match process::spawn(
+                &command.script,
+                &workdir,
+                &shell,
+                command.login.unwrap_or(true),
+                command.tty,
+                &environment,
+            ) {
+                Ok(spawned) => spawned,
+                Err(error) => {
+                    return ExecCommandResult::failed(
+                        started_at.elapsed(),
+                        format!(
+                            "exec_command failed for `{}`: CreateProcess {{ message: {:?} }}",
+                            command.script,
+                            error.to_string()
+                        ),
+                    );
+                }
+            };
+            let session = Session::new(session_id, spawned, secrets);
+            let mut cancellation = CancelExecution {
+                session: Some(Arc::clone(&session)),
+                sessions: Arc::clone(&self.sessions),
+            };
+            let _interaction_guard = session.interaction.lock().await;
+            self.sessions
+                .lock()
+                .await
+                .insert(session_id, Arc::clone(&session));
+            drop(lifecycle_guard);
+
+            let yield_time = duration_ms(
+                command.yield_time_ms,
+                DEFAULT_EXEC_YIELD_MS,
+                250,
+                MAX_EXEC_YIELD_MS,
+            );
+            let result = session
+                .wait_for_output(yield_time, command.max_output_tokens, started_at)
+                .await;
+            cancellation.session = None;
+            if result.exit_code.is_some() {
+                self.sessions.lock().await.remove(&session_id);
+            }
+            result
+        })
+    }
+
+    pub fn write_stdin<'call>(
+        &'call self,
+        request: WriteStdin,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ExecCommandResult> + Send + 'call>>
+    {
+        Box::pin(async move {
+            let started_at = Instant::now();
+            let session_id = i64::from(request.session_id);
+            let session = self.sessions.lock().await.get(&session_id).cloned();
+            let Some(session) = session else {
                 return ExecCommandResult::failed(
                     started_at.elapsed(),
                     format!(
-                        "exec_command failed for `{}`: CreateProcess {{ message: {:?} }}",
-                        command.script,
-                        error.to_string()
+                        "write_stdin failed: Unknown process id {}",
+                        request.session_id
                     ),
                 );
-            }
-        };
-        let session = Session::new(session_id, spawned, secrets);
-        let mut cancellation = CancelExecution {
-            session: Some(Arc::clone(&session)),
-            sessions: Arc::clone(&self.sessions),
-        };
-        let _interaction_guard = session.interaction.lock().await;
-        self.sessions
-            .lock()
-            .await
-            .insert(session_id, Arc::clone(&session));
-        drop(lifecycle_guard);
+            };
 
-        let yield_time = duration_ms(
-            command.yield_time_ms,
-            DEFAULT_EXEC_YIELD_MS,
-            250,
-            MAX_EXEC_YIELD_MS,
-        );
-        let result = session
-            .wait_for_output(yield_time, command.max_output_tokens, started_at)
-            .await;
-        cancellation.session = None;
-        if result.exit_code.is_some() {
-            self.sessions.lock().await.remove(&session_id);
-        }
-        result
-    }
-
-    pub async fn write_stdin(&self, request: WriteStdin) -> ExecCommandResult {
-        let started_at = Instant::now();
-        let session_id = i64::from(request.session_id);
-        let session = self.sessions.lock().await.get(&session_id).cloned();
-        let Some(session) = session else {
-            return ExecCommandResult::failed(
-                started_at.elapsed(),
-                format!(
-                    "write_stdin failed: Unknown process id {}",
-                    request.session_id
-                ),
-            );
-        };
-
-        let _interaction_guard = session.interaction.lock().await;
-        if !request.chars.is_empty() {
-            let written = if !session.tty {
-                if request.chars == "\u{3}" {
-                    session.interrupt().await
-                } else {
-                    return ExecCommandResult::failed(
+            let _interaction_guard = session.interaction.lock().await;
+            if !request.chars.is_empty() {
+                let written = if !session.tty {
+                    if request.chars == "\u{3}" {
+                        session.interrupt().await
+                    } else {
+                        return ExecCommandResult::failed(
                         started_at.elapsed(),
                         "write_stdin failed: stdin is closed for this session; rerun exec_command with tty=true to keep stdin open"
                             .to_owned(),
                     );
+                    }
+                } else {
+                    session.write(&request.chars).await
+                };
+                if let Err(error) = written {
+                    return ExecCommandResult::failed(
+                        started_at.elapsed(),
+                        format!("write_stdin failed: {error}"),
+                    );
                 }
-            } else {
-                session.write(&request.chars).await
-            };
-            if let Err(error) = written {
-                return ExecCommandResult::failed(
-                    started_at.elapsed(),
-                    format!("write_stdin failed: {error}"),
-                );
             }
-        }
-        let (default, minimum, maximum) = if request.chars.is_empty() {
-            (DEFAULT_POLL_YIELD_MS, 5_000, MAX_POLL_YIELD_MS)
-        } else {
-            (DEFAULT_WRITE_YIELD_MS, 250, MAX_EXEC_YIELD_MS)
-        };
-        let yield_time = duration_ms(request.yield_time_ms, default, minimum, maximum);
-        let result = session
-            .wait_for_output(yield_time, request.max_output_tokens, started_at)
-            .await;
-        if result.exit_code.is_some() {
-            self.sessions.lock().await.remove(&session_id);
-        }
-        result
+            let (default, minimum, maximum) = if request.chars.is_empty() {
+                (DEFAULT_POLL_YIELD_MS, 5_000, MAX_POLL_YIELD_MS)
+            } else {
+                (DEFAULT_WRITE_YIELD_MS, 250, MAX_EXEC_YIELD_MS)
+            };
+            let yield_time = duration_ms(request.yield_time_ms, default, minimum, maximum);
+            let result = session
+                .wait_for_output(yield_time, request.max_output_tokens, started_at)
+                .await;
+            if result.exit_code.is_some() {
+                self.sessions.lock().await.remove(&session_id);
+            }
+            result
+        })
     }
 
-    pub async fn terminate_all(&self) {
-        let _lifecycle_guard = self.lifecycle.lock().await;
-        let sessions = {
-            let mut store = self.sessions.lock().await;
-            store
-                .drain()
-                .map(|(_, session)| session)
-                .collect::<Vec<_>>()
-        };
-        for session in sessions {
-            session.terminate().await;
-        }
+    pub fn terminate_all<'call>(
+        &'call self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'call>> {
+        Box::pin(async move {
+            let _lifecycle_guard = self.lifecycle.lock().await;
+            let sessions = {
+                let mut store = self.sessions.lock().await;
+                store
+                    .drain()
+                    .map(|(_, session)| session)
+                    .collect::<Vec<_>>()
+            };
+            for session in sessions {
+                session.terminate().await;
+            }
+        })
     }
 }
 

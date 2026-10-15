@@ -84,7 +84,7 @@ fn exec_command_definition(name: &'static str) -> ToolDefinition {
                 },
                 "max_output_tokens": {
                     "type": "number",
-                    "description": "Output token budget. Omit for unlimited output."
+                    "description": "Output token budget. Defaults to 10000 tokens; larger requests may be capped by policy."
                 },
                 "prefix_rule": {
                     "type": "array",
@@ -125,7 +125,7 @@ fn write_stdin_definition(name: &'static str) -> ToolDefinition {
                 },
                 "max_output_tokens": {
                     "type": "number",
-                    "description": "Output token budget. Omit for unlimited output."
+                    "description": "Output token budget. Defaults to 10000 tokens; larger requests may be capped by policy."
                 }
             },
             "required": ["session_id"],

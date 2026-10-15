@@ -118,109 +118,144 @@ impl ToolRuntime {
         }
     }
 
-    pub async fn execute_code(
-        &self,
-        source: &str,
-        context: ToolContext<'_>,
-    ) -> Result<CodeModeExecution, crate::embedded::CodeModeHostError> {
-        match &self.inner {
-            Runtime::Native(runtime) => runtime.execute_code(source, context).await,
-            Runtime::Host(runtime) => runtime.execute_code(source, context).await,
-        }
+    pub fn execute_code<'call>(
+        &'call self,
+        source: &'call str,
+        context: ToolContext<'call>,
+    ) -> futures_util::future::BoxFuture<
+        'call,
+        Result<CodeModeExecution, crate::embedded::CodeModeHostError>,
+    > {
+        Box::pin(async move {
+            match &self.inner {
+                Runtime::Native(runtime) => runtime.execute_code(source, context).await,
+                Runtime::Host(runtime) => runtime.execute_code(source, context).await,
+            }
+        })
     }
 
-    pub async fn execute_code_with_updates(
-        &self,
-        source: &str,
-        context: ToolContext<'_>,
-        observer: &mut dyn CodeModeObserver,
-    ) -> Result<CodeModeExecution, crate::embedded::CodeModeHostError> {
-        match &self.inner {
-            Runtime::Native(runtime) => {
-                runtime
-                    .execute_code_with_updates(source, context, observer)
-                    .await
+    pub fn execute_code_with_updates<'call>(
+        &'call self,
+        source: &'call str,
+        context: ToolContext<'call>,
+        observer: &'call mut dyn CodeModeObserver,
+    ) -> futures_util::future::BoxFuture<
+        'call,
+        Result<CodeModeExecution, crate::embedded::CodeModeHostError>,
+    > {
+        Box::pin(async move {
+            match &self.inner {
+                Runtime::Native(runtime) => {
+                    runtime
+                        .execute_code_with_updates(source, context, observer)
+                        .await
+                }
+                Runtime::Host(runtime) => {
+                    runtime
+                        .execute_code_with_updates(source, context, observer)
+                        .await
+                }
             }
-            Runtime::Host(runtime) => {
-                runtime
-                    .execute_code_with_updates(source, context, observer)
-                    .await
-            }
-        }
+        })
     }
 
-    pub async fn execute_code_owned(
-        &self,
-        source: &str,
+    pub fn execute_code_owned<'call>(
+        &'call self,
+        source: &'call str,
         context: OwnedToolContext,
-    ) -> Result<CodeModeExecution, crate::embedded::CodeModeHostError> {
-        match &self.inner {
-            Runtime::Native(runtime) => runtime.execute_code_owned(source, context).await,
-            Runtime::Host(runtime) => runtime.execute_code_owned(source, context).await,
-        }
+    ) -> futures_util::future::BoxFuture<
+        'call,
+        Result<CodeModeExecution, crate::embedded::CodeModeHostError>,
+    > {
+        Box::pin(async move {
+            match &self.inner {
+                Runtime::Native(runtime) => runtime.execute_code_owned(source, context).await,
+                Runtime::Host(runtime) => runtime.execute_code_owned(source, context).await,
+            }
+        })
     }
 
-    pub async fn execute_code_owned_with_updates(
-        &self,
-        source: &str,
+    pub fn execute_code_owned_with_updates<'call>(
+        &'call self,
+        source: &'call str,
         context: OwnedToolContext,
-        observer: &mut dyn CodeModeObserver,
-    ) -> Result<CodeModeExecution, crate::embedded::CodeModeHostError> {
-        match &self.inner {
-            Runtime::Native(runtime) => {
-                runtime
-                    .execute_code_owned_with_updates(source, context, observer)
-                    .await
+        observer: &'call mut dyn CodeModeObserver,
+    ) -> futures_util::future::BoxFuture<
+        'call,
+        Result<CodeModeExecution, crate::embedded::CodeModeHostError>,
+    > {
+        Box::pin(async move {
+            match &self.inner {
+                Runtime::Native(runtime) => {
+                    runtime
+                        .execute_code_owned_with_updates(source, context, observer)
+                        .await
+                }
+                Runtime::Host(runtime) => {
+                    runtime
+                        .execute_code_owned_with_updates(source, context, observer)
+                        .await
+                }
             }
-            Runtime::Host(runtime) => {
-                runtime
-                    .execute_code_owned_with_updates(source, context, observer)
-                    .await
-            }
-        }
+        })
     }
 
-    pub async fn wait_for_code(
-        &self,
-        input: &str,
-        context: ToolContext<'_>,
-    ) -> Result<CodeModeExecution, crate::embedded::CodeModeHostError> {
-        match &self.inner {
-            Runtime::Native(runtime) => runtime.wait_for_code(input, context).await,
-            Runtime::Host(runtime) => runtime.wait_for_code(input, context).await,
-        }
+    pub fn wait_for_code<'call>(
+        &'call self,
+        input: &'call str,
+        context: ToolContext<'call>,
+    ) -> futures_util::future::BoxFuture<
+        'call,
+        Result<CodeModeExecution, crate::embedded::CodeModeHostError>,
+    > {
+        Box::pin(async move {
+            match &self.inner {
+                Runtime::Native(runtime) => runtime.wait_for_code(input, context).await,
+                Runtime::Host(runtime) => runtime.wait_for_code(input, context).await,
+            }
+        })
     }
 
-    pub async fn wait_for_code_with_updates(
-        &self,
-        input: &str,
-        context: ToolContext<'_>,
-        observer: &mut dyn CodeModeObserver,
-    ) -> Result<CodeModeExecution, crate::embedded::CodeModeHostError> {
-        match &self.inner {
-            Runtime::Native(runtime) => {
-                runtime
-                    .wait_for_code_with_updates(input, context, observer)
-                    .await
+    pub fn wait_for_code_with_updates<'call>(
+        &'call self,
+        input: &'call str,
+        context: ToolContext<'call>,
+        observer: &'call mut dyn CodeModeObserver,
+    ) -> futures_util::future::BoxFuture<
+        'call,
+        Result<CodeModeExecution, crate::embedded::CodeModeHostError>,
+    > {
+        Box::pin(async move {
+            match &self.inner {
+                Runtime::Native(runtime) => {
+                    runtime
+                        .wait_for_code_with_updates(input, context, observer)
+                        .await
+                }
+                Runtime::Host(runtime) => {
+                    runtime
+                        .wait_for_code_with_updates(input, context, observer)
+                        .await
+                }
             }
-            Runtime::Host(runtime) => {
-                runtime
-                    .wait_for_code_with_updates(input, context, observer)
-                    .await
-            }
-        }
+        })
     }
 
-    pub async fn execute_tool(
-        &self,
-        name: &str,
+    pub fn execute_tool<'call>(
+        &'call self,
+        name: &'call str,
         input: ToolInput,
-        context: ToolContext<'_>,
-    ) -> Result<ToolOutput, crate::embedded::CodeModeHostError> {
-        match &self.inner {
-            Runtime::Native(runtime) => runtime.execute_tool(name, input, context).await,
-            Runtime::Host(runtime) => runtime.execute_tool(name, input, context).await,
-        }
+        context: ToolContext<'call>,
+    ) -> futures_util::future::BoxFuture<
+        'call,
+        Result<ToolOutput, crate::embedded::CodeModeHostError>,
+    > {
+        Box::pin(async move {
+            match &self.inner {
+                Runtime::Native(runtime) => runtime.execute_tool(name, input, context).await,
+                Runtime::Host(runtime) => runtime.execute_tool(name, input, context).await,
+            }
+        })
     }
 }
 
@@ -232,11 +267,13 @@ impl ToolRuntimeControl {
         }
     }
 
-    pub async fn preempt_turn(&self) {
-        match &self.inner {
-            RuntimeControl::Native(control) => control.preempt_turn().await,
-            RuntimeControl::Host(control) => control.preempt_turn().await,
-        }
+    pub fn preempt_turn<'call>(&'call self) -> futures_util::future::BoxFuture<'call, ()> {
+        Box::pin(async move {
+            match &self.inner {
+                RuntimeControl::Native(control) => control.preempt_turn().await,
+                RuntimeControl::Host(control) => control.preempt_turn().await,
+            }
+        })
     }
 
     pub fn begin_turn(&self) {
@@ -246,42 +283,58 @@ impl ToolRuntimeControl {
         }
     }
 
-    pub async fn detach_turn_with_updates(
-        &self,
-        observer: &mut (dyn FnMut(&str) -> Box<dyn CodeModeObserver> + Send),
-    ) {
-        match &self.inner {
-            RuntimeControl::Native(control) => control.detach_turn_with_updates(observer).await,
-            RuntimeControl::Host(control) => control.detach_turn_with_updates(observer).await,
-        }
+    pub fn detach_turn_with_updates<'call>(
+        &'call self,
+        observer: &'call mut (dyn FnMut(&str) -> Box<dyn CodeModeObserver> + Send),
+    ) -> futures_util::future::BoxFuture<'call, ()> {
+        Box::pin(async move {
+            match &self.inner {
+                RuntimeControl::Native(control) => control.detach_turn_with_updates(observer).await,
+                RuntimeControl::Host(control) => control.detach_turn_with_updates(observer).await,
+            }
+        })
     }
 
-    pub async fn cancel_turn(&self) {
-        match &self.inner {
-            RuntimeControl::Native(control) => control.cancel_turn().await,
-            RuntimeControl::Host(control) => control.cancel_turn().await,
-        }
+    pub fn cancel_turn<'call>(&'call self) -> futures_util::future::BoxFuture<'call, ()> {
+        Box::pin(async move {
+            match &self.inner {
+                RuntimeControl::Native(control) => control.cancel_turn().await,
+                RuntimeControl::Host(control) => control.cancel_turn().await,
+            }
+        })
     }
 
-    pub async fn cancel_turn_with_updates(&self, observer: &mut dyn CodeModeObserver) {
-        match &self.inner {
-            RuntimeControl::Native(control) => control.cancel_turn_with_updates(observer).await,
-            RuntimeControl::Host(control) => control.cancel_turn_with_updates(observer).await,
-        }
+    pub fn cancel_turn_with_updates<'call>(
+        &'call self,
+        observer: &'call mut dyn CodeModeObserver,
+    ) -> futures_util::future::BoxFuture<'call, ()> {
+        Box::pin(async move {
+            match &self.inner {
+                RuntimeControl::Native(control) => control.cancel_turn_with_updates(observer).await,
+                RuntimeControl::Host(control) => control.cancel_turn_with_updates(observer).await,
+            }
+        })
     }
 
-    pub async fn cancel(&self) {
-        match &self.inner {
-            RuntimeControl::Native(control) => control.cancel().await,
-            RuntimeControl::Host(control) => control.cancel().await,
-        }
+    pub fn cancel<'call>(&'call self) -> futures_util::future::BoxFuture<'call, ()> {
+        Box::pin(async move {
+            match &self.inner {
+                RuntimeControl::Native(control) => control.cancel().await,
+                RuntimeControl::Host(control) => control.cancel().await,
+            }
+        })
     }
 
-    pub async fn cancel_with_updates(&self, observer: &mut dyn CodeModeObserver) {
-        match &self.inner {
-            RuntimeControl::Native(control) => control.cancel_with_updates(observer).await,
-            RuntimeControl::Host(control) => control.cancel_with_updates(observer).await,
-        }
+    pub fn cancel_with_updates<'call>(
+        &'call self,
+        observer: &'call mut dyn CodeModeObserver,
+    ) -> futures_util::future::BoxFuture<'call, ()> {
+        Box::pin(async move {
+            match &self.inner {
+                RuntimeControl::Native(control) => control.cancel_with_updates(observer).await,
+                RuntimeControl::Host(control) => control.cancel_with_updates(observer).await,
+            }
+        })
     }
 }
 
@@ -468,89 +521,118 @@ impl NativeToolRuntime {
         self.registry.contains(name)
     }
 
-    pub async fn execute_code(
-        &self,
-        source: &str,
-        context: ToolContext<'_>,
-    ) -> Result<CodeModeExecution, crate::embedded::CodeModeHostError> {
-        Ok(self
-            .code_mode
-            .execute(
-                source,
-                self.registry.clone(),
-                OwnedToolContext::from_context(context),
-            )
-            .await)
+    pub fn execute_code<'call>(
+        &'call self,
+        source: &'call str,
+        context: ToolContext<'call>,
+    ) -> futures_util::future::BoxFuture<
+        'call,
+        Result<CodeModeExecution, crate::embedded::CodeModeHostError>,
+    > {
+        Box::pin(async move {
+            Ok(self
+                .code_mode
+                .execute(
+                    source,
+                    self.registry.clone(),
+                    OwnedToolContext::from_context(context),
+                )
+                .await)
+        })
     }
 
     #[doc(hidden)]
-    pub async fn execute_code_with_updates(
-        &self,
-        source: &str,
-        context: ToolContext<'_>,
-        observer: &mut dyn CodeModeObserver,
-    ) -> Result<CodeModeExecution, crate::embedded::CodeModeHostError> {
-        Ok(self
-            .code_mode
-            .execute_with_updates(
-                source,
-                self.registry.clone(),
-                OwnedToolContext::from_context(context),
-                observer,
-            )
-            .await)
+    pub fn execute_code_with_updates<'call>(
+        &'call self,
+        source: &'call str,
+        context: ToolContext<'call>,
+        observer: &'call mut dyn CodeModeObserver,
+    ) -> futures_util::future::BoxFuture<
+        'call,
+        Result<CodeModeExecution, crate::embedded::CodeModeHostError>,
+    > {
+        Box::pin(async move {
+            Ok(self
+                .code_mode
+                .execute_with_updates(
+                    source,
+                    self.registry.clone(),
+                    OwnedToolContext::from_context(context),
+                    observer,
+                )
+                .await)
+        })
     }
 
     #[doc(hidden)]
-    pub async fn execute_code_owned(
-        &self,
-        source: &str,
+    pub fn execute_code_owned<'call>(
+        &'call self,
+        source: &'call str,
         context: OwnedToolContext,
-    ) -> Result<CodeModeExecution, crate::embedded::CodeModeHostError> {
-        Ok(self
-            .code_mode
-            .execute(source, self.registry.clone(), context)
-            .await)
+    ) -> futures_util::future::BoxFuture<
+        'call,
+        Result<CodeModeExecution, crate::embedded::CodeModeHostError>,
+    > {
+        Box::pin(async move {
+            Ok(self
+                .code_mode
+                .execute(source, self.registry.clone(), context)
+                .await)
+        })
     }
 
     #[doc(hidden)]
-    pub async fn execute_code_owned_with_updates(
-        &self,
-        source: &str,
+    pub fn execute_code_owned_with_updates<'call>(
+        &'call self,
+        source: &'call str,
         context: OwnedToolContext,
-        observer: &mut dyn CodeModeObserver,
-    ) -> Result<CodeModeExecution, crate::embedded::CodeModeHostError> {
-        Ok(self
-            .code_mode
-            .execute_with_updates(source, self.registry.clone(), context, observer)
-            .await)
+        observer: &'call mut dyn CodeModeObserver,
+    ) -> futures_util::future::BoxFuture<
+        'call,
+        Result<CodeModeExecution, crate::embedded::CodeModeHostError>,
+    > {
+        Box::pin(async move {
+            Ok(self
+                .code_mode
+                .execute_with_updates(source, self.registry.clone(), context, observer)
+                .await)
+        })
     }
 
-    pub async fn wait_for_code(
-        &self,
-        input: &str,
-        context: ToolContext<'_>,
-    ) -> Result<CodeModeExecution, crate::embedded::CodeModeHostError> {
-        Ok(self.code_mode.wait(input, context).await)
+    pub fn wait_for_code<'call>(
+        &'call self,
+        input: &'call str,
+        context: ToolContext<'call>,
+    ) -> futures_util::future::BoxFuture<
+        'call,
+        Result<CodeModeExecution, crate::embedded::CodeModeHostError>,
+    > {
+        Box::pin(async move { Ok(self.code_mode.wait(input, context).await) })
     }
 
     #[doc(hidden)]
-    pub async fn wait_for_code_with_updates(
-        &self,
-        input: &str,
-        _context: ToolContext<'_>,
-        observer: &mut dyn CodeModeObserver,
-    ) -> Result<CodeModeExecution, crate::embedded::CodeModeHostError> {
-        Ok(self.code_mode.wait_with_updates(input, observer).await)
+    pub fn wait_for_code_with_updates<'call>(
+        &'call self,
+        input: &'call str,
+        _context: ToolContext<'call>,
+        observer: &'call mut dyn CodeModeObserver,
+    ) -> futures_util::future::BoxFuture<
+        'call,
+        Result<CodeModeExecution, crate::embedded::CodeModeHostError>,
+    > {
+        Box::pin(async move { Ok(self.code_mode.wait_with_updates(input, observer).await) })
     }
 
-    pub async fn execute_tool(
-        &self,
-        name: &str,
+    pub fn execute_tool<'call>(
+        &'call self,
+        name: &'call str,
         input: ToolInput,
-        context: ToolContext<'_>,
-    ) -> Result<ToolOutput, crate::embedded::CodeModeHostError> {
-        Ok(self.registry.execute_direct(name, input, context).await)
+        context: ToolContext<'call>,
+    ) -> futures_util::future::BoxFuture<
+        'call,
+        Result<ToolOutput, crate::embedded::CodeModeHostError>,
+    > {
+        Box::pin(async move { Ok(self.registry.execute_direct(name, input, context).await) })
     }
 }
 
@@ -602,8 +684,10 @@ impl NativeToolRuntimeControl {
         self.code_mode.settle_preempt();
     }
 
-    pub async fn preempt_turn(&self) {
-        self.code_mode.preempt_turn();
+    pub fn preempt_turn<'call>(&'call self) -> futures_util::future::BoxFuture<'call, ()> {
+        Box::pin(async move {
+            self.code_mode.preempt_turn();
+        })
     }
 
     #[doc(hidden)]
@@ -615,39 +699,55 @@ impl NativeToolRuntimeControl {
             });
     }
 
-    pub async fn detach_turn_with_updates(
-        &self,
-        observer: &mut (dyn FnMut(&str) -> Box<dyn CodeModeObserver> + Send),
-    ) {
-        let turn_id = self.current_turn.load(Ordering::Acquire);
-        self.code_mode.detach_turn(turn_id, observer).await;
+    pub fn detach_turn_with_updates<'call>(
+        &'call self,
+        observer: &'call mut (dyn FnMut(&str) -> Box<dyn CodeModeObserver> + Send),
+    ) -> futures_util::future::BoxFuture<'call, ()> {
+        Box::pin(async move {
+            let turn_id = self.current_turn.load(Ordering::Acquire);
+            self.code_mode.detach_turn(turn_id, observer).await;
+        })
     }
 
     #[doc(hidden)]
-    pub async fn cancel_turn(&self) {
-        let turn_id = self.current_turn.load(Ordering::Acquire);
-        self.code_mode.terminate_turn(turn_id, None).await;
+    pub fn cancel_turn<'call>(&'call self) -> futures_util::future::BoxFuture<'call, ()> {
+        Box::pin(async move {
+            let turn_id = self.current_turn.load(Ordering::Acquire);
+            self.code_mode.terminate_turn(turn_id, None).await;
+        })
     }
 
-    pub async fn cancel_turn_with_updates(&self, observer: &mut dyn CodeModeObserver) {
-        let turn_id = self.current_turn.load(Ordering::Acquire);
+    pub fn cancel_turn_with_updates<'call>(
+        &'call self,
+        observer: &'call mut dyn CodeModeObserver,
+    ) -> futures_util::future::BoxFuture<'call, ()> {
+        Box::pin(async move {
+            let turn_id = self.current_turn.load(Ordering::Acquire);
 
-        self.code_mode.terminate_turn(turn_id, Some(observer)).await;
+            self.code_mode.terminate_turn(turn_id, Some(observer)).await;
+        })
     }
 
     #[doc(hidden)]
-    pub async fn cancel(&self) {
-        let _code_mode_quiescence = self.code_mode.terminate_all(None).await;
-        if let Some(workspace) = &self.workspace {
-            workspace.cancel().await;
-        }
+    pub fn cancel<'call>(&'call self) -> futures_util::future::BoxFuture<'call, ()> {
+        Box::pin(async move {
+            let _code_mode_quiescence = self.code_mode.terminate_all(None).await;
+            if let Some(workspace) = &self.workspace {
+                workspace.cancel().await;
+            }
+        })
     }
 
-    pub async fn cancel_with_updates(&self, observer: &mut dyn CodeModeObserver) {
-        let _code_mode_quiescence = self.code_mode.terminate_all(Some(observer)).await;
-        if let Some(workspace) = &self.workspace {
-            workspace.cancel().await;
-        }
+    pub fn cancel_with_updates<'call>(
+        &'call self,
+        observer: &'call mut dyn CodeModeObserver,
+    ) -> futures_util::future::BoxFuture<'call, ()> {
+        Box::pin(async move {
+            let _code_mode_quiescence = self.code_mode.terminate_all(Some(observer)).await;
+            if let Some(workspace) = &self.workspace {
+                workspace.cancel().await;
+            }
+        })
     }
 }
 

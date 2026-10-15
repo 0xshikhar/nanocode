@@ -57,13 +57,10 @@ impl ClaudeWorkspaceFiles {
 
     #[must_use]
     pub fn definitions() -> Vec<Value> {
-        vec![
-            json!({"name":"Read","description":"Read text with numbered lines, images, PDF pages, or notebook cells and outputs. PDF reads require Poppler pdfinfo/pdftoppm; pages selects at most 20 pages and is required for PDFs over 10 pages.","input_schema":{"type":"object","properties":{"file_path":{"type":"string"},"allow_large":{"type":"boolean","description":"Allow text beyond ordinary limits, bounded by the host context budget. Media limits are unchanged."},"offset":{"type":"integer","minimum":1},"limit":{"type":"integer","minimum":1},"pages":{"type":"string","description":"PDF page or inclusive range, e.g. 3 or 1-5; maximum 20 pages."}},"required":["file_path"],"additionalProperties":false}}),
-            json!({"name":"Edit","description":"Replace exact text in a workspace file, requiring one occurrence unless replace_all is true.","input_schema":{"type":"object","properties":{"file_path":{"type":"string"},"old_string":{"type":"string"},"new_string":{"type":"string"},"replace_all":{"type":"boolean"}},"required":["file_path","old_string","new_string"],"additionalProperties":false}}),
-            json!({"name":"Write","description":"Atomically replace a UTF-8 workspace file, creating parent directories as needed.","input_schema":{"type":"object","properties":{"file_path":{"type":"string"},"content":{"type":"string"}},"required":["file_path","content"],"additionalProperties":false}}),
-            json!({"name":"Glob","description":"List workspace files using glob wildcards, braces and character classes, newest first.","input_schema":{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"}},"required":["pattern"],"additionalProperties":false}}),
-            json!({"name":"Grep","description":"Search text using a bounded Rust regex, ripgrep file types and glob syntax. Default output is matching file paths.","input_schema":{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"},"glob":{"type":"string","description":"File glob, including braces and character classes. Prefix ! to exclude matches."},"type":{"type":"string","description":"Ripgrep file type, for example rust, py, js, ts or all."},"output_mode":{"type":"string","enum":["content","files_with_matches","count"],"default":"files_with_matches"},"-B":{"type":"integer","minimum":0,"maximum":2000},"-A":{"type":"integer","minimum":0,"maximum":2000},"-C":{"type":"integer","minimum":0,"maximum":2000},"context":{"type":"integer","minimum":0,"maximum":2000},"-n":{"type":"boolean","default":true},"-i":{"type":"boolean"},"-o":{"type":"boolean"},"head_limit":{"type":"integer","minimum":0,"default":250},"offset":{"type":"integer","minimum":0,"default":0},"multiline":{"type":"boolean"}},"required":["pattern"],"additionalProperties":false}}),
-        ]
+        ["Read", "Edit", "Write", "Glob", "Grep"]
+            .into_iter()
+            .map(crate::upstream::tool_value)
+            .collect()
     }
 
     #[must_use]
@@ -292,8 +289,8 @@ impl ClaudeWorkspaceFiles {
             .get("limit")
             .map_or(Some(u64::MAX), Value::as_u64)
             .ok_or("invalid limit")?;
-        if offset == 0 || limit == 0 {
-            return Err("offset and limit must be positive".into());
+        if limit == 0 {
+            return Err("limit must be positive".into());
         }
         let mut out = String::new();
         for (i, line) in content

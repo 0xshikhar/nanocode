@@ -110,12 +110,6 @@ impl BashExecutor for LocalBash {
                 .entries
                 .lock()
                 .map_err(|_| "Bash job store poisoned")?;
-            if entries.len() >= 256 {
-                entries.retain(|_, job| job.result.borrow().is_none() && !job.abort.is_finished());
-            }
-            if entries.len() >= 256 {
-                return Err("too many active Bash tasks; stop one first".into());
-            }
             let workspace = self.workspace.clone();
             let task = tokio::spawn(async move {
                 let result = run(workspace, request, hard_timeout).await;
@@ -222,19 +216,20 @@ struct TaskTool {
 #[async_trait]
 impl Tool for TaskTool {
     fn definition(&self) -> ToolDefinition {
-        let schema = if self.name == "TaskOutput" {
-            json!({"type":"object","properties":{"task_id":{"type":"string"},"block":{"type":"boolean","default":true},"timeout":{"type":"integer","minimum":0,"maximum":300000,"default":30000}},"required":["task_id"],"additionalProperties":false})
-        } else {
-            json!({"type":"object","properties":{"task_id":{"type":"string"}},"required":["task_id"],"additionalProperties":false})
-        };
+        if self.name == "TaskStop" {
+            let definition = crate::upstream::tool_value(self.name);
+            return ToolDefinition::function(
+                self.name,
+                definition["description"]
+                    .as_str()
+                    .expect("upstream tool description"),
+                definition["input_schema"].clone(),
+            );
+        }
         ToolDefinition::function(
             self.name,
-            if self.name == "TaskOutput" {
-                "Retrieve a session-owned Bash task's result, optionally waiting for completion."
-            } else {
-                "Stop a session-owned Bash task and its process group."
-            },
-            schema,
+            "SDK extension: retrieve a session-owned Bash task's result, optionally waiting for completion.",
+            json!({"type":"object","properties":{"task_id":{"type":"string"},"block":{"type":"boolean","default":true},"timeout":{"type":"integer","minimum":0,"maximum":300000,"default":30000}},"required":["task_id"],"additionalProperties":false}),
         )
     }
     async fn execute(&self, input: ToolInput, _context: ToolContext<'_>) -> ToolResult {
@@ -250,14 +245,29 @@ impl TaskTool {
         let fields = input.as_object().ok_or("task input must be an object")?;
         for key in fields.keys() {
             if key != "task_id"
+                && !(self.name == "TaskStop" && key == "shell_id")
                 && !(self.name == "TaskOutput" && matches!(key.as_str(), "block" | "timeout"))
             {
                 return Err(format!("unsupported task option: {key}"));
             }
         }
-        let id = input["task_id"]
-            .as_str()
-            .ok_or("task_id must be a string")?;
+        if self.name == "TaskStop"
+            && fields.contains_key("task_id")
+            && fields.contains_key("shell_id")
+        {
+            return Err("provide task_id or its deprecated shell_id alias, not both".into());
+        }
+        let id = fields
+            .get("task_id")
+            .or_else(|| {
+                if self.name == "TaskStop" {
+                    fields.get("shell_id")
+                } else {
+                    None
+                }
+            })
+            .and_then(Value::as_str)
+            .ok_or("task_id or its deprecated shell_id alias must be a string")?;
         let job = self
             .jobs
             .entries

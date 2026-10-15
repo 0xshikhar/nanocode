@@ -389,23 +389,28 @@ impl RunnerPool {
         emit(&mut state, RunnerEvent::StatusChanged { info });
         Ok(handle)
     }
-    pub async fn connect(&self, config: Runner) -> Result<RunnerHandle, AttachmentError> {
-        let timeout = config.timeout;
-        let handle = self.start(config)?;
-        let wait = handle.ready();
-        let result = match timeout {
-            Some(timeout) => tokio::time::timeout(timeout, wait)
-                .await
-                .map_err(error)
-                .and_then(|result| result),
-            None => wait.await,
-        };
-        if let Err(error) = result {
-            self.report_failure(handle.name.clone(), error.to_string());
-            handle.disconnect().await?;
-            return Err(error);
-        }
-        Ok(handle)
+    pub fn connect<'call>(
+        &'call self,
+        config: Runner,
+    ) -> futures_util::future::BoxFuture<'call, Result<RunnerHandle, AttachmentError>> {
+        Box::pin(async move {
+            let timeout = config.timeout;
+            let handle = self.start(config)?;
+            let wait = handle.ready();
+            let result = match timeout {
+                Some(timeout) => tokio::time::timeout(timeout, wait)
+                    .await
+                    .map_err(error)
+                    .and_then(|result| result),
+                None => wait.await,
+            };
+            if let Err(error) = result {
+                self.report_failure(handle.name.clone(), error.to_string());
+                handle.disconnect().await?;
+                return Err(error);
+            }
+            Ok(handle)
+        })
     }
     pub fn list(&self) -> Vec<RunnerInfo> {
         self.inner
@@ -420,8 +425,11 @@ impl RunnerPool {
         self.inner.state().subscribers.push(sender);
         receiver
     }
-    pub async fn disconnect(&self, name: &str) -> Result<(), AttachmentError> {
-        self.disconnect_entry(name, None).await
+    pub fn disconnect<'call>(
+        &'call self,
+        name: &'call str,
+    ) -> futures_util::future::BoxFuture<'call, Result<(), AttachmentError>> {
+        Box::pin(async move { self.disconnect_entry(name, None).await })
     }
     async fn disconnect_entry(
         &self,
@@ -464,23 +472,27 @@ impl RunnerPool {
             .map_err(error)?;
         Ok(())
     }
-    pub async fn shutdown(&self) -> Result<(), AttachmentError> {
-        let (names, servers) = {
-            let mut state = self.inner.state();
-            state.closed = true;
-            (
-                state.runners.keys().cloned().collect::<Vec<_>>(),
-                std::mem::take(&mut state.servers),
-            )
-        };
-        for name in names {
-            self.disconnect(&name).await?;
-        }
-        for inner in servers {
-            RunnerServer { inner }.stop().await?;
-        }
-        self.inner.state().subscribers.clear();
-        Ok(())
+    pub fn shutdown<'call>(
+        &'call self,
+    ) -> futures_util::future::BoxFuture<'call, Result<(), AttachmentError>> {
+        Box::pin(async move {
+            let (names, servers) = {
+                let mut state = self.inner.state();
+                state.closed = true;
+                (
+                    state.runners.keys().cloned().collect::<Vec<_>>(),
+                    std::mem::take(&mut state.servers),
+                )
+            };
+            for name in names {
+                self.disconnect(&name).await?;
+            }
+            for inner in servers {
+                RunnerServer { inner }.stop().await?;
+            }
+            self.inner.state().subscribers.clear();
+            Ok(())
+        })
     }
     pub(crate) fn routes(&self) -> Vec<Route> {
         self.inner
@@ -521,72 +533,74 @@ impl RunnerPool {
                     .map(|_| "incoming replacement runner".into())
             })
     }
-    pub async fn listen(
-        &self,
+    pub fn listen<'call>(
+        &'call self,
         config: RunnerServerConfig,
-    ) -> Result<RunnerServer, AttachmentError> {
-        super::install_default_rustls_crypto_provider();
-        config.validate()?;
-        let token = match config.token {
-            Some(token) if !token.trim().is_empty() => token,
-            Some(_) => {
-                return Err(AttachmentError::Authentication(
-                    "bearer credential must not be empty".into(),
+    ) -> futures_util::future::BoxFuture<'call, Result<RunnerServer, AttachmentError>> {
+        Box::pin(async move {
+            super::install_default_rustls_crypto_provider();
+            config.validate()?;
+            let token = match config.token {
+                Some(token) if !token.trim().is_empty() => token,
+                Some(_) => {
+                    return Err(AttachmentError::Authentication(
+                        "bearer credential must not be empty".into(),
+                    ));
+                }
+                None => {
+                    let mut bytes = [0u8; 32];
+                    getrandom::fill(&mut bytes).map_err(error)?;
+                    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+                }
+            };
+            let listener = TcpListener::bind(&config.address).await.map_err(error)?;
+            let address = listener.local_addr().map_err(error)?;
+            if !address.ip().is_loopback() {
+                return Err(error(
+                    "plaintext runner listeners require a loopback address; use a TLS proxy for remote access",
                 ));
             }
-            None => {
-                let mut bytes = [0u8; 32];
-                getrandom::fill(&mut bytes).map_err(error)?;
-                bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+            let endpoint = format!("ws://{address}/");
+            let cancel = CancellationToken::new();
+            let weak = Arc::downgrade(&self.inner);
+            let mut state = self.inner.state();
+            if state.closed {
+                return Err(AttachmentError::Closed);
             }
-        };
-        let listener = TcpListener::bind(&config.address).await.map_err(error)?;
-        let address = listener.local_addr().map_err(error)?;
-        if !address.ip().is_loopback() {
-            return Err(error(
-                "plaintext runner listeners require a loopback address; use a TLS proxy for remote access",
+            if config.mode == RemoteMode::Replace
+                && (state
+                    .runners
+                    .values()
+                    .any(|entry| entry.mode == RemoteMode::Replace)
+                    || state.servers.iter().any(|server| {
+                        server.mode == RemoteMode::Replace && !server.cancel.is_cancelled()
+                    }))
+            {
+                return Err(AttachmentError::Catalog(
+                    "a replacement runner or listener is already configured".into(),
+                ));
+            }
+            let task = tokio::spawn(accept(
+                listener,
+                weak,
+                token.clone(),
+                endpoint.clone(),
+                config.timeout,
+                config.mode,
+                config.workspace,
+                cancel.clone(),
             ));
-        }
-        let endpoint = format!("ws://{address}/");
-        let cancel = CancellationToken::new();
-        let weak = Arc::downgrade(&self.inner);
-        let mut state = self.inner.state();
-        if state.closed {
-            return Err(AttachmentError::Closed);
-        }
-        if config.mode == RemoteMode::Replace
-            && (state
-                .runners
-                .values()
-                .any(|entry| entry.mode == RemoteMode::Replace)
-                || state.servers.iter().any(|server| {
-                    server.mode == RemoteMode::Replace && !server.cancel.is_cancelled()
-                }))
-        {
-            return Err(AttachmentError::Catalog(
-                "a replacement runner or listener is already configured".into(),
-            ));
-        }
-        let task = tokio::spawn(accept(
-            listener,
-            weak,
-            token.clone(),
-            endpoint.clone(),
-            config.timeout,
-            config.mode,
-            config.workspace,
-            cancel.clone(),
-        ));
-        let inner = Arc::new(ServerInner {
-            endpoint,
-            token,
-            cancel,
-            task: Mutex::new(Some(task)),
-            pool: Arc::downgrade(&self.inner),
-            mode: config.mode,
-        });
-        state.servers.push(inner.clone());
-        Ok(RunnerServer { inner })
+            let inner = Arc::new(ServerInner {
+                endpoint,
+                token,
+                cancel,
+                task: Mutex::new(Some(task)),
+                pool: Arc::downgrade(&self.inner),
+                mode: config.mode,
+            });
+            state.servers.push(inner.clone());
+            Ok(RunnerServer { inner })
+        })
     }
 }
 fn validate_registration(
@@ -666,10 +680,14 @@ impl RunnerHandle {
     pub fn subscribe(&self) -> watch::Receiver<RunnerStatus> {
         self.status.clone()
     }
-    pub async fn disconnect(&self) -> Result<(), AttachmentError> {
-        self.pool
-            .disconnect_entry(&self.name, Some(&self.identity))
-            .await
+    pub fn disconnect<'call>(
+        &'call self,
+    ) -> futures_util::future::BoxFuture<'call, Result<(), AttachmentError>> {
+        Box::pin(async move {
+            self.pool
+                .disconnect_entry(&self.name, Some(&self.identity))
+                .await
+        })
     }
     async fn ready(&self) -> Result<(), AttachmentError> {
         let mut status = self.subscribe();
@@ -725,33 +743,37 @@ impl RunnerServer {
     pub fn token(&self) -> &str {
         &self.inner.token
     }
-    pub async fn stop(&self) -> Result<(), AttachmentError> {
-        self.inner.cancel.cancel();
-        let task = self
-            .inner
-            .task
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
-        if let Some(task) = task {
-            task.await.map_err(error)?;
-        }
-        if let Some(inner) = self.inner.pool.upgrade() {
-            let pool = RunnerPool {
-                inner,
-                model_management: true,
-            };
-            let names = pool
-                .list()
-                .into_iter()
-                .filter(|info| info.endpoint == self.endpoint())
-                .map(|info| info.name)
-                .collect::<Vec<_>>();
-            for name in names {
-                pool.disconnect(&name).await?;
+    pub fn stop<'call>(
+        &'call self,
+    ) -> futures_util::future::BoxFuture<'call, Result<(), AttachmentError>> {
+        Box::pin(async move {
+            self.inner.cancel.cancel();
+            let task = self
+                .inner
+                .task
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take();
+            if let Some(task) = task {
+                task.await.map_err(error)?;
             }
-        }
-        Ok(())
+            if let Some(inner) = self.inner.pool.upgrade() {
+                let pool = RunnerPool {
+                    inner,
+                    model_management: true,
+                };
+                let names = pool
+                    .list()
+                    .into_iter()
+                    .filter(|info| info.endpoint == self.endpoint())
+                    .map(|info| info.name)
+                    .collect::<Vec<_>>();
+                for name in names {
+                    pool.disconnect(&name).await?;
+                }
+            }
+            Ok(())
+        })
     }
 }
 impl fmt::Debug for RunnerServer {

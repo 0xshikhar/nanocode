@@ -1,0 +1,86 @@
+{
+  "repository": "https://github.com/openai/codex",
+  "revision": "ac9db7d8b556c7c34a73793aed34b1f980a4fe39",
+  "profile": {
+    "platform": "non-Windows schema profile, also used by WASM hosts",
+    "exec_permission_approvals_enabled": false,
+    "include_environment_id": false,
+    "can_request_original_image_detail": true,
+    "unified_image_budget": false
+  },
+  "sources": [
+    {
+      "path": "codex-rs/models-manager/models.json",
+      "sha256": "943ca7fe1d19ed019054158303f0dbbd80b3bef43b3aa425a71aa7cb3fb52c2b"
+    },
+    {
+      "path": "codex-rs/core/src/tools/handlers/shell_spec.rs",
+      "sha256": "9ce069d9e1cb1edda8b71620f3e29809f6eead49e5f71d96df5727ca18ed6d5e"
+    },
+    {
+      "path": "codex-rs/core/src/tools/handlers/apply_patch_spec.rs",
+      "sha256": "d024ebb925f64bcc34420d4db8376798c8e8bc4518e220bce47a7ebee44a345f"
+    },
+    {
+      "path": "codex-rs/core/src/tools/handlers/plan_spec.rs",
+      "sha256": "ecbd36a78158967384269e1fb50f19991fd8f76c8d880cae536b5da105e0b197"
+    },
+    {
+      "path": "codex-rs/core/src/tools/handlers/view_image_spec.rs",
+      "sha256": "a54cb2ee992c34f6993c993c8efd16d5b91aa49bff8c5737bb4ffb64e977d413"
+    },
+    {
+      "path": "codex-rs/core/assets/tools/apply_patch.lark",
+      "sha256": "d6367f4826ed608c424b0a308f3d6163527df63c22513d089b91863552f8bfeb"
+    },
+    {
+      "path": "codex-rs/tools/src/responses_api.rs",
+      "sha256": "9a58a70c4992cedce5c2292e6e6f145b7174b2eeb730c181cb8e84ac8e44c069"
+    },
+    {
+      "path": "codex-rs/tools/src/tool_spec.rs",
+      "sha256": "af8b5286fb6d2eb3574c484b25076f515bca2d4350ecb5059e436966ecdd519d"
+    },
+    {
+      "path": "codex-rs/tools/src/json_schema/types.rs",
+      "sha256": "17b11a7cf8530b9df722d382cad8066aca6c2a5d27d593e937ffdd3304f64d4a"
+    }
+  ],
+  "local_artifacts": [
+    {
+      "path": "src/builtin_tools/standard.rs",
+      "sha256": "f8bab81213b87a03a6a1f45cbac90c6c199564a173f872e3db2868da220bedbc"
+    },
+    {
+      "path": "src/builtin_tools/apply_patch/apply_patch.lark",
+      "sha256": "d6367f4826ed608c424b0a308f3d6163527df63c22513d089b91863552f8bfeb"
+    },
+    {
+      "path": "src/client/openai/config.rs",
+      "sha256": "33e6607df4cc5e40ac6cf5a84f132f211c8c8caf3a42be8934e997c09715c8e2"
+    },
+    {
+      "path": "src/model/input.rs",
+      "sha256": "6b291964d7ed8c5e0b4d4490b78d04a71b8009068465f3b2e571282b1d9f4b1d"
+    },
+    {
+      "path": "src/model/run/mod.rs",
+      "sha256": "aadef62f3a5a444ee6872773b8415b5f0571e5df33a96c949fd4c645ca639838"
+    },
+    {
+      "path": "src/model/run/turn.rs",
+      "sha256": "a979376f5c2d9458e848942494827fffb3a0596c491acb4d450cfa981d241ab7"
+    },
+    {
+      "path": "src/model/run/lifecycle.rs",
+      "sha256": "a7bf75950cefb34598aa553426110916ab7ec06be44e28752ba662ed263f3be6"
+    }
+  ],
+  "scope": "Reviewed StandardTool definitions only, before host routing or Code Mode exposure. Tool source and implementation hashes certify the reviewed artifacts; they are not an automatic Rust semantic equivalence proof. Input names, descriptions, schemas, strict=false and apply_patch grammar match the selected upstream profile. Output schemas remain host metadata and are skipped on the Responses wire, as upstream does. Host handlers, availability, Code Mode, remote routing, permission policy, output budgets and result rendering are SDK behavior.",
+  "extensions": {
+    "web.run": "Local function adapter to the search endpoint, not the upstream provider server tool type web_search.",
+    "image_gen.imagegen": "Local function adapter to image HTTP endpoints, not a claim of upstream provider server tool parity.",
+    "extensions/specs.json": "SDK attachment and agent extensions, with caller-controlled lifecycle contracts; not upstream Codex tool parity."
+  },
+  "prompt_assembly": "Pinned base instructions are passed unchanged into the immutable provider prefix unless explicitly overridden. Runtime identity and additional instructions are developer context, separate from provider base and project context. Public ModelConfig::system_prompt remains a composed compatibility view. Accepted checkpoint transcript content is retained; older transcripts can contain previous host instruction revisions. New follow-on turns inject the current host instructions even when project/environment context has no delta; compaction reinjects the combined permissions and host context."
+}

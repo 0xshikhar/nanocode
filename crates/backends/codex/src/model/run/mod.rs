@@ -52,7 +52,7 @@ use super::{
     display_endpoint, elapsed_ns,
     input::{
         custom_tool_notification, custom_tool_output, developer_context, function_tool_output,
-        prompt_messages, task_input, tool_search_output, turn_aborted,
+        host_context, prompt_messages, task_input, tool_search_output, turn_aborted,
     },
     terminal_payload,
 };
@@ -521,7 +521,7 @@ impl<S> ModelRun<S> {
             &self.provider_session_id,
             self.prompt_cache.key(),
             tools,
-            &self.config.system_prompt(),
+            &self.config.base_system_prompt(),
         )
     }
 
@@ -612,7 +612,7 @@ pub(crate) fn prepare_resumed_checkpoint(
             checkpoint.prompt_cache_key(),
             tool_specs,
             code_mode_tool_names,
-            &config.system_prompt(),
+            &config.base_system_prompt(),
         )?
         .prefix()
         .to_vec(),
@@ -656,7 +656,7 @@ pub(crate) fn prepare_history_checkpoint(
         prompt_cache_key.as_ref(),
         tool_specs,
         code_mode_tool_names,
-        &config.system_prompt(),
+        &config.base_system_prompt(),
     )?
     .prefix()
     .to_vec();

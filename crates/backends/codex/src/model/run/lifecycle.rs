@@ -149,7 +149,7 @@ where
                 let canonical_context = snapshot.full_item();
                 conversation.install_mid_turn_compaction(
                     item,
-                    developer_context(),
+                    developer_context(&self.config),
                     canonical_context,
                     factory.profile().prefix(),
                 );

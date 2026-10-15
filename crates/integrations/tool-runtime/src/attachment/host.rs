@@ -214,32 +214,36 @@ impl RemoteRunner {
         })
     }
 
-    pub async fn tools(&self) -> Result<RemoteTools, AttachmentError> {
-        let mut catalog = self.inner.catalog.subscribe();
-        let mut failure = self.inner.failure.subscribe();
-        let timeout_ms = self.inner.state().call_timeout_ms;
-        let wait = async {
-            tokio::select! {
-                result = catalog.wait_for(Option::is_some) => result.map_err(|_| AttachmentError::Closed)?.clone().ok_or(AttachmentError::Closed),
-                result = failure.wait_for(Option::is_some) => Err(result.map_err(|_| AttachmentError::Closed)?.clone().unwrap_or(AttachmentError::Closed)),
-            }
-        };
-        let specs = match timeout_ms {
+    pub fn tools<'call>(
+        &'call self,
+    ) -> futures_util::future::BoxFuture<'call, Result<RemoteTools, AttachmentError>> {
+        Box::pin(async move {
+            let mut catalog = self.inner.catalog.subscribe();
+            let mut failure = self.inner.failure.subscribe();
+            let timeout_ms = self.inner.state().call_timeout_ms;
+            let wait = async {
+                tokio::select! {
+                    result = catalog.wait_for(Option::is_some) => result.map_err(|_| AttachmentError::Closed)?.clone().ok_or(AttachmentError::Closed),
+                    result = failure.wait_for(Option::is_some) => Err(result.map_err(|_| AttachmentError::Closed)?.clone().unwrap_or(AttachmentError::Closed)),
+                }
+            };
+            let specs = match timeout_ms {
             Some(ms) => tokio::time::timeout(Duration::from_millis(ms), wait)
                 .await
                 .map_err(|_| AttachmentError::Transport(format!("runner `{}` unavailable: no catalog before the configured connection deadline", self.namespace()).into()))??,
             None => wait.await?,
         };
-        Ok(RemoteTools {
-            namespace: self.inner.namespace.clone(),
-            workspace: self.inner.state().workspace.clone(),
-            tools: specs
-                .iter()
-                .map(|spec| RemoteTool {
-                    runner: Arc::clone(&self.inner),
-                    spec: Arc::clone(spec),
-                })
-                .collect(),
+            Ok(RemoteTools {
+                namespace: self.inner.namespace.clone(),
+                workspace: self.inner.state().workspace.clone(),
+                tools: specs
+                    .iter()
+                    .map(|spec| RemoteTool {
+                        runner: Arc::clone(&self.inner),
+                        spec: Arc::clone(spec),
+                    })
+                    .collect(),
+            })
         })
     }
 

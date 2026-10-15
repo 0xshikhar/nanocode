@@ -1,4 +1,5 @@
 pub use nanocode_tools::tool;
+pub mod upstream;
 
 #[doc(hidden)]
 pub mod __private {

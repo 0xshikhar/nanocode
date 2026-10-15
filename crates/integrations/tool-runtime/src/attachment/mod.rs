@@ -327,10 +327,17 @@ impl AttachmentConnector {
         ))
     }
 
-    pub async fn connect(self) -> Result<(Attachment, AttachmentEvents), AttachmentError> {
-        let (attachment, events) = self.start()?;
-        attachment.wait_until_ready().await?;
-        Ok((attachment, events))
+    pub fn connect(
+        self,
+    ) -> futures_util::future::BoxFuture<
+        'static,
+        Result<(Attachment, AttachmentEvents), AttachmentError>,
+    > {
+        Box::pin(async move {
+            let (attachment, events) = self.start()?;
+            attachment.wait_until_ready().await?;
+            Ok((attachment, events))
+        })
     }
 }
 
@@ -448,24 +455,30 @@ impl Attachment {
         self.status.borrow().clone()
     }
 
-    pub async fn detach(self) -> Result<(), AttachmentError> {
-        let _ = self.refs.command_tx.try_send(driver::Command::Detach);
-        self.closed().await
+    pub fn detach(self) -> futures_util::future::BoxFuture<'static, Result<(), AttachmentError>> {
+        Box::pin(async move {
+            let _ = self.refs.command_tx.try_send(driver::Command::Detach);
+            self.closed().await
+        })
     }
 
-    pub async fn closed(&self) -> Result<(), AttachmentError> {
-        let mut closed = self.closed.clone();
-        loop {
-            if let Some(result) = closed.borrow().clone() {
-                return result;
+    pub fn closed<'call>(
+        &'call self,
+    ) -> futures_util::future::BoxFuture<'call, Result<(), AttachmentError>> {
+        Box::pin(async move {
+            let mut closed = self.closed.clone();
+            loop {
+                if let Some(result) = closed.borrow().clone() {
+                    return result;
+                }
+                if closed.changed().await.is_err() {
+                    return closed
+                        .borrow()
+                        .clone()
+                        .unwrap_or(Err(AttachmentError::Closed));
+                }
             }
-            if closed.changed().await.is_err() {
-                return closed
-                    .borrow()
-                    .clone()
-                    .unwrap_or(Err(AttachmentError::Closed));
-            }
-        }
+        })
     }
 
     async fn wait_until_ready(&self) -> Result<(), AttachmentError> {
@@ -498,8 +511,10 @@ impl fmt::Debug for AttachmentEvents {
 }
 
 impl AttachmentEvents {
-    pub async fn recv(&mut self) -> Option<AttachmentEvent> {
-        self.events.recv().await
+    pub fn recv<'call>(
+        &'call mut self,
+    ) -> futures_util::future::BoxFuture<'call, Option<AttachmentEvent>> {
+        Box::pin(async move { self.events.recv().await })
     }
 }
 

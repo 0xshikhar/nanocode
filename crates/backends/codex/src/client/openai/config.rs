@@ -75,7 +75,7 @@ impl ModelConfig {
     }
 
     #[must_use]
-    pub fn system_prompt(&self) -> Cow<'_, str> {
+    pub(crate) fn base_system_prompt(&self) -> Cow<'_, str> {
         let base = self.system_prompt.as_deref().unwrap_or(match self.model {
             Model::Astra => ASTRA_SYSTEM_PROMPT,
             Model::Glm53 | Model::Kimi | Model::Mimo => GLM_SYSTEM_PROMPT,
@@ -83,25 +83,36 @@ impl ModelConfig {
             Model::Luna => LUNA_SYSTEM_PROMPT,
             _ => ASTRA_SYSTEM_PROMPT,
         });
-        let base =
-            if self.system_prompt.is_none() && matches!(self.model, Model::Kimi | Model::Mimo) {
-                Cow::Owned(base.replacen(
-                    "powered by Z.ai GLM-5.3",
-                    &format!("powered by {}", self.model.as_str()),
-                    1,
-                ))
-            } else {
-                Cow::Borrowed(base)
-            };
-        let mut instructions = base.into_owned();
+        if self.system_prompt.is_none() && matches!(self.model, Model::Kimi | Model::Mimo) {
+            Cow::Owned(base.replacen(
+                "powered by Z.ai GLM-5.3",
+                &format!("powered by {}", self.model.as_str()),
+                1,
+            ))
+        } else {
+            Cow::Borrowed(base)
+        }
+    }
+
+    #[must_use]
+    pub fn system_prompt(&self) -> Cow<'_, str> {
+        Cow::Owned(format!(
+            "{}\n\n{}",
+            self.base_system_prompt(),
+            self.host_instructions()
+        ))
+    }
+
+    pub(crate) fn host_instructions(&self) -> String {
+        let mut instructions = String::new();
         if let Some(additional) = self.additional_instructions.as_deref()
             && !additional.is_empty()
         {
-            instructions.push_str("\n\n");
             instructions.push_str(additional);
+            instructions.push_str("\n\n");
         }
         instructions.push_str(&format!(
-            "\n\n<runtime_model_identity>\nmodel_id: {}\n\
+            "<runtime_model_identity>\nmodel_id: {}\n\
              This is the runtime-selected model serving this agent. When asked which model \
              you are, report this model ID. Nanocodex and Codex are product or harness names, \
              not the underlying model. Other agents and models listed in tools can differ \
@@ -110,7 +121,7 @@ impl ModelConfig {
              </runtime_model_identity>",
             self.model.as_str(),
         ));
-        Cow::Owned(instructions)
+        instructions
     }
 
     #[must_use]

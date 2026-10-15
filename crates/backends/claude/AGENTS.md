@@ -1,0 +1,10 @@
+# Claude upstream contracts
+
+- Preserve the exact identity and core text blocks in `prompts/claude-code-system.json`, with version and official package integrity recorded in `prompts/upstream.json`.
+- Keep provider blocks unchanged. Add Code Mode and environment/project context as separate blocks. Preserve explicit caller system overrides.
+- Use `upstream::tool_definition` for verified provider contracts. `src/tools/upstream.json` records exact names, descriptions and schemas from the official CLI; provenance selects the capture profile for each definition. Bash uses the expanded profile with Glob and Grep available.
+- Run `python3 scripts/verify-claude-upstream.py --capture` with the pinned official macOS ARM64 CLI installed to verify fresh requests against a local stub and dummy credentials. `--write` refreshes the pinned artifacts after review. `--offline` compares existing ignored captures and artifact hashes without running the CLI.
+- Keep captures, package archives and dynamic request context under ignored `output/claude-upstream-parity`. Never copy captured workspace paths, Git state, credentials or user configuration into provider assets.
+- Keep authentication, billing and cache policy separate from prompt/tool provenance. Subscription requests preserve tool names and the SDK identity instead of adding underscore aliases or a second identity.
+- Captured contracts do not install host capabilities. TaskOutput, TodoWrite, Skill, shared Code Mode and durable delegation remain explicit SDK additions; do not describe their custom schemas as captured upstream contracts.
+- The legacy typed host adapter rejects unsupported optional `ExitWorktree.discard_changes`, ExitPlanMode fields beyond `allowedPrompts`, and AskUserQuestion answers/annotations/metadata. Hosts needing those fields can register the canonical definition through `ClaudeTools::tool_with_context` and handle its full JSON input. Preserve existing typed request struct fields rather than silently discarding upstream input.

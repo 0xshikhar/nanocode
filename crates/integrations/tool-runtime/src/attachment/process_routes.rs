@@ -77,95 +77,108 @@ impl ProcessRoutes {
         Ok(())
     }
 
-    pub async fn remember_mounts(
-        &self,
-        session_id: &str,
-        mounts: &[String],
-    ) -> Result<(), ToolError> {
-        let mut sessions = self.sessions.lock().await;
-        self.load(session_id, &mut sessions).await?;
-        let state = sessions
-            .get_mut(session_id)
-            .ok_or("process route session missing")?;
-        let previous = state.mounts.clone();
-        state.mounts.extend(mounts.iter().cloned());
-        if previous != state.mounts {
-            if let Some(store) = &self.store {
-                if let Err(error) = store.save(session_id, serde_json::to_value(&*state)?).await {
-                    state.mounts = previous;
-                    return Err(error);
+    pub fn remember_mounts<'call>(
+        &'call self,
+        session_id: &'call str,
+        mounts: &'call [String],
+    ) -> futures_util::future::BoxFuture<'call, Result<(), ToolError>> {
+        Box::pin(async move {
+            let mut sessions = self.sessions.lock().await;
+            self.load(session_id, &mut sessions).await?;
+            let state = sessions
+                .get_mut(session_id)
+                .ok_or("process route session missing")?;
+            let previous = state.mounts.clone();
+            state.mounts.extend(mounts.iter().cloned());
+            if previous != state.mounts {
+                if let Some(store) = &self.store {
+                    if let Err(error) = store.save(session_id, serde_json::to_value(&*state)?).await
+                    {
+                        state.mounts = previous;
+                        return Err(error);
+                    }
                 }
             }
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
-    pub async fn known_mount(
-        &self,
-        session_id: &str,
-        path: &std::path::Path,
-    ) -> Result<Option<String>, ToolError> {
-        let mut sessions = self.sessions.lock().await;
-        self.load(session_id, &mut sessions).await?;
-        let state = sessions
-            .get(session_id)
-            .ok_or("process route session missing")?;
-        Ok(state
-            .mounts
-            .iter()
-            .map(String::as_str)
-            .chain(
-                state
-                    .handles
-                    .values()
-                    .filter_map(|mapping| mapping.namespace.as_deref()),
-            )
-            .find(|name| path.starts_with(format!("/{name}")))
-            .map(str::to_owned))
-    }
-
-    pub async fn get(&self, session_id: &str, id: i32) -> Result<SessionMapping, ToolError> {
-        let mut sessions = self.sessions.lock().await;
-        self.load(session_id, &mut sessions).await?;
-        sessions
-            .get(session_id)
-            .and_then(|state| state.handles.get(&id))
-            .cloned()
-            .ok_or_else(|| "unknown logical process session".into())
-    }
-
-    pub async fn insert(
-        &self,
-        session_id: &str,
-        mapping: SessionMapping,
-    ) -> Result<i32, ToolError> {
-        let mut sessions = self.sessions.lock().await;
-        self.load(session_id, &mut sessions).await?;
-        let state = sessions
-            .get_mut(session_id)
-            .ok_or("process route session missing")?;
-        if let Some((id, _)) = state
-            .handles
-            .iter()
-            .find(|(_, existing)| **existing == mapping)
-        {
-            return Ok(*id);
-        }
-        let id = state
-            .next_id
-            .checked_add(1)
-            .ok_or("process identifier space exhausted")?;
-        state.handles.insert(id, mapping);
-        state.next_id = id;
-        if let Some(store) = &self.store {
-            if let Err(error) = store.save(session_id, serde_json::to_value(&*state)?).await {
-                state.handles.remove(&id);
-                return Err(format!(
-                    "process executed but its route could not be persisted: {error}"
+    pub fn known_mount<'call>(
+        &'call self,
+        session_id: &'call str,
+        path: &'call std::path::Path,
+    ) -> futures_util::future::BoxFuture<'call, Result<Option<String>, ToolError>> {
+        Box::pin(async move {
+            let mut sessions = self.sessions.lock().await;
+            self.load(session_id, &mut sessions).await?;
+            let state = sessions
+                .get(session_id)
+                .ok_or("process route session missing")?;
+            Ok(state
+                .mounts
+                .iter()
+                .map(String::as_str)
+                .chain(
+                    state
+                        .handles
+                        .values()
+                        .filter_map(|mapping| mapping.namespace.as_deref()),
                 )
-                .into());
+                .find(|name| path.starts_with(format!("/{name}")))
+                .map(str::to_owned))
+        })
+    }
+
+    pub fn get<'call>(
+        &'call self,
+        session_id: &'call str,
+        id: i32,
+    ) -> futures_util::future::BoxFuture<'call, Result<SessionMapping, ToolError>> {
+        Box::pin(async move {
+            let mut sessions = self.sessions.lock().await;
+            self.load(session_id, &mut sessions).await?;
+            sessions
+                .get(session_id)
+                .and_then(|state| state.handles.get(&id))
+                .cloned()
+                .ok_or_else(|| "unknown logical process session".into())
+        })
+    }
+
+    pub fn insert<'call>(
+        &'call self,
+        session_id: &'call str,
+        mapping: SessionMapping,
+    ) -> futures_util::future::BoxFuture<'call, Result<i32, ToolError>> {
+        Box::pin(async move {
+            let mut sessions = self.sessions.lock().await;
+            self.load(session_id, &mut sessions).await?;
+            let state = sessions
+                .get_mut(session_id)
+                .ok_or("process route session missing")?;
+            if let Some((id, _)) = state
+                .handles
+                .iter()
+                .find(|(_, existing)| **existing == mapping)
+            {
+                return Ok(*id);
             }
-        }
-        Ok(id)
+            let id = state
+                .next_id
+                .checked_add(1)
+                .ok_or("process identifier space exhausted")?;
+            state.handles.insert(id, mapping);
+            state.next_id = id;
+            if let Some(store) = &self.store {
+                if let Err(error) = store.save(session_id, serde_json::to_value(&*state)?).await {
+                    state.handles.remove(&id);
+                    return Err(format!(
+                        "process executed but its route could not be persisted: {error}"
+                    )
+                    .into());
+                }
+            }
+            Ok(id)
+        })
     }
 }

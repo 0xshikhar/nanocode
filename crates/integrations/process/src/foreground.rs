@@ -12,55 +12,59 @@ pub struct ForegroundOutput {
     pub truncated: bool,
 }
 
-pub async fn run_bash(
-    workspace: &Path,
-    command: &str,
+pub fn run_bash<'call>(
+    workspace: &'call Path,
+    command: &'call str,
     timeout: Duration,
     max_stdout: usize,
     max_stderr: usize,
-    session: Option<&crate::SessionEnvironment>,
-) -> Result<ForegroundOutput, String> {
-    let overrides = session
-        .map(crate::SessionEnvironment::os_variables)
-        .unwrap_or_default();
-    let (environment, _) = process::sanitized_environment(&overrides);
-    let shell = selection::bash_shell().ok_or("Bash executable not found")?;
-    let mut spawned = process::spawn(command, workspace, &shell, false, false, &environment)
-        .map_err(|error| error.to_string())?;
-    struct Cleanup(process::SharedProcessGroup);
-    impl Drop for Cleanup {
-        fn drop(&mut self) {
-            let _ = self.0.terminate_and_disarm();
+    session: Option<&'call crate::SessionEnvironment>,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<ForegroundOutput, String>> + Send + 'call>,
+> {
+    Box::pin(async move {
+        let overrides = session
+            .map(crate::SessionEnvironment::os_variables)
+            .unwrap_or_default();
+        let (environment, _) = process::sanitized_environment(&overrides);
+        let shell = selection::bash_shell().ok_or("Bash executable not found")?;
+        let mut spawned = process::spawn(command, workspace, &shell, false, false, &environment)
+            .map_err(|error| error.to_string())?;
+        struct Cleanup(process::SharedProcessGroup);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = self.0.terminate_and_disarm();
+            }
         }
-    }
-    let cleanup = Cleanup(spawned.process_group);
-    let process::ProcessOutput::Pipes { stdout, stderr } = spawned.output else {
-        return Err("foreground execution requires pipes".into());
-    };
-    let outcome = tokio::time::timeout(timeout, async {
-        let (status, stdout, stderr) = tokio::join!(
-            spawned.child.wait(),
-            capture(stdout, max_stdout),
-            capture(stderr, max_stderr)
-        );
-        let (stdout, stdout_cut) = stdout?;
-        let (stderr, stderr_cut) = stderr?;
-        Ok::<_, std::io::Error>(ForegroundOutput {
-            stdout,
-            stderr,
-            exit_code: status?,
-            truncated: stdout_cut || stderr_cut,
+        let cleanup = Cleanup(spawned.process_group);
+        let process::ProcessOutput::Pipes { stdout, stderr } = spawned.output else {
+            return Err("foreground execution requires pipes".into());
+        };
+        let outcome = tokio::time::timeout(timeout, async {
+            let (status, stdout, stderr) = tokio::join!(
+                spawned.child.wait(),
+                capture(stdout, max_stdout),
+                capture(stderr, max_stderr)
+            );
+            let (stdout, stdout_cut) = stdout?;
+            let (stderr, stderr_cut) = stderr?;
+            Ok::<_, std::io::Error>(ForegroundOutput {
+                stdout,
+                stderr,
+                exit_code: status?,
+                truncated: stdout_cut || stderr_cut,
+            })
         })
-    })
-    .await;
-    drop(cleanup);
-    match outcome {
-        Ok(result) => result.map_err(|error| error.to_string()),
-        Err(_) => {
-            let _ = spawned.child.wait().await;
-            Err("Bash command timed out".into())
+        .await;
+        drop(cleanup);
+        match outcome {
+            Ok(result) => result.map_err(|error| error.to_string()),
+            Err(_) => {
+                let _ = spawned.child.wait().await;
+                Err("Bash command timed out".into())
+            }
         }
-    }
+    })
 }
 
 async fn capture<R: AsyncRead + Unpin>(
