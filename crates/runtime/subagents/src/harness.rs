@@ -1,6 +1,6 @@
 use super::{
     capacity::{Capacity, TurnCapacity},
-    model::{AgentId, AgentMessage, MessageDisposition, MessageId, MessagePriority},
+    model::{AgentContext, AgentId, AgentMessage, MessageDisposition, MessageId, MessagePriority},
     platform::{self, Task, TaskError},
     runtime::{DelegationChange, Registry, completion_instructions},
 };
@@ -90,6 +90,7 @@ enum HarnessCommand {
 struct Harness {
     root_session_id: String,
     id: AgentId,
+    context: Option<AgentContext>,
     agent: Option<Nanocodex>,
     active: Option<ActiveTurn>,
     commands: mpsc::Receiver<HarnessCommand>,
@@ -215,6 +216,7 @@ impl HarnessHandle {
 pub(super) fn spawn(
     root_session_id: String,
     id: AgentId,
+    context: Option<AgentContext>,
     agent: Nanocodex,
     capacity: Capacity,
     registry: Weak<Registry>,
@@ -235,6 +237,7 @@ pub(super) fn spawn(
         Harness {
             root_session_id,
             id,
+            context,
             agent: Some(agent),
             active: None,
             commands: receiver,
@@ -588,8 +591,25 @@ impl Harness {
             .await?;
         let recovering = pending.is_some();
         let recovery_request_id = pending.as_ref().map(|(id, _)| id.clone());
+        if !recovering {
+            let checkpoint = agent.checkpoint().await.map_err(std::io::Error::other)?;
+            self.context = Some(AgentContext {
+                model: checkpoint.model(),
+                thinking: checkpoint.thinking(),
+                reasoning_mode: checkpoint.reasoning_mode(),
+            });
+        }
         let Some(instruction_revision) = registry
-            .harness_turn_started(&self.root_session_id, self.id, recovering)
+            .harness_turn_started(
+                &self.root_session_id,
+                self.id,
+                recovering,
+                if recovering {
+                    None
+                } else {
+                    self.context.as_ref()
+                },
+            )
             .await
         else {
             return Err(std::io::Error::other(format!(
@@ -613,9 +633,15 @@ impl Harness {
                     .map_err(std::io::Error::other)?;
                 nanocode_agent::PromptRequest::new(recovered).request_id(id)
             }
-            None => nanocode_agent::PromptRequest::new(
-                Prompt::new(prompt.clone()).with_instruction_revision(instruction_revision),
-            ),
+            None => {
+                let prompt =
+                    Prompt::new(prompt.clone()).with_instruction_revision(instruction_revision);
+                let prompt = match &self.context {
+                    Some(context) => context.prompt(prompt),
+                    None => prompt,
+                };
+                nanocode_agent::PromptRequest::new(prompt)
+            }
         };
         let turn = match agent.prompt(request).await {
             Ok(turn) => turn,
@@ -637,6 +663,10 @@ impl Harness {
         });
         if let Some(request_id) = recovery_request_id {
             let prompt = Prompt::new(prompt).with_instruction_revision(instruction_revision);
+            let prompt = match &self.context {
+                Some(context) => context.prompt(prompt),
+                None => prompt,
+            };
             let encoded = serde_json::to_string(&prompt).map_err(std::io::Error::other)?;
             let message_id = format!(
                 "subagent-recovery:{request_id}:{}",

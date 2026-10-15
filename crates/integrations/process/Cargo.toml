@@ -1,0 +1,31 @@
+[package]
+name = "nanocode-process"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+autotests = false
+autobenches = false
+description = "Reusable native process and PTY execution"
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+nanocode-home.workspace = true
+portable-pty.workspace = true
+tracing.workspace = true
+getrandom.workspace = true
+serde.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "process", "rt", "signal", "sync", "time"] }
+
+[target.'cfg(unix)'.dependencies]
+nix.workspace = true
+rustix = { workspace = true, features = ["process"] }
+
+[lints]
+workspace = true
+
+[lib]
+test = false
+doctest = false
+bench = false

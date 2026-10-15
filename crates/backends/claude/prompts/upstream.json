@@ -1,0 +1,24 @@
+{
+  "status": "Exact upstream core system prompt unavailable from the inspected official sources; nanoclaude.md remains project-authored.",
+  "package": "@anthropic-ai/claude-code",
+  "version": "2.1.280",
+  "metadata_url": "https://registry.npmjs.org/@anthropic-ai/claude-code/2.1.280",
+  "tarball_url": "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.280.tgz",
+  "tarball_integrity": "sha512-EZlX8jqNf+e7q9v+UoPbLYAbEGth7aDbcTytHzPYYohbP/fCfrjboCbcv85ZYGEq1Rq7Amm8hXLhuCKxLsabwA==",
+  "verified_artifacts": [
+    {
+      "path": "package/sdk-tools.d.ts",
+      "sha256": "4fdbd64f76e190800f48e93ddf4edcf6f3c87187396b586a75de808a78d8c1c4",
+      "scope": "Generated tool input/output TypeScript declarations; not full model-visible tool descriptions or JSON schemas."
+    }
+  ],
+  "repository_revision": "94506ff0d3bd9185f1752da36e968775021fb48f",
+  "repository_url": "https://github.com/anthropics/claude-code",
+  "blocker": "The official npm package contains cli-wrapper.cjs, install.cjs, bin/claude.exe, package metadata, license, documentation and sdk-tools.d.ts. Execution is delegated to version-pinned platform native packages. Neither this package nor the inspected official repository tree exposes the core prompt construction source or a rendered core system prompt. Generated tool types cannot establish exact tool wire schemas or descriptions. No prompt was reconstructed or substituted.",
+  "composition": {
+    "base": "nanoclaude.md",
+    "base_sha256": "781410936c1f4e8bda44da9b042b8723127c7c492aa766f5a9e0f4c895775940",
+    "code_mode_addition": "code_mode.md",
+    "explicit_override": "The existing builder uses the caller system string when nonempty, bypassing default_system."
+  }
+}

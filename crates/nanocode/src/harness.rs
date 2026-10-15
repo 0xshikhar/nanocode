@@ -161,7 +161,8 @@ impl Harness {
         let options = SpawnOptions::new()
             .harness(model.family())
             .harness_model(model)
-            .thinking(checkpoint.thinking());
+            .thinking(checkpoint.thinking())
+            .reasoning_mode(checkpoint.reasoning_mode());
         options.validate_harness()?;
         self.inner
             .clone()
@@ -466,7 +467,8 @@ impl AgentFactory for RoutedFactory {
                     let options = SpawnOptions::new()
                         .harness(model.family())
                         .harness_model(model)
-                        .thinking(checkpoint.thinking());
+                        .thinking(checkpoint.thinking())
+                        .reasoning_mode(checkpoint.reasoning_mode());
                     options.validate_harness()?;
                     inner
                         .construct(

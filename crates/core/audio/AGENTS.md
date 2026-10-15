@@ -1,0 +1,1 @@
+Own audio duration probing and token accounting here. Keep nanocode-media::audio compatible. This crate must build independently of image codecs on native and WASM. Keep the existing supported containers and estimation behavior.

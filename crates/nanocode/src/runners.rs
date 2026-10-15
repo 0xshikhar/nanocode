@@ -1,4 +1,4 @@
-pub use nanocode_code_mode::attachment::{
+pub use nanocode_tool_runtime::attachment::{
     AttachmentError, Runner, RunnerEvent, RunnerHandle, RunnerInfo, RunnerPool, RunnerServer,
     RunnerServerConfig, RunnerStatus,
 };
@@ -44,7 +44,10 @@ impl crate::Nanocodex {
     }
 }
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex, PoisonError},
+};
 use tokio::sync::{mpsc, oneshot};
 
 pub(crate) struct RunnerAgents {
@@ -54,6 +57,7 @@ pub(crate) struct RunnerAgents {
 }
 
 struct RunnerAgentState {
+    code_mode_hosts: HashMap<String, bool>,
     events: Option<mpsc::UnboundedReceiver<RunnerEvent>>,
     agents: Vec<(String, crate::WeakAgent, mpsc::UnboundedSender<Notice>)>,
     runners: Vec<Runner>,
@@ -77,6 +81,7 @@ impl RunnerAgents {
             pool,
             initialized: tokio::sync::OnceCell::new(),
             state: Mutex::new(RunnerAgentState {
+                code_mode_hosts: HashMap::new(),
                 events: Some(events),
                 agents: Vec::new(),
                 runners,
@@ -212,11 +217,17 @@ impl RunnerAgents {
     }
 
     pub(crate) fn unregister(&self, session_id: &str) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.agents.retain(|(id, _, _)| id != session_id);
+        state.code_mode_hosts.remove(session_id);
+    }
+
+    pub(crate) fn code_mode_host(&self, session_id: &str, configured: bool) {
         self.state
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .agents
-            .retain(|(id, _, _)| id != session_id);
+            .code_mode_hosts
+            .insert(session_id.to_owned(), configured);
     }
 
     pub(crate) async fn register(
@@ -224,6 +235,28 @@ impl RunnerAgents {
         agent: &crate::Agent,
         await_initial: bool,
     ) -> nanocode_agent::Result<()> {
+        {
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            let configured = state
+                .code_mode_hosts
+                .get(agent.session_id())
+                .copied()
+                .or_else(|| {
+                    agent
+                        .session()
+                        .lineage
+                        .parent_session_id
+                        .as_ref()
+                        .and_then(|parent| state.code_mode_hosts.get(parent).copied())
+                })
+                .unwrap_or(false);
+            if configured {
+                state
+                    .code_mode_hosts
+                    .insert(agent.session_id().to_owned(), true);
+                return Ok(());
+            }
+        }
         self.activate();
         if !agent.capabilities().developer_messages {
             return Ok(());

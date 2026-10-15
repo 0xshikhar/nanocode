@@ -202,26 +202,44 @@ pub struct ClaudeTools {
     dynamic: Vec<DynamicToolsFactory>,
     custom_tool_search: bool,
     adapter_cleanup: Vec<ToolCleanup>,
-    adapter_shutdown: Vec<ToolCleanup>,
+    pub(crate) adapter_shutdown: Vec<ToolCleanup>,
     pub(crate) code_turn_cleanup: Vec<CodeTurnCleanup>,
     pub(crate) code_turn_preempt: Vec<ToolCleanup>,
     pub(crate) code_turn_settle: Vec<ToolCleanup>,
     pub(crate) nested_tools: Option<NestedToolLookup>,
-    #[cfg(not(target_family = "wasm"))]
-    pub(crate) shared_catalog: Option<(nanocode_code_mode::Tools, std::path::PathBuf, AgentHandle)>,
+    pub(crate) shared_catalog: Option<(
+        nanocode_tool_runtime::Tools,
+        std::path::PathBuf,
+        AgentHandle,
+    )>,
+    pub(crate) shared_tool_names: HashSet<String>,
+    pub(crate) shared_shutdown: Option<ToolCleanup>,
 }
 impl nanocode_tools::ToolCollection for ClaudeTools {
     type Error = NanocodexError;
 
     fn add_shared_tool(mut self, tool: Arc<dyn nanocode_tools::Tool>) -> Result<Self> {
-        #[cfg(not(target_family = "wasm"))]
         if let Some((catalog, workspace, handle)) = self.shared_catalog.take() {
             let catalog = catalog.add_shared_tool(tool)?;
             let replacement = crate::claude_tools::install(&catalog, workspace, &handle)?;
-            self.tools
-                .retain(|(definition, _)| !matches!(definition.name.as_str(), "exec" | "wait"));
+            let names = replacement
+                .tools
+                .iter()
+                .map(|(definition, _)| definition.name.as_str())
+                .collect::<std::collections::HashSet<_>>();
+            self.tools.retain(|(definition, _)| {
+                !self.shared_tool_names.contains(&definition.name)
+                    && !names.contains(definition.name.as_str())
+            });
             self.tools.extend(replacement.tools);
             self.adapter_cleanup.extend(replacement.adapter_cleanup);
+            if let Some(shutdown) = self.shared_shutdown.take() {
+                self.adapter_shutdown
+                    .retain(|hook| !Arc::ptr_eq(hook, &shutdown));
+            }
+            self.adapter_shutdown.extend(replacement.adapter_shutdown);
+            self.shared_shutdown = replacement.shared_shutdown;
+            self.shared_tool_names = replacement.shared_tool_names;
             self.code_turn_cleanup = replacement.code_turn_cleanup;
             self.code_turn_preempt = replacement.code_turn_preempt;
             self.code_turn_settle = replacement.code_turn_settle;
@@ -1371,8 +1389,9 @@ impl ClaudeBuilder {
                 code_turn_preempt: Vec::new(),
                 code_turn_settle: Vec::new(),
                 nested_tools: nested_tools.clone(),
-                #[cfg(not(target_family = "wasm"))]
                 shared_catalog: None,
+                shared_tool_names: HashSet::new(),
+                shared_shutdown: None,
             };
             let adapted = adapter(catalog)?;
             nested_tools = adapted.nested_tools;

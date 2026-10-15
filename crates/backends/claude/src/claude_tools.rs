@@ -4,14 +4,24 @@ use crate::{
     ClaudeNestedToolUpdate, ClaudeToolInvocation, ClaudeToolProgress, ClaudeToolReply, ClaudeTools,
     ToolDefinition, ToolResultContent,
 };
-use nanocode_agent::{AgentHandle, Result};
-use nanocode_code_mode::{
-    ToolContext, ToolDefinition as RuntimeDefinition, Tools,
+use nanocode_agent::{AgentHandle, NanocodexError, Result};
+use nanocode_tool_runtime::{
+    ToolContext, ToolDefinition as RuntimeDefinition, ToolInput, Tools,
     contract::{ToolOutputBody, ToolOutputContent},
-    embedded::{CodeModeExecution, CodeModeObserver, CodeModeUpdate, NestedToolCall},
+    embedded::{
+        CodeModeExecution, CodeModeObserver, CodeModeUpdate, NestedToolCall, OwnedToolContext,
+    },
     runtime::ToolRuntime,
 };
 use serde_json::{Value, json};
+
+pub fn install_shared_tools(
+    workspace: PathBuf,
+    handle: &AgentHandle,
+    selected: Tools,
+) -> Result<ClaudeTools> {
+    install(&selected, workspace, handle)
+}
 
 pub(super) fn install(
     tools: &Tools,
@@ -25,32 +35,49 @@ pub(super) fn install(
         &tools,
     ));
 
-    let guard = Arc::new(RuntimeGuard(runtime.control()));
+    let guard = Arc::new(RuntimeGuard {
+        control: runtime.control(),
+        #[cfg(not(target_family = "wasm"))]
+        cancel_on_drop: !tools.has_code_mode_host(),
+    });
     let mut native = ClaudeTools::new();
+    if cfg!(target_family = "wasm") || tools.has_code_mode_host() {
+        let shutdown = Arc::clone(&guard);
+        native = native.adapter_shutdown(move || {
+            let shutdown = Arc::clone(&shutdown);
+            async move { shutdown.control.cancel().await }
+        });
+        native.shared_shutdown = native.adapter_shutdown.last().cloned();
+    }
     let nested = Arc::clone(&runtime);
     native.nested_tools = Some(Arc::new(move |name| nested.contains(name)));
     let preempt = Arc::clone(&guard);
     native.code_turn_preempt.push(Arc::new(move || {
         let guard = Arc::clone(&preempt);
-        Box::pin(async move { guard.0.preempt_turn().await })
+        Box::pin(async move { guard.control.preempt_turn().await })
     }));
     let settle = Arc::clone(&guard);
     native.code_turn_settle.push(Arc::new(move || {
         let guard = Arc::clone(&settle);
-        Box::pin(async move { guard.0.settle_preempt() })
+        Box::pin(async move { guard.control.settle_preempt() })
     }));
     native.code_turn_cleanup.push(Arc::new(move |progress| {
         let guard = Arc::clone(&guard);
         Box::pin(async move {
             guard
-                .0
+                .control
                 .cancel_turn_with_updates(&mut Progress(Some(&progress)))
                 .await;
-            guard.0.begin_turn();
+            guard.control.begin_turn();
         })
     }));
     for definition in flatten(runtime.model_specs(handle.session_id())) {
-        let (name, description, input_schema, call) = match definition {
+        let strict = match &definition {
+            RuntimeDefinition::Function { strict: true, .. } => Some(true),
+            _ => None,
+        };
+        let output_schema = definition.output_schema().cloned();
+        let (name, mut description, input_schema, call) = match definition {
             RuntimeDefinition::Custom {
                 name, description, ..
             } if &*name == "exec" => (
@@ -77,19 +104,54 @@ pub(super) fn install(
                 parameters.as_value().clone(),
                 Call::Wait,
             ),
-            _ => continue,
+            RuntimeDefinition::Function {
+                name,
+                description,
+                parameters,
+                ..
+            } => {
+                let call = Call::Function(Arc::from(name.as_ref()));
+                (
+                    name,
+                    description.into(),
+                    parameters.as_value().clone(),
+                    call,
+                )
+            }
+            RuntimeDefinition::ToolSearch {
+                description,
+                parameters,
+                ..
+            } => (
+                "tool_search".into(),
+                description.into(),
+                parameters.as_value().clone(),
+                Call::Function(Arc::from("tool_search")),
+            ),
+            other => {
+                return Err(NanocodexError::InvalidRequest(format!(
+                    "Claude requires a function tool; `{}` cannot be installed directly",
+                    other.name()
+                )));
+            }
         };
+        if let Some(schema) = output_schema {
+            description.push_str("\nOutput schema: ");
+            description.push_str(&schema.as_value().to_string());
+        }
         let tool_name = name.to_string();
+        native.shared_tool_names.insert(tool_name.clone());
         let definition = ToolDefinition {
             name: tool_name.clone(),
             description,
             input_schema,
-            strict: None,
+            strict,
             defer_loading: false,
         };
         let runtime = Arc::clone(&runtime);
         native = native.tool_with_context(definition, move |input, invocation| {
             let runtime = Arc::clone(&runtime);
+            let call = call.clone();
             async move { call.run(&runtime, input, &invocation).await }
         });
     }
@@ -97,17 +159,26 @@ pub(super) fn install(
     Ok(native)
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Call {
     Exec,
     Wait,
+    Function(Arc<str>),
 }
 
-struct RuntimeGuard(nanocode_code_mode::runtime::ToolRuntimeControl);
+struct RuntimeGuard {
+    control: nanocode_tool_runtime::runtime::ToolRuntimeControl,
+    #[cfg(not(target_family = "wasm"))]
+    cancel_on_drop: bool,
+}
 
+#[cfg(not(target_family = "wasm"))]
 impl Drop for RuntimeGuard {
     fn drop(&mut self) {
-        let control = self.0.clone();
+        if !self.cancel_on_drop {
+            return;
+        }
+        let control = self.control.clone();
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn(async move { control.cancel().await });
         }
@@ -139,13 +210,38 @@ impl Call {
                     .and_then(Value::as_str)
                     .ok_or("exec requires a `code` string")?;
                 runtime
-                    .execute_code_with_updates(code, context, &mut progress)
+                    .execute_code_owned_with_updates(
+                        code,
+                        OwnedToolContext::from_context(context),
+                        &mut progress,
+                    )
                     .await
             }
             Self::Wait => {
                 runtime
                     .wait_for_code_with_updates(&input.to_string(), context, &mut progress)
                     .await
+            }
+            Self::Function(name) => {
+                let raw =
+                    serde_json::value::to_raw_value(&input).map_err(|error| error.to_string())?;
+                let mut output = runtime
+                    .execute_tool(&name, ToolInput::Function(raw), context)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let structured_result = Some(output.take_structured_result());
+                let metadata = output
+                    .metadata
+                    .take()
+                    .map(|value| serde_json::from_str(value.get()))
+                    .transpose()
+                    .map_err(|error| error.to_string())?;
+                return Ok(reply(
+                    output.output,
+                    output.success,
+                    metadata,
+                    structured_result,
+                ));
             }
         }
         .map_err(|error| error.to_string())?;

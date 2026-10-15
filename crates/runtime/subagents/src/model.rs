@@ -1,4 +1,7 @@
-use nanocode_agent::{ModelSelection, Thinking, events::AgentEvent};
+use nanocode_agent::input::{Prompt, PromptInput, UserInput};
+use nanocode_agent::{
+    Model, ModelSelection, ModelTransport, ReasoningMode, Thinking, events::AgentEvent,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     fmt,
@@ -7,6 +10,45 @@ use std::{
 };
 
 static NEXT_RUNTIME_ID: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AgentContext {
+    pub model: ModelSelection,
+    pub thinking: Thinking,
+    pub reasoning_mode: ReasoningMode,
+}
+
+impl AgentContext {
+    pub fn new(model: ModelSelection, thinking: Thinking, preferred: ReasoningMode) -> Self {
+        let reasoning_mode = model
+            .capabilities(ModelTransport::Native)
+            .normalize_reasoning_mode(preferred);
+        Self {
+            model,
+            thinking,
+            reasoning_mode,
+        }
+    }
+
+    pub fn prompt(&self, prompt: impl Into<Prompt>) -> Prompt {
+        let mut prompt = prompt.into();
+        let model = match self.model.as_codex() {
+            Some(Model::Luna) => "luna",
+            Some(Model::Sol) => "sol",
+            Some(Model::Astra) => "astra",
+            _ => self.model.as_str(),
+        };
+        let context = format!(
+            "\n\n<agent_context>\nThis turn runs on {model} with {} reasoning effort in {} reasoning mode.\n</agent_context>",
+            self.thinking, self.reasoning_mode
+        );
+        match &mut prompt.instruction {
+            PromptInput::Text(text) => text.push_str(&context),
+            PromptInput::Content(items) => items.push(UserInput::Text { text: context }),
+        }
+        prompt
+    }
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]
@@ -235,23 +277,6 @@ pub struct AgentMessageUpdate {
 }
 
 pub(super) fn agent_prompt(id: AgentId, task: &str) -> String {
-    agent_prompt_in_context(id, task, None, None)
-}
-
-pub(super) fn agent_prompt_in_context(
-    id: AgentId,
-    task: &str,
-    model: Option<&ModelSelection>,
-    thinking: Option<Thinking>,
-) -> String {
-    let context = match (model, thinking) {
-        (Some(model), Some(thinking)) => format!(
-            "\n\n<agent_context>\nYou run on {} ({} harness) with {thinking} reasoning effort.\n</agent_context>",
-            model.as_str(),
-            model.family()
-        ),
-        _ => String::new(),
-    };
     let coordination = " Other agents may be working concurrently in the same workspace. Use \
                         list_agents to discover relevant peers. Communicate when doing so prevents \
                         duplicated work, coordinates shared dependencies or overlapping files, or \
@@ -272,7 +297,7 @@ pub(super) fn agent_prompt_in_context(
          with the required JSON value. When its receipt says accepted, send a brief final \
          assistant message with no further tool calls; do not end with an empty model \
          response. If the receipt says superseded, follow the updated instructions instead.\
-         {context}\n\nDelegated task:\n{task}"
+         \n\nDelegated task:\n{task}"
     )
 }
 
@@ -326,6 +351,18 @@ pub struct AgentDescriptor {
     pub model: Option<ModelSelection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<Thinking>,
+    #[serde(default, skip_serializing_if = "ReasoningMode::is_standard")]
+    pub reasoning_mode: ReasoningMode,
+}
+
+impl AgentDescriptor {
+    pub(crate) fn context(&self) -> Option<AgentContext> {
+        Some(AgentContext {
+            model: self.model.clone()?,
+            thinking: self.thinking?,
+            reasoning_mode: self.reasoning_mode,
+        })
+    }
 }
 
 #[derive(Debug)]

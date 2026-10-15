@@ -163,6 +163,7 @@ where
         parent_session_id: &str,
         model: Model,
         thinking: Thinking,
+        reasoning_mode: ReasoningMode,
         service_tier: ServiceTier,
         stateless_http: bool,
         host_context: Option<Arc<str>>,
@@ -180,6 +181,7 @@ where
         let mut config = (*self.config).clone();
         config.model = model;
         config.thinking = thinking;
+        config.reasoning_mode = reasoning_mode;
         config.service_tier = service_tier;
         if stateless_http {
             config.responses_transport = ResponsesTransport::Https;
@@ -260,6 +262,7 @@ where
         let mut config = (*spawner.config).clone();
         config.model = snapshot.model;
         config.thinking = snapshot.thinking;
+        config.reasoning_mode = snapshot.reasoning_mode;
         config.service_tier = snapshot.service_tier;
         if snapshot.stateless_http {
             config.responses_transport = ResponsesTransport::Https;
@@ -324,6 +327,7 @@ where
                 parent_session_id,
                 defaults.model,
                 defaults.thinking,
+                ReasoningMode::Standard,
                 defaults.service_tier,
                 false,
                 host_context

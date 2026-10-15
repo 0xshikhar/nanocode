@@ -1,0 +1,27 @@
+use nanocode_tools::{ToolContext, ToolOutput, ToolOutputContent, ToolProcessTraceWire};
+use serde_json::Value;
+
+use crate::embedded::{HostFuture, NestedToolCall};
+
+pub struct CodeModeToolObservation<'a> {
+    pub call: &'a NestedToolCall,
+    pub process_trace: Option<&'a ToolProcessTraceWire>,
+}
+
+pub trait CodeModeToolset: Send + Sync {
+    fn nested_tool_metadata(&self) -> Vec<Value>;
+
+    fn execute_nested<'a>(
+        &'a self,
+        name: &'a str,
+        input: Value,
+        context: ToolContext<'a>,
+    ) -> HostFuture<'a, ToolOutput>;
+
+    fn append_observation_content(
+        &self,
+        _calls: &[CodeModeToolObservation<'_>],
+        _content: &mut Vec<ToolOutputContent>,
+    ) {
+    }
+}

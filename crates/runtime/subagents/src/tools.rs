@@ -2,7 +2,7 @@ use super::{
     message::MAX_MESSAGE_BYTES,
     model::{
         AgentDescriptor, AgentId, AgentStatus, AgentUpdate, MessageId, MessagePriority,
-        MessagePurpose, agent_prompt_in_context,
+        MessagePurpose, agent_prompt,
     },
     policy::{SpawnParent, SpawnPolicy, SpawnPolicyError},
     runtime::{
@@ -13,7 +13,7 @@ use super::{
 use async_trait::async_trait;
 use futures_util::future::join_all;
 use nanocode_agent::{
-    AgentHandle, ForkRequest, HarnessFamily, ModelSelection, SpawnOptions, Thinking,
+    AgentHandle, ForkRequest, HarnessFamily, ModelSelection, ReasoningMode, SpawnOptions, Thinking,
 };
 use nanocode_tools::{
     Tool, ToolCollection, ToolContext, ToolDefinition, ToolInput, ToolOutput, ToolResult,
@@ -112,6 +112,8 @@ struct SpawnAgentTask {
     harness: Option<HarnessFamily>,
     #[serde(default)]
     thinking: Option<Thinking>,
+    #[serde(default)]
+    reasoning_mode: Option<ReasoningMode>,
 
     #[serde(default)]
     output_schema: Option<Value>,
@@ -133,7 +135,8 @@ impl SpawnAgentTask {
                 ));
             }
         };
-        let mut options = SpawnOptions::new();
+        let mut options =
+            SpawnOptions::new().reasoning_mode(self.reasoning_mode.unwrap_or_default());
         if let Some(model) = self.model {
             let backend = match self.harness.clone() {
                 Some(harness) => harness,
@@ -176,6 +179,7 @@ pub struct AgentStartReport {
     pub model: Option<ModelSelection>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<Thinking>,
+    pub reasoning_mode: ReasoningMode,
 }
 
 fn inferred_harness(parent: Option<HarnessFamily>, model: &str) -> std::io::Result<HarnessFamily> {
@@ -193,35 +197,64 @@ fn inferred_harness(parent: Option<HarnessFamily>, model: &str) -> std::io::Resu
         .map_or(parent, |known| known.family()))
 }
 
-async fn spawn_parent(parent: &AgentHandle, registry: &Registry, session_id: &str) -> SpawnParent {
-    let descriptor = registry.descriptor_for_session(session_id).await;
-    SpawnParent {
-        model: parent.harness_model(),
-        registered: descriptor.is_some(),
-        thinking: descriptor.and_then(|descriptor| descriptor.thinking),
-    }
+async fn spawn_parent(
+    parent: &AgentHandle,
+    registry: &Registry,
+    session_id: &str,
+) -> AgentToolResult<SpawnParent> {
+    let registered = registry.descriptor_for_session(session_id).await.is_some();
+    let (model, thinking) = parent.settings().await?;
+    Ok(SpawnParent {
+        model,
+        registered,
+        thinking: Some(thinking),
+        reasoning_mode: parent.reasoning_mode().await?,
+    })
+}
+
+fn admit_options(
+    policy: &SpawnPolicy,
+    parent: &SpawnParent,
+    options: SpawnOptions,
+) -> AgentToolResult<SpawnOptions> {
+    let thinking = parent
+        .thinking
+        .ok_or(SpawnPolicyError::ParentThinkingUnknown)?;
+    let options = options.resolve(parent.model.clone(), thinking)?;
+    policy.admit(
+        parent,
+        options.selected_harness_model().as_ref(),
+        options.selected_thinking(),
+    )?;
+    policy.admit_reasoning_mode(
+        parent,
+        options.selected_reasoning_mode().unwrap_or_default(),
+    )?;
+    Ok(options)
 }
 
 async fn child_settings(
     child: &nanocode_agent::Nanocodex,
-    policy: Option<(&SpawnPolicy, &SpawnParent)>,
-) -> std::io::Result<(Option<ModelSelection>, Option<Thinking>)> {
+    policy: Option<(&Registry, &SpawnParent)>,
+) -> std::io::Result<(Option<ModelSelection>, Option<Thinking>, ReasoningMode)> {
     match child.checkpoint().await {
         Ok(checkpoint) => {
             let (model, thinking) = (checkpoint.model(), checkpoint.thinking());
-            if let Some((policy, parent)) = policy {
+            if let Some((registry, parent)) = policy {
+                let policy = registry.spawn_policy();
                 policy.admit(parent, Some(&model), Some(thinking))?;
+                policy.admit_reasoning_mode(parent, checkpoint.reasoning_mode())?;
             }
-            Ok((Some(model), Some(thinking)))
+            Ok((Some(model), Some(thinking), checkpoint.reasoning_mode()))
         }
         Err(error) => match policy {
-            Some((policy, _)) if !policy.is_unrestricted() => {
+            Some((registry, _)) if !registry.spawn_policy().is_unrestricted() => {
                 Err(SpawnPolicyError::ChildSettingsUnknown {
                     reason: error.to_string(),
                 }
                 .into())
             }
-            _ => Ok((None, None)),
+            _ => Ok((None, None, ReasoningMode::Standard)),
         },
     }
 }
@@ -313,6 +346,7 @@ pub async fn start_agents_observed(
     registry.register_handle(parent.clone());
 
     let admission = registry.admit_spawn(session_id).await?;
+    let policy_parent = spawn_parent(parent, registry, session_id).await?;
     let prepared = prepare_batch(tasks)?;
     let mut startup = registry.batch_startup();
     let capacities = registry.reserve_turns(prepared.len())?;
@@ -332,16 +366,27 @@ pub async fn start_agents_observed(
                 )
                 .await?;
             route.validate(SpawnOptions::new())?;
-            routes.push(route);
+            let options = admit_options(
+                &registry.spawn_policy(),
+                &policy_parent,
+                route.options(SpawnOptions::new()),
+            )?;
+            routes.push((route, options));
         }
         let mut children: Vec<(nanocode_agent::Nanocodex, nanocode_agent::AgentEvents)> =
             Vec::with_capacity(routes.len());
-        for route in routes {
+        for (route, options) in routes {
+            let options = match admit_options(&registry.spawn_policy(), &policy_parent, options) {
+                Ok(options) => options,
+                Err(error) => {
+                    for (child, _) in &children {
+                        child.abandon_created().await;
+                    }
+                    return Err(error);
+                }
+            };
             let outcome = parent
-                .spawn_with_host_context(
-                    route.options(SpawnOptions::new()),
-                    host_context.as_ref().map(Arc::clone),
-                )
+                .spawn_with_host_context(options, host_context.as_ref().map(Arc::clone))
                 .await;
             let child = match outcome {
                 Ok(child) => child,
@@ -369,6 +414,11 @@ pub async fn start_agents_observed(
         }
         children
     } else {
+        admit_options(
+            &registry.spawn_policy(),
+            &policy_parent,
+            SpawnOptions::new(),
+        )?;
         parent
             .spawn_many_observed_with_host_context(
                 prepared.len(),
@@ -378,11 +428,9 @@ pub async fn start_agents_observed(
             .await?
     };
 
-    let policy = registry.spawn_policy();
-    let policy_parent = spawn_parent(parent, registry, session_id).await;
     let mut settings = Vec::with_capacity(children.len());
     for (child, _) in &children {
-        match child_settings(child, Some((&policy, &policy_parent))).await {
+        match child_settings(child, Some((registry, &policy_parent))).await {
             Ok(value) => settings.push(value),
             Err(error) => {
                 for (child, _) in &children {
@@ -396,13 +444,15 @@ pub async fn start_agents_observed(
     let mut reports = Vec::with_capacity(prepared.len());
     let mut launches = Vec::with_capacity(prepared.len());
     let mut additions = Vec::with_capacity(prepared.len());
-    for ((((reservation, (task, contract)), (child, events)), capacity), (model, thinking)) in
-        reservations
-            .into_iter()
-            .zip(prepared)
-            .zip(children)
-            .zip(capacities)
-            .zip(settings)
+    for (
+        (((reservation, (task, contract)), (child, events)), capacity),
+        (model, thinking, reasoning_mode),
+    ) in reservations
+        .into_iter()
+        .zip(prepared)
+        .zip(children)
+        .zip(capacities)
+        .zip(settings)
     {
         let id = reservation.id;
         let descriptor = AgentDescriptor {
@@ -413,6 +463,7 @@ pub async fn start_agents_observed(
             parent: reservation.parent,
             model: model.clone(),
             thinking,
+            reasoning_mode,
         };
         let (start_events, events_ready) = oneshot::channel();
         let event_task = forward_events(
@@ -443,6 +494,7 @@ pub async fn start_agents_observed(
             status: AgentStatus::Running,
             model: model.clone(),
             thinking,
+            reasoning_mode,
         });
         additions.push((
             reservation.root_session_id.clone(),
@@ -452,7 +504,7 @@ pub async fn start_agents_observed(
         launches.push((
             reservation.root_session_id,
             id,
-            agent_prompt_in_context(id, &task.task, model.as_ref(), thinking),
+            agent_prompt(id, &task.task),
             capacity,
         ));
     }
@@ -549,17 +601,15 @@ async fn start_child(
         return Err("child caller identity must match its native parent handle".into());
     }
     registry.register_handle(parent.clone());
-    let policy = registry.spawn_policy();
-    let policy_parent = spawn_parent(parent, registry, session_id).await;
+    let admission = registry.admit_spawn(session_id).await?;
+    let policy_parent = spawn_parent(parent, registry, session_id).await?;
     if !fork {
-        policy.admit(
+        registry.spawn_policy().admit_reasoning_mode(
             &policy_parent,
-            options.selected_harness_model().as_ref(),
-            options.selected_thinking(),
+            options.selected_reasoning_mode().unwrap_or_default(),
         )?;
     }
 
-    let admission = registry.admit_spawn(session_id).await?;
     let AgentTask {
         role,
         task,
@@ -591,26 +641,36 @@ async fn start_child(
     } else {
         None
     };
+    let options = if fork {
+        options
+    } else {
+        admit_options(
+            &registry.spawn_policy(),
+            &policy_parent,
+            route
+                .as_ref()
+                .map_or_else(|| options.clone(), |route| route.options(options.clone())),
+        )?
+    };
     let (child, events) = if fork {
         parent.fork(ForkRequest::latest()).await?
     } else {
         parent
-            .spawn_with_host_context(
-                route
-                    .as_ref()
-                    .map_or_else(|| options.clone(), |route| route.options(options.clone())),
-                host_context.as_ref().map(Arc::clone),
-            )
+            .spawn_with_host_context(options, host_context.as_ref().map(Arc::clone))
             .await?
     };
-    let (model, thinking) =
-        match child_settings(&child, (!fork).then_some((&policy, &policy_parent))).await {
-            Ok(settings) => settings,
-            Err(error) => {
-                child.abandon_created().await;
-                return Err(error.into());
-            }
-        };
+    let (model, thinking, reasoning_mode) = match child_settings(
+        &child,
+        (!fork).then_some((registry.as_ref(), &policy_parent)),
+    )
+    .await
+    {
+        Ok(settings) => settings,
+        Err(error) => {
+            child.abandon_created().await;
+            return Err(error.into());
+        }
+    };
     if let (Some(router), Some(route)) = (&router, &route)
         && let Err(error) = router.bind(
             session_id,
@@ -631,6 +691,7 @@ async fn start_child(
         parent: reservation.parent,
         model: model.clone(),
         thinking,
+        reasoning_mode,
     };
     let (start_events, events_ready) = oneshot::channel();
     let event_task = forward_events(
@@ -659,7 +720,7 @@ async fn start_child(
         .launch_initial_turn(
             &reservation.root_session_id,
             id,
-            agent_prompt_in_context(id, &task, model.as_ref(), thinking),
+            agent_prompt(id, &task),
             capacity,
         )
         .await
@@ -673,6 +734,7 @@ async fn start_child(
         status: AgentStatus::Running,
         model,
         thinking,
+        reasoning_mode,
     })
 }
 
@@ -819,9 +881,14 @@ fn spawn_agent_parameters() -> Value {
                 "enum": ["none", "low", "medium", "high", "xhigh", "max", null],
                 "description": "Reasoning override; null inherits the parent's level."
             },
+            "reasoning_mode": {
+                "type": ["string", "null"],
+                "enum": ["standard", "pro", null],
+                "description": "Preferred reasoning mode; null selects standard. Pro requires authority before unsupported models resolve to standard. A child's actual mode bounds its descendants."
+            },
             "output_contract": { "$ref": "#/$defs/node" }
         },
-        "required": ["role", "task", "harness", "model", "thinking", "output_contract"],
+        "required": ["role", "task", "harness", "model", "thinking", "reasoning_mode", "output_contract"],
         "additionalProperties": false,
         "$defs": {
             "node": { "anyOf": [
@@ -1290,6 +1357,7 @@ fn spawn_agent_output_schema() -> Value {
             "role": { "type": "string" },
             "model": {},
             "thinking": { "type": "string" },
+            "reasoning_mode": { "type": "string", "enum": ["standard", "pro"] },
             "status": {
                 "type": "object",
                 "properties": { "state": { "type": "string", "const": "running" } },
@@ -1318,6 +1386,7 @@ fn wait_agent_output_schema() -> Value {
                         "status": agent_status_schema(),
                         "model": {},
                         "thinking": { "type": "string" },
+                        "reasoning_mode": { "type": "string", "enum": ["standard", "pro"] },
                         "last_output": {},
                         "completion_revision": { "type": "integer", "minimum": 0 }
                     },

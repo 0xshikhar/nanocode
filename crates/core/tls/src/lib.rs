@@ -48,9 +48,7 @@ pub async fn native_client_config() -> io::Result<Arc<ClientConfig>> {
 
 fn load() -> io::Result<ClientConfig> {
     let began = Instant::now();
-    if rustls::crypto::CryptoProvider::get_default().is_none() {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-    }
+    install_default_rustls_crypto_provider();
     #[cfg(target_os = "macos")]
     if std::env::var_os("SSL_CERT_FILE").is_none() && std::env::var_os("SSL_CERT_DIR").is_none() {
         use rustls_platform_verifier::BuilderVerifierExt;
@@ -81,6 +79,10 @@ fn load() -> io::Result<ClientConfig> {
 
 pub fn install_default_rustls_crypto_provider() {
     if rustls::crypto::CryptoProvider::get_default().is_none() {
-        drop(rustls::crypto::ring::default_provider().install_default());
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        let provider = rustls_graviola::default_provider();
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        let provider = rustls::crypto::ring::default_provider();
+        drop(provider.install_default());
     }
 }

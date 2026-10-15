@@ -239,6 +239,10 @@ pub trait AgentFactory: Send + Sync + 'static {
         })
     }
 
+    fn reasoning_mode(&self, _parent: AgentHandle) -> BackendFuture<Result<crate::ReasoningMode>> {
+        Box::pin(async { Ok(crate::ReasoningMode::Standard) })
+    }
+
     fn fork(
         &self,
         _parent: AgentHandle,

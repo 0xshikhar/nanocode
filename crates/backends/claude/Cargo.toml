@@ -10,6 +10,7 @@ publish.workspace = true
 description = "Typed Anthropic Messages protocol and streaming transport"
 
 [dependencies]
+nanocode-tool-runtime.workspace = true
 nanocode-platform.workspace = true
 nanocode-agent.workspace = true
 nanocode-durability.workspace = true
@@ -40,9 +41,11 @@ libc.workspace = true
 nix = { workspace = true, features = ["fs"]  }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
+async-trait.workspace = true
 regex.workspace = true
 chrono = { workspace = true, features = ["clock"] }
-reqwest = { workspace = true, features = ["stream", "gzip", "brotli", "deflate", "zstd"] }
+reqwest = { workspace = true, features = ["stream", "gzip", "deflate"] }
+nanocode-http.workspace = true
 tokio = { workspace = true, features = ["fs", "process", "rt-multi-thread"] }
 nanocode-tls.workspace = true
 ignore = { workspace = true  }
@@ -58,7 +61,3 @@ workspace = true
 test = false
 doctest = false
 bench = false
-
-[[test]]
-name = "subscription_identity"
-path = "tests/subscription_identity.rs"

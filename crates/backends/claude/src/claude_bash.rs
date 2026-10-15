@@ -1,7 +1,8 @@
 use crate::tools::{BashExecution, BashExecutor, BashRequest, BashResult, ClaudeBash};
-use nanocode_code_mode::{
+use async_trait::async_trait;
+use nanocode_tool_runtime::{
     SessionEnvironment, Tool, ToolContext, ToolDefinition, ToolInput, ToolOutput, ToolResult,
-    ToolsBuilder, contract::async_trait,
+    ToolsBuilder,
 };
 use serde_json::{Value, json};
 use std::{
@@ -62,7 +63,7 @@ struct LocalBash {
 }
 
 async fn run(workspace: PathBuf, request: BashRequest, duration: Duration) -> Outcome {
-    let output = nanocode_code_mode::run_bash(
+    let output = nanocode_tool_runtime::run_bash(
         &workspace,
         &request.command,
         duration,

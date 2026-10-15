@@ -75,9 +75,9 @@ pub(super) fn shared(computer: Option<&Computer>) -> Vec<Arc<dyn nanocode_tools:
 
 #[cfg(not(target_family = "wasm"))]
 pub(super) fn expose(
-    mut builder: nanocode_code_mode::ToolsBuilder,
+    mut builder: nanocode_tool_runtime::ToolsBuilder,
     computer: Option<&Computer>,
-) -> nanocode_code_mode::ToolsBuilder {
+) -> nanocode_tool_runtime::ToolsBuilder {
     if let Some(computer) = computer {
         for tool in computer.tools() {
             builder = builder.tool(tool);
@@ -112,8 +112,8 @@ pub(super) fn shared(computer: Option<&Computer>) -> Vec<Arc<dyn nanocode_tools:
 
 #[cfg(target_family = "wasm")]
 pub(super) fn expose(
-    builder: nanocode_code_mode::ToolsBuilder,
+    builder: nanocode_tool_runtime::ToolsBuilder,
     computer: Option<&Computer>,
-) -> nanocode_code_mode::ToolsBuilder {
+) -> nanocode_tool_runtime::ToolsBuilder {
     computer.map_or(builder, |computer| match *computer {})
 }

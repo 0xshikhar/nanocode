@@ -377,6 +377,7 @@ impl ClaudeCodeLogin {
             .body(body.to_string())
             .send()
             .await
+            .map(nanocode_http::decode_response)
             .map_err(|error| {
                 unavailable(&format!(
                     "Claude Code login refresh could not reach {TOKEN_URL}: {}",

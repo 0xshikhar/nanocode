@@ -1,3 +1,4 @@
+use crate::__private::model_contract as model_tool_contract;
 mod continuation;
 mod lifecycle;
 mod responses;
@@ -61,8 +62,7 @@ use crate::{
     prompt_cache::ModelPromptCache,
     usage::TurnUsage,
 };
-use nanocode_code_mode::{
-    __private::model_contract as model_tool_contract,
+use nanocode_tool_runtime::{
     ToolContext, Tools,
     code_mode::{CodeModeExecution, CodeModeObserver, CodeModeUpdate},
     contract::{DEFAULT_TOOL_OUTPUT_TOKENS, ToolInput, ToolOutput, ToolOutputBody},

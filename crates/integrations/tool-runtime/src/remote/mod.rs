@@ -1,0 +1,9 @@
+#[cfg(not(target_family = "wasm"))]
+use crate::embedded::{CodeModeExecution, CodeModeHostError, CodeModeObserver, HostFuture};
+#[cfg(not(target_family = "wasm"))]
+use crate::{Tool, ToolContext, ToolDefinition};
+pub use nanocode_code_mode::remote::*;
+#[cfg(not(target_family = "wasm"))]
+mod native;
+#[cfg(not(target_family = "wasm"))]
+pub use native::{SocketPolicy, SocketTransport, serve_accept, serve_connect};

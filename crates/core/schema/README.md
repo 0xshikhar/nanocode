@@ -33,8 +33,24 @@ Format compatibility helpers in `src/format_compat.rs` derive from
 [jsonschema 0.48.5](https://crates.io/crates/jsonschema/0.48.5), copyright
 2020–2026 Dmitry Dygalo, under its MIT license (`LICENSE-jsonschema`). These
 preserve the existing email, IDNA, URI-template and duration rules. The small
-email_address, unicode-general-category and num-cmp dependencies remain for
-protocol-specific parsing, Unicode data and exact integer/float comparison.
+email_address and num-cmp dependencies remain for protocol-specific parsing and
+exact integer/float comparison. Unicode categories used by IDNA validation are
+precomputed from unicode-general-category 1.1.0's Unicode 16.0.0 table under
+Apache-2.0, covered by the retained Apache license. The five letter categories
+share one classification because the validator treats them identically; marks
+and decimal numbers retain their distinctions. All other categories share the
+rejected classification.
+
+The checked-in Unicode data uses 203 unique pages of 128 category bytes and a
+7,172-byte page index, totaling 33,156 bytes. This page size gives the smallest
+representation among 32, 64, 128 and 256-code-point pages when the index uses the
+smallest integer that can identify every page. Lookup uses two array reads;
+there is no Cargo build script. Characters above the last classified page are
+in the rejected classification. The source domain ends at Unicode's U+10FFFF.
+
+Regenerate with `python3 scripts/generate-schema-unicode.py /path/to/unicode-general-category-1.1.0/src/tables.rs` from the repository root.
+The upstream table SHA-256 is
+`9a06bcac89a552d169aec1411438ab948391a218cbfef8c71bf186cd39ec5268`.
 `numbers.rs` handles serde_json's bounded i64/u64/f64 representation; its decimal
 coefficients fit u128 and IEEE-754 decimal exponents fit i32.
 

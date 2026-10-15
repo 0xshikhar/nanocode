@@ -32,9 +32,12 @@ pub(crate) const fn is_transient(error: &HttpError) -> bool {
 pub(crate) async fn post(
     client: &HttpClient,
     endpoint: &str,
-    headers: http::HeaderMap,
+    mut headers: http::HeaderMap,
     body: String,
 ) -> Result<HttpResponse, HttpError> {
+    headers
+        .entry(http::header::ACCEPT_ENCODING)
+        .or_insert(http::HeaderValue::from_static("gzip, br, deflate, zstd"));
     client
         .post(endpoint)
         .header("anthropic-version", crate::ANTHROPIC_VERSION)
@@ -43,6 +46,7 @@ pub(crate) async fn post(
         .body(body)
         .send()
         .await
+        .map(nanocode_http::decode_response)
 }
 
 #[cfg(target_family = "wasm")]

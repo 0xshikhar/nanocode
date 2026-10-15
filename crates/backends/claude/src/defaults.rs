@@ -1,5 +1,5 @@
 use nanocode_agent::{AgentHandle, NanocodexError, Result};
-use nanocode_code_mode::{Tool, Tools};
+use nanocode_tool_runtime::{Tool, Tools};
 use nanocode_tools::ToolCollection as _;
 use std::{path::PathBuf, sync::Arc};
 
@@ -17,7 +17,7 @@ pub fn install_default_tools_with_process_routes(
     handle: &AgentHandle,
     selected: Option<Tools>,
     additive: Vec<Arc<dyn Tool>>,
-    process_routes: Option<Arc<dyn nanocode_code_mode::attachment::ProcessRouteStore>>,
+    process_routes: Option<Arc<dyn nanocode_tool_runtime::attachment::ProcessRouteStore>>,
 ) -> Result<crate::ClaudeTools> {
     install_default_tools_with_runner_pool(
         workspace,
@@ -50,8 +50,8 @@ pub fn install_default_tools_with_runner_pool(
     handle: &AgentHandle,
     selected: Option<Tools>,
     additive: Vec<Arc<dyn Tool>>,
-    process_routes: Option<Arc<dyn nanocode_code_mode::attachment::ProcessRouteStore>>,
-    runner_pool: Option<nanocode_code_mode::attachment::RunnerPool>,
+    process_routes: Option<Arc<dyn nanocode_tool_runtime::attachment::ProcessRouteStore>>,
+    runner_pool: Option<nanocode_tool_runtime::attachment::RunnerPool>,
 ) -> Result<crate::ClaudeTools> {
     let jobs = Arc::new(crate::claude_bash::Jobs::default());
     let selected = match selected {
@@ -72,17 +72,21 @@ pub fn install_default_tools_with_runner_pool(
             .map_err(|error| NanocodexError::InvalidRequest(error.to_string()))?
         }
     };
-    let selected = match process_routes {
-        Some(store) => selected.with_default_process_route_store(store),
-        None => selected,
-    };
-    let selected = match runner_pool {
-        Some(pool) => selected.with_runner_pool(pool),
-        None => selected,
+    let selected = if selected.has_code_mode_host() {
+        selected
+    } else {
+        let selected = match process_routes {
+            Some(store) => selected.with_default_process_route_store(store),
+            None => selected,
+        };
+        match runner_pool {
+            Some(pool) => selected.with_runner_pool(pool),
+            None => selected,
+        }
     };
     let mut selected = selected
         .into_builder()
-        .exposure(nanocode_code_mode::ToolExposure::CodeModeOnly)
+        .exposure(nanocode_tool_runtime::ToolExposure::CodeModeOnly)
         .build()
         .map_err(|error| NanocodexError::InvalidRequest(error.to_string()))?;
     for tool in additive {

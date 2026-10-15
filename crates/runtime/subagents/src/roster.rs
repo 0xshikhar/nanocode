@@ -1,5 +1,5 @@
 use super::model::{AgentDescriptor, AgentId, AgentStatus, AgentUpdate};
-use nanocode_agent::{ModelSelection, Thinking};
+use nanocode_agent::{ModelSelection, ReasoningMode, Thinking};
 use serde::Serialize;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
@@ -17,6 +17,7 @@ pub struct SubagentNode {
     pub task: String,
     pub model: Option<ModelSelection>,
     pub thinking: Option<Thinking>,
+    pub reasoning_mode: ReasoningMode,
     pub status: AgentStatus,
 }
 
@@ -81,6 +82,7 @@ impl SubagentNode {
             task: descriptor.task.clone(),
             model: descriptor.model.clone(),
             thinking: descriptor.thinking,
+            reasoning_mode: descriptor.reasoning_mode,
             status: AgentStatus::Running,
         }
     }

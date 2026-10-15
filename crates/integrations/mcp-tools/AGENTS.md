@@ -1,0 +1,1 @@
+Own native MCP tool discovery, catalogs, search, payment and stdio sessions. Portable protocol lives in core/mcp and native HTTP/OAuth in core/mcp-http. Preserve nanocode-tool-runtime::mcp reexports. Keep native dependencies target-gated.

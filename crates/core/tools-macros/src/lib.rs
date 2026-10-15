@@ -259,7 +259,14 @@ fn result_output(output: &ReturnType) -> syn::Result<&Type> {
 }
 
 fn nanocodex_path() -> (proc_macro2::TokenStream, String) {
-    for package in ["nanocode-tools", "nanocode", "nanocode-code-mode"] {
+    for package in [
+        "nanocode-tools",
+        "nanocode",
+        "nanocode-code-mode",
+        "nanocode-tool-runtime",
+        "nanocode-backend-codex",
+        "nanocode-backend-claude",
+    ] {
         if let Ok(found) = crate_name(package) {
             let name = match found {
                 FoundCrate::Itself => package.replace('-', "_"),

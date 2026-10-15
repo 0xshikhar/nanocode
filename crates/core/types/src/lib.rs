@@ -425,7 +425,8 @@ impl UserInput {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ReasoningMode {
     #[default]
     Standard,
@@ -434,6 +435,11 @@ pub enum ReasoningMode {
 }
 
 impl ReasoningMode {
+    #[must_use]
+    pub const fn is_standard(&self) -> bool {
+        matches!(self, Self::Standard)
+    }
+
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {

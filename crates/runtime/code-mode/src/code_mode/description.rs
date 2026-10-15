@@ -88,7 +88,7 @@ type CallToolResult<TStructured = { [key: string]: unknown }> = {
 };"#;
 const EXEC_DESCRIPTION: &str = r#"Run JavaScript code to orchestrate/compose tool calls
 - Evaluates the provided JavaScript code in a fresh JavaScript context as an async module.
-- All nested tools are available on the global `tools` object, for example `await tools.exec_command(...)`. Tool names are exposed as normalized JavaScript identifiers, for example `await tools.mcp__ologs__get_profile(...)`.
+- All nested tools are available on the global `tools` object, for example `await tools.example_tool(...)`. Tool names are exposed as normalized JavaScript identifiers, for example `await tools.mcp__ologs__get_profile(...)`.
 - Nested tool methods take either a string or an object as their input argument.
 - Nested tools return either an object or a string, based on the description.
 - Runs raw JavaScript -- no Node, no file system, no network access, no console.
@@ -112,25 +112,22 @@ const EXEC_DESCRIPTION: &str = r#"Run JavaScript code to orchestrate/compose too
 - `ALL_TOOLS`: metadata for the enabled nested tools as `{ name, description }` entries.
 - `yield_control()`: yields the accumulated output to the model immediately while the script keeps running."#;
 
-pub(crate) fn exec_description(
+pub fn exec_description(
     definitions: &[ToolDefinition],
     provider_summaries: &[(String, String)],
     has_deferred_tools: bool,
     code_mode_only: bool,
 ) -> String {
-    let example = definitions
-        .iter()
-        .find(|spec| spec.name() == "exec_command")
-        .or_else(|| definitions.first())
-        .map(|spec| normalize_identifier(spec.name()));
-    let mut description = match example {
-        Some(example) if example != "exec_command" => EXEC_DESCRIPTION.replacen(
-            "tools.exec_command(...)",
-            &format!("tools.{example}(...)"),
-            1,
-        ),
-        _ => EXEC_DESCRIPTION.to_owned(),
-    };
+    let mut description = definitions.first().map_or_else(
+        || EXEC_DESCRIPTION.to_owned(),
+        |definition| {
+            EXEC_DESCRIPTION.replacen(
+                "tools.example_tool(...)",
+                &format!("tools.{}(...)", normalize_identifier(definition.name())),
+                1,
+            )
+        },
+    );
     if code_mode_only {
         description.push_str("\n- `ALL_TOOLS` is the catalog of callable nested tools for this execution. All tools must be called through `tools` inside `exec`; only `exec` and `wait` are top-level entrypoints.");
     } else {
@@ -192,7 +189,7 @@ pub(crate) fn exec_description(
     description
 }
 
-pub(crate) fn augment_definition_for_code_mode(mut definition: ToolDefinition) -> ToolDefinition {
+pub fn augment_definition_for_code_mode(mut definition: ToolDefinition) -> ToolDefinition {
     let Some(declaration) = exec_tool_declaration(&definition) else {
         return definition;
     };
@@ -268,7 +265,7 @@ fn mcp_structured_content_schema(output_schema: &Value) -> Option<&Value> {
     )
 }
 
-pub(crate) fn normalize_identifier(name: &str) -> String {
+pub fn normalize_identifier(name: &str) -> String {
     let mut identifier = String::new();
     for (index, character) in name.chars().enumerate() {
         let valid = if index == 0 {

@@ -100,6 +100,7 @@ impl<F> NanocodexBuilder<F> {
         self = self
             .model(snapshot.model)
             .thinking(snapshot.thinking)
+            .reasoning_mode(snapshot.reasoning_mode)
             .service_tier(snapshot.service_tier);
         self.session_id = Some(snapshot.session_id.parse().map_err(|error| {
             NanocodexError::InvalidCheckpoint(format!("invalid child session: {error}"))

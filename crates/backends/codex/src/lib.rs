@@ -49,10 +49,9 @@ pub use agent::{ExecutionEnvironment, NanocodexBuilder};
 
 pub use error::CompactionRecovery;
 pub use error::{ExecutionPolicyDisposition, NanocodexError, Result};
-#[cfg(not(target_family = "wasm"))]
-pub use nanocode_code_mode::tool;
+pub use nanocode_tool_runtime::tool;
 
-pub use nanocode_code_mode::{Tool, Tools};
+pub use nanocode_tool_runtime::{Tool, Tools};
 pub use session::{
     Capabilities, ForkPoint, ForkRequest, Lineage, Mutability, Origin, Persistence,
     SessionCheckpoint, SessionInfo,
@@ -101,14 +100,36 @@ pub mod transport {
 }
 
 pub mod tools {
+    pub use crate::__private;
+    #[cfg(not(target_family = "wasm"))]
+    pub use crate::builtin_tools::{WorkspaceTools, attachment, workspace_runtime};
+    pub use crate::builtin_tools::{apply_patch, extensions, standard};
     #[doc(inline)]
-    pub use nanocode_code_mode::*;
+    pub use nanocode_code_mode::{CodeModeToolObservation, CodeModeToolset};
+    pub use nanocode_tool_runtime::*;
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[doc(hidden)]
 pub mod __private {
-    pub use nanocode_code_mode::__private::*;
+    pub use nanocode_tool_runtime::__private::*;
+
+    pub fn model_contract(
+        runtime: &nanocode_tool_runtime::runtime::ToolRuntime,
+        session_id: &str,
+    ) -> (Vec<nanocode_tools::ToolDefinition>, Vec<(String, String)>) {
+        let (mut definitions, summaries) =
+            nanocode_tool_runtime::__private::model_contract(runtime, session_id);
+        definitions.sort_by_key(|definition| match definition.name() {
+            "exec" | "wait" => 0,
+            "exec_command" => 1,
+            "write_stdin" => 2,
+            "update_plan" => 3,
+            "apply_patch" => 4,
+            "view_image" => 5,
+            _ => 6,
+        });
+        (definitions, summaries)
+    }
 }
 
 pub mod client;

@@ -1,3 +1,10 @@
+pub use nanocode_tools::tool;
+
+#[doc(hidden)]
+pub mod __private {
+    pub use nanocode_tools::__private::*;
+}
+
 use std::{collections::BTreeMap, future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use futures_util::{Stream, StreamExt, stream};
@@ -1992,8 +1999,8 @@ pub mod execution;
 mod claude_bash;
 #[cfg(not(target_family = "wasm"))]
 mod claude_files;
-#[cfg(not(target_family = "wasm"))]
 mod claude_tools;
+pub use claude_tools::install_shared_tools;
 #[cfg(not(target_family = "wasm"))]
 mod defaults;
 #[cfg(not(target_family = "wasm"))]

@@ -1,3 +1,2 @@
-pub mod audio;
-
-pub mod image;
+pub use nanocode_audio as audio;
+pub use nanocode_image as image;

@@ -1,5 +1,4 @@
 mod input;
-mod runtime;
 mod types;
 
 use std::{error::Error, fmt, future::Future, pin::Pin};
@@ -7,18 +6,10 @@ use std::{error::Error, fmt, future::Future, pin::Pin};
 use crate::{ToolContext, ToolDefinition, ToolInput, ToolOutput};
 
 pub use input::{prepare_output_images, prepare_user_input};
-pub use runtime::{EmbeddedToolRuntime, EmbeddedToolRuntimeControl};
 pub use types::{
     CodeModeCell, CodeModeExecution, CodeModeNotification, CodeModeObserver, CodeModeUpdate,
     NestedToolCall, OwnedToolContext,
 };
-
-#[doc(hidden)]
-#[must_use]
-pub fn bind_host(mut tools: crate::Tools, host: impl CodeModeHost) -> crate::Tools {
-    tools.embedded_host = Some(std::sync::Arc::new(host));
-    tools
-}
 
 #[cfg(not(target_family = "wasm"))]
 pub type HostFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -179,7 +170,109 @@ pub trait CodeModeHost: Send + Sync + 'static {
         self.cancel_turn(session_id)
     }
 
+    fn cancel_with_updates<'a>(
+        &'a self,
+        session_id: &'a str,
+        _observer: &'a mut dyn CodeModeObserver,
+    ) -> HostFuture<'a, Result<(), CodeModeHostError>> {
+        self.cancel(session_id)
+    }
+
     fn cancel<'a>(&'a self, _session_id: &'a str) -> HostFuture<'a, Result<(), CodeModeHostError>> {
         Box::pin(async { Ok(()) })
+    }
+}
+
+impl<T: CodeModeHost + ?Sized> CodeModeHost for std::sync::Arc<T> {
+    fn tool_mode(&self) -> EmbeddedToolMode {
+        (**self).tool_mode()
+    }
+    fn supports_cells(&self) -> bool {
+        (**self).supports_cells()
+    }
+    fn tool_definitions(&self, session_id: &str) -> Result<Vec<ToolDefinition>, CodeModeHostError> {
+        (**self).tool_definitions(session_id)
+    }
+    fn execute<'a>(
+        &'a self,
+        source: &'a str,
+        context: ToolContext<'a>,
+    ) -> HostFuture<'a, Result<CodeModeExecution, CodeModeHostError>> {
+        (**self).execute(source, context)
+    }
+    fn execute_with_updates<'a>(
+        &'a self,
+        source: &'a str,
+        context: ToolContext<'a>,
+        observer: &'a mut dyn CodeModeObserver,
+    ) -> HostFuture<'a, Result<CodeModeExecution, CodeModeHostError>> {
+        (**self).execute_with_updates(source, context, observer)
+    }
+    fn execute_with_local_tools<'a>(
+        &'a self,
+        source: &'a str,
+        context: ToolContext<'a>,
+        tools: Vec<std::sync::Arc<dyn crate::Tool>>,
+        observer: Option<&'a mut dyn CodeModeObserver>,
+    ) -> HostFuture<'a, Result<CodeModeExecution, CodeModeHostError>> {
+        (**self).execute_with_local_tools(source, context, tools, observer)
+    }
+    fn wait_with_updates<'a>(
+        &'a self,
+        input: &'a str,
+        context: ToolContext<'a>,
+        observer: &'a mut dyn CodeModeObserver,
+    ) -> HostFuture<'a, Result<CodeModeExecution, CodeModeHostError>> {
+        (**self).wait_with_updates(input, context, observer)
+    }
+    fn execute_tool<'a>(
+        &'a self,
+        name: &'a str,
+        input: ToolInput,
+        context: ToolContext<'a>,
+    ) -> HostFuture<'a, Result<ToolOutput, CodeModeHostError>> {
+        (**self).execute_tool(name, input, context)
+    }
+    fn begin_turn(&self, session_id: &str) {
+        (**self).begin_turn(session_id);
+    }
+    fn detach_turn(
+        &self,
+        session_id: &str,
+        observer: &mut (dyn FnMut(&str) -> Box<dyn CodeModeObserver> + Send),
+    ) {
+        (**self).detach_turn(session_id, observer);
+    }
+    fn preempt_turn<'a>(
+        &'a self,
+        session_id: &'a str,
+    ) -> HostFuture<'a, Result<(), CodeModeHostError>> {
+        (**self).preempt_turn(session_id)
+    }
+    fn settle_preempt(&self, session_id: &str) {
+        (**self).settle_preempt(session_id);
+    }
+    fn cancel_turn<'a>(
+        &'a self,
+        session_id: &'a str,
+    ) -> HostFuture<'a, Result<(), CodeModeHostError>> {
+        (**self).cancel_turn(session_id)
+    }
+    fn cancel_turn_with_updates<'a>(
+        &'a self,
+        session_id: &'a str,
+        observer: &'a mut dyn CodeModeObserver,
+    ) -> HostFuture<'a, Result<(), CodeModeHostError>> {
+        (**self).cancel_turn_with_updates(session_id, observer)
+    }
+    fn cancel_with_updates<'a>(
+        &'a self,
+        session_id: &'a str,
+        observer: &'a mut dyn CodeModeObserver,
+    ) -> HostFuture<'a, Result<(), CodeModeHostError>> {
+        (**self).cancel_with_updates(session_id, observer)
+    }
+    fn cancel<'a>(&'a self, session_id: &'a str) -> HostFuture<'a, Result<(), CodeModeHostError>> {
+        (**self).cancel(session_id)
     }
 }

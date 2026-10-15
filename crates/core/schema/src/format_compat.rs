@@ -1,9 +1,9 @@
+use crate::unicode::{GeneralCategory, get_general_category};
 use email_address::{EmailAddress, Options as EmailAddressOptions};
 use std::{
     net::{Ipv4Addr, Ipv6Addr},
     str::FromStr,
 };
-use unicode_general_category::{GeneralCategory, get_general_category};
 
 pub(crate) fn is_valid_uri_template(template: &str) -> bool {
     let bytes = template.as_bytes();
@@ -340,11 +340,7 @@ pub(crate) fn is_valid_hostname(hostname: &str) -> bool {
 const fn is_idna_pvalid_category(category: GeneralCategory) -> bool {
     matches!(
         category,
-        GeneralCategory::UppercaseLetter
-            | GeneralCategory::LowercaseLetter
-            | GeneralCategory::TitlecaseLetter
-            | GeneralCategory::ModifierLetter
-            | GeneralCategory::OtherLetter
+        GeneralCategory::Letter
             | GeneralCategory::NonspacingMark
             | GeneralCategory::SpacingMark
             | GeneralCategory::DecimalNumber

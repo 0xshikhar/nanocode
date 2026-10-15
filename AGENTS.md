@@ -1,12 +1,26 @@
 # Development
 
 - Do not add code comments, doc comments, or comment headers.
+- Do not create or edit README files. The user maintains them; put development guidance in AGENTS.md.
 - Do not add project Cargo features or `cfg(feature = ...)` branches. Use crate boundaries and native/WASM target gates.
 - Follow [the crate layout](crates/README.md): active orchestration in `runtime/`, provider code in `backends/`, shared contracts in `core/`, and host adapters in `integrations/`. Keep each backend's API definitions and tools in its own crate.
+- Keep runtime crates backend-generic. Code Mode owns only exec/wait contracts and cell orchestration; tool registration, MCP and machine adapters belong in integrations/tool-runtime. Each backend owns its tool names, descriptions, schemas, formats and handlers, and supplies them to the host layer.
 - Maintain one Rust crate workspace with reusable crates that compile individually for native and WASM targets. Keep language bindings, separately packaged WASM SDKs, managed services, and apps outside this repo. Do not add wasm-bindgen glue.
 - Preserve agreed public APIs. Use upstream Claude/Codex prompts and tools; share Code Mode and CUA across both backends.
+- Prioritize the Rust/WASM SDK. Enable Claude and Codex together, with in-place tool registration and dynamic remote execution through shared host contracts. Keep nanocode a thin public re-export surface; generic orchestration belongs in runtime/agent and backend construction belongs in each backend.
+- Keep embedded Code Mode and on-disk durability as the native CLI defaults. An explicitly configured Code Mode host must replace the local evaluator without starting local machine tools. Keep inference, subagents and durability in the brain; execute remote Code Mode on the user's configured machine.
+- Use the same remote Code Mode protocol whether the brain initiates a connection or accepts a runner connection, on loopback or across machines. Keep socket and storage adapters replaceable for WASM hosts such as Workers; in-memory storage is not persistent durability. Preserve cancellation and report uncertain remote outcomes without silently replaying dispatched work.
+- Preserve authentic, version-pinned upstream provider system prompts and tool shapes, including names, descriptions, schemas and formats. Keep host, project and Code Mode additions separate. A provider version header is not prompt provenance.
+- Follow Tact's Code Mode, recursive delegation and subagent business logic, using clabby/tact revision cb7e7997bdc895c5116e4fd8d49ff38e844b711f as the reference for this port. Retain this SDK's durable task tree, instruction revisions, accepted-result handling, cancellation, residency and checkpoint recovery.
+- Default subagent admission requires at least Low reasoning effort, Codex ancestry on Luna < Sol < Astra, and registered-parent effort bounds. Claude and custom models outside the ladder are unranked. Apply explicit live runtime caps to new spawns without rewriting existing child settings.
+- Authorize a requested Pro mode before resolving unsupported target models to Standard. Record the actual mode, bound descendants by that mode, and include it in spawn/list/wait/roster reports. Preserve mode across child creation and checkpoints; older records without a mode default to Standard and retain their Standard serialization.
+- Append effective model, effort and mode context to each new child turn, including deferred and delegated follow-ups. Replay accepted durable prompts with their existing instruction revisions. AgentContext may also wrap root or auxiliary prompts without discarding transcript or media content.
+- Keep existing spawn inheritance, typed output_contract and legacy output_schema entry points. Do not replace caller-controlled message, concurrency, residency or wait policies with Tact's fixed limits. Do not introduce new routing policy as part of copying Tact business logic.
 - Preserve native and WASM parity for agents, subagents, durability, and shared runtime contracts, including existing spawn/events, cancellation, and checkpoint/resume behavior. Keep host dependencies behind Rust platform interfaces; support WASM-local futures. Validate affected crate builds on native and WASM targets.
 - Keep the dev loop fast: build only what changed, reuse caches, and avoid redundant checks. Honor requests to skip builds or CI.
+- Keep routine Cargo checks focused on the default SDK member. Compile TUI components and binaries explicitly when they change.
+- Use cargo check --locked --lib and cargo check --locked --lib --target wasm32-unknown-unknown for SDK checks. Use explicit -p nanocode-tui or -p nanocodex for terminal work; --workspace is an intentional whole-repository check.
+- Do not add tests or test-only dependencies. Validate changes with focused native and WASM builds and reproducible runtime measurements.
 - Benchmark performance changes with reproducible commands, inputs, and before/after results. Separate cold builds, incremental builds, and runtime performance.
 - [Principles for fast Tokio applications](https://dial9-rs.github.io/blog/principles-for-fast-tokio-applications/)
 - Keep logs, traces, and benchmark artifacts in ignored output/. Never commit credentials or personal test data.

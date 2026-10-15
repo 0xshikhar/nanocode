@@ -31,9 +31,12 @@ pub use runners::{
 pub use nanocode_backend_codex::{Codex, client::OpenAi};
 pub use nanocode_code_mode::Tool;
 
-pub use nanocode_code_mode::Tools;
-#[cfg(not(target_family = "wasm"))]
+pub use nanocode_code_mode::embedded::{
+    CodeModeExecution, CodeModeHost, CodeModeHostError, CodeModeObserver, CodeModeUpdate,
+};
+pub use nanocode_code_mode::remote::{RemoteCodeModeHost, RemoteTransport};
 pub use nanocode_code_mode::tool;
+pub use nanocode_tool_runtime::Tools;
 
 pub use nanocode_durability::DurableAgentExt;
 
@@ -54,8 +57,8 @@ pub(crate) fn register_builtin_formats(store: &durability::SessionStore) -> dura
     ))
 }
 pub use nanocode_subagents::{
-    AgentDescriptor, AgentId, AgentMessageUpdate, AgentStatus, AgentUpdate, ScopedAgentUpdate,
-    SubagentControl, SubagentRuntimeId,
+    AgentContext, AgentDescriptor, AgentId, AgentMessageUpdate, AgentStatus, AgentUpdate,
+    ScopedAgentUpdate, SubagentControl, SubagentRuntimeId,
 };
 pub use runtime::ClaudeHarness;
 pub use runtime::CodexHarness;
@@ -97,10 +100,10 @@ pub use nanocode_backend_codex::client as oai;
 pub use nanocode_backend_codex::client as codex;
 
 #[doc(inline)]
-pub use nanocode_code_mode as tools;
+pub use nanocode_backend_codex::tools;
 
 #[doc(inline)]
-pub use nanocode_code_mode as oai_tools;
+pub use nanocode_backend_codex::tools as oai_tools;
 
 #[cfg(not(target_family = "wasm"))]
 #[doc(inline)]
@@ -124,7 +127,6 @@ pub mod prelude {
     pub use crate::{Runner, RunnerPool, RunnerServerConfig};
 
     pub use crate::Tools;
-    #[cfg(not(target_family = "wasm"))]
     pub use crate::tool;
     pub use crate::{Agent, ClaudeModel, HarnessFamily, Model, ModelSelection, Thinking};
     pub use crate::{Claude, ClaudeClient};
@@ -135,15 +137,14 @@ pub mod prelude {
     pub use crate::{ComputerConfig, ComputerTools};
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[doc(hidden)]
 pub mod __private {
-    pub use nanocode_code_mode::__private::*;
+    pub use nanocode_tool_runtime::__private::*;
 }
 
 pub use nanocode_backend_codex::builtin_tools as codex_tools;
 
-pub use nanocode_code_mode as code_mode;
+pub use nanocode_backend_codex::tools as code_mode;
 
 pub use nanocode_tools as tool_contract;
 

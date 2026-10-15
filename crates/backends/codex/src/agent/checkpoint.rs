@@ -16,6 +16,7 @@ pub(super) struct ChildState {
     pub(super) session_id: String,
     pub(super) model: Model,
     pub(super) thinking: Thinking,
+    pub(super) reasoning_mode: ReasoningMode,
     pub(super) service_tier: ServiceTier,
     pub(super) stateless_http: bool,
     pub(super) conversation: Option<SessionSnapshot>,
@@ -35,6 +36,7 @@ impl ChildState {
         };
         let session_id = checkpoint.session_id().to_owned();
         let thinking = checkpoint.thinking();
+        let reasoning_mode = checkpoint.reasoning_mode();
         let lineage = checkpoint.lineage().clone();
         let conversation_id = Arc::<str>::from(checkpoint.conversation_id());
         let has_conversation = checkpoint.has_conversation();
@@ -58,6 +60,7 @@ impl ChildState {
             session_id,
             model,
             thinking,
+            reasoning_mode,
             service_tier: payload.service_tier,
             stateless_http: payload.stateless_http,
             conversation: payload.conversation,
@@ -73,6 +76,7 @@ impl ChildState {
             NanocodexError::InvalidCheckpoint(format!("invalid session ID: {error}"))
         })?;
         super::spawn::validate_model_thinking(self.model, self.thinking)?;
+        super::spawn::validate_model_reasoning_mode(self.model, self.reasoning_mode)?;
         if let Some(conversation) = &self.conversation {
             conversation.clone().into_resume()?;
         }
@@ -97,7 +101,8 @@ impl ChildState {
             has_conversation,
             payload,
         )
-        .with_service_tier(Some(self.service_tier)))
+        .with_service_tier(Some(self.service_tier))
+        .with_reasoning_mode(self.reasoning_mode))
     }
 }
 
@@ -125,6 +130,7 @@ impl CodexCheckpointExt for SessionCheckpoint {
             session_id: session_id.into(),
             model: snapshot.model()?,
             thinking: snapshot.thinking().unwrap_or(thinking),
+            reasoning_mode: ReasoningMode::Standard,
             service_tier: snapshot.service_tier().unwrap_or(ServiceTier::Standard),
             stateless_http: false,
             lineage,
@@ -157,6 +163,7 @@ impl CodexCheckpointExt for SessionCheckpoint {
             session_id: legacy.session_id,
             model: legacy.model,
             thinking: legacy.thinking,
+            reasoning_mode: ReasoningMode::Standard,
             service_tier: payload.service_tier,
             stateless_http: payload.stateless_http,
             conversation: payload.conversation,
@@ -184,6 +191,7 @@ pub(super) struct CheckpointSource {
     lineage: Lineage,
     conversation_id: Arc<str>,
     stateless_http: bool,
+    reasoning_mode: ReasoningMode,
 }
 
 pub(super) struct ReplayedBoundary(SessionSnapshot);
@@ -194,12 +202,14 @@ impl CheckpointSource {
         lineage: Lineage,
         conversation_id: Arc<str>,
         stateless_http: bool,
+        reasoning_mode: ReasoningMode,
     ) -> Self {
         Self {
             session_id,
             lineage,
             conversation_id,
             stateless_http,
+            reasoning_mode,
         }
     }
 
@@ -228,6 +238,7 @@ impl CheckpointSource {
             thinking,
             service_tier,
             stateless_http: self.stateless_http,
+            reasoning_mode: self.reasoning_mode,
             conversation,
             lineage: self.lineage.clone(),
             conversation_id: Arc::clone(&self.conversation_id),

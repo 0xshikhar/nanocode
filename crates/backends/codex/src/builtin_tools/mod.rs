@@ -8,6 +8,23 @@ pub mod contract {
 }
 pub use nanocode_media::image;
 
+pub mod apply_patch;
+#[cfg(not(target_family = "wasm"))]
+pub mod attachment;
+pub mod extensions;
+pub mod standard;
+pub use standard::StandardTool;
+#[cfg(not(target_family = "wasm"))]
+mod plan;
+#[cfg(not(target_family = "wasm"))]
+mod shell;
+#[cfg(not(target_family = "wasm"))]
+mod view_image;
+#[cfg(not(target_family = "wasm"))]
+pub mod workspace_runtime;
+#[cfg(not(target_family = "wasm"))]
+pub use workspace_runtime::WorkspaceTools;
+
 mod runtime_config;
 
 pub use runtime_config::{ImageGenerationConfig, WebSearchConfig};
@@ -24,13 +41,27 @@ pub use nanocode_tools::__private;
 pub fn tool_runtime(
     workspace: impl AsRef<std::path::Path>,
     config: &crate::client::tower::ResponsesServiceConfig,
-    tools: &nanocode_code_mode::Tools,
-) -> nanocode_code_mode::runtime::ToolRuntime {
+    tools: &nanocode_tool_runtime::Tools,
+) -> nanocode_tool_runtime::runtime::ToolRuntime {
     let workspace = workspace.as_ref();
+    if tools.has_code_mode_host() {
+        return nanocode_tool_runtime::runtime::ToolRuntime::new_with_tools(
+            workspace,
+            Vec::new(),
+            tools,
+        );
+    }
     #[cfg(not(target_family = "wasm"))]
     {
-        nanocode_code_mode::runtime::ToolRuntime::new_with_tools(
-            workspace,
+        let tools = if tools.workspace_enabled() && tools.workspace_source().is_none() {
+            tools
+                .clone()
+                .with_workspace_source(WorkspaceTools::new(workspace).source)
+        } else {
+            tools.clone()
+        };
+        let mut handlers = if tools.web_search_enabled() || tools.image_generation_enabled() {
+            nanocode_tls::install_default_rustls_crypto_provider();
             handlers(
                 tools.web_search_enabled().then(|| WebSearchConfig {
                     endpoint: config.search_endpoint(),
@@ -44,14 +75,19 @@ pub fn tool_runtime(
                         save_root: workspace.to_path_buf(),
                     }),
                 tools.remote_http_client().unwrap_or_default(),
-            ),
-            tools,
-        )
+            )
+        } else {
+            Vec::new()
+        };
+        if tools.workspace_enabled() {
+            handlers.push(std::sync::Arc::new(plan::UpdatePlanTool::new()));
+        }
+        nanocode_tool_runtime::runtime::ToolRuntime::new_with_tools(workspace, handlers, &tools)
     }
     #[cfg(target_family = "wasm")]
     {
         let _ = config;
-        nanocode_code_mode::runtime::ToolRuntime::new_with_tools(workspace, Vec::new(), tools)
+        nanocode_tool_runtime::runtime::ToolRuntime::new_with_tools(workspace, Vec::new(), tools)
     }
 }
 

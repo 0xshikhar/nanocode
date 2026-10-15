@@ -82,6 +82,22 @@ impl super::backend::AgentFactory for OpenAiAgentFactory {
             ))
         })
     }
+    fn reasoning_mode(
+        &self,
+        _parent: AgentHandle,
+    ) -> super::backend::BackendFuture<Result<ReasoningMode>> {
+        let commands = self.commands.upgrade();
+        let shutdown = self.shutdown.clone();
+        Box::pin(async move {
+            let commands = commands.ok_or(NanocodexError::AgentStopped)?;
+            let snapshot = request_command(&commands, &shutdown, |result| Command::ChildSnapshot {
+                result,
+            })
+            .await?;
+            Ok(snapshot.reasoning_mode)
+        })
+    }
+
     fn restore(
         &self,
         _parent: AgentHandle,
@@ -96,7 +112,8 @@ impl super::backend::AgentFactory for OpenAiAgentFactory {
             let restored = request_command(&commands, &shutdown, |result| Command::Spawn {
                 options: SpawnOptions::new()
                     .model(snapshot.model)
-                    .thinking(snapshot.thinking),
+                    .thinking(snapshot.thinking)
+                    .reasoning_mode(snapshot.reasoning_mode),
                 restore: Some(snapshot),
                 host_context,
                 result,

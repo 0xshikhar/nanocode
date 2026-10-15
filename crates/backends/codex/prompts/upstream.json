@@ -1,0 +1,37 @@
+{
+  "repository": "https://github.com/openai/codex",
+  "revision": "ac9db7d8b556c7c34a73793aed34b1f980a4fe39",
+  "source_url": "https://raw.githubusercontent.com/openai/codex/ac9db7d8b556c7c34a73793aed34b1f980a4fe39/codex-rs/models-manager/models.json",
+  "source_sha256": "943ca7fe1d19ed019054158303f0dbbd80b3bef43b3aa425a71aa7cb3fb52c2b",
+  "extraction": "UTF-8 encoding of the decoded instructions_template JSON string, with no trimming or added newline.",
+  "prompts": [
+    {
+      "file": "astra.md",
+      "model_slug": "gpt-6-astra",
+      "json_pointer": "/models/0/model_messages/instructions_template",
+      "sha256": "35bd51b5f577cb7b24cd5f4629e49e37cb724ab57754ce6f8f202001635bab8a",
+      "bytes": 21428
+    },
+    {
+      "file": "sol.md",
+      "model_slug": "gpt-6.1-sol",
+      "json_pointer": "/models/1/model_messages/instructions_template",
+      "sha256": "e1bdd4f8f0df4b20f4a0ffc8a861ce819df45325d8cecdfb92e80379cf8d142e",
+      "bytes": 21779
+    },
+    {
+      "file": "luna.md",
+      "model_slug": "gpt-6-luna",
+      "json_pointer": "/models/3/model_messages/instructions_template",
+      "sha256": "b707476816bfe5e571a1bd2179f130fff2b132da5ab8e61063acdb7fd24daf12",
+      "bytes": 18043
+    }
+  ],
+  "scope": "Exact base instruction strings only. Runtime additions, permissions, tool definitions, tool availability and prompt assembly are separate and are not certified by this file.",
+  "local_prompts": [
+    {
+      "file": "glm.md",
+      "status": "Project-authored adaptation for non-OpenAI models; no upstream Codex equivalence claimed."
+    }
+  ]
+}

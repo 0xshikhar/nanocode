@@ -184,6 +184,10 @@ impl AgentHandle {
         self.native.settings(self.clone()).await
     }
 
+    pub async fn reasoning_mode(&self) -> Result<crate::ReasoningMode> {
+        self.native.reasoning_mode(self.clone()).await
+    }
+
     pub fn harness_family(&self) -> crate::HarnessFamily {
         self.model.family()
     }

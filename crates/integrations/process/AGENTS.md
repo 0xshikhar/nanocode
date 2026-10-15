@@ -1,0 +1,1 @@
+Native shell, process-group cleanup, environment handling and PTY execution. Keep tool descriptions and handlers in each backend. Preserve nanocode-tool-runtime::shell reexports. This adapter has no dependencies on WASM.

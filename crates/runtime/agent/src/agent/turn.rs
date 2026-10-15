@@ -307,6 +307,7 @@ pub struct SpawnOptions {
     pub harness_model: Option<crate::ModelSelection>,
     #[doc(hidden)]
     pub thinking: Option<Thinking>,
+    pub reasoning_mode: Option<crate::ReasoningMode>,
     #[doc(hidden)]
     pub stateless_http: bool,
 }
@@ -319,6 +320,7 @@ impl SpawnOptions {
             harness: None,
             harness_model: None,
             thinking: None,
+            reasoning_mode: None,
             stateless_http: false,
         }
     }
@@ -421,6 +423,17 @@ impl SpawnOptions {
     pub const fn thinking(mut self, thinking: Thinking) -> Self {
         self.thinking = Some(thinking);
         self
+    }
+
+    #[must_use]
+    pub const fn reasoning_mode(mut self, reasoning_mode: crate::ReasoningMode) -> Self {
+        self.reasoning_mode = Some(reasoning_mode);
+        self
+    }
+
+    #[must_use]
+    pub const fn selected_reasoning_mode(&self) -> Option<crate::ReasoningMode> {
+        self.reasoning_mode
     }
 
     #[doc(hidden)]

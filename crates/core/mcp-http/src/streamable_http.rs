@@ -1,0 +1,739 @@
+use std::{
+    sync::{Arc, Mutex, MutexGuard, PoisonError},
+    time::Duration,
+};
+
+use futures_util::StreamExt;
+use http::{HeaderName, HeaderValue, Method};
+use nanocode_mcp::{
+    Error as SessionError, Inbound, Message, Outgoing, RequestId,
+    protocol::{INITIALIZE, INITIALIZED},
+    sse,
+};
+use reqwest::{
+    StatusCode,
+    header::{ACCEPT, CONTENT_LENGTH, CONTENT_TYPE, WWW_AUTHENTICATE},
+};
+use tokio::task::{JoinHandle, JoinSet};
+
+use crate::oauth::OAuthRuntime;
+
+const HEADER_SESSION_ID: HeaderName = HeaderName::from_static("mcp-session-id");
+const HEADER_PROTOCOL_VERSION: HeaderName = HeaderName::from_static("mcp-protocol-version");
+const HEADER_LAST_EVENT_ID: HeaderName = HeaderName::from_static("last-event-id");
+const EVENT_STREAM_MIME_TYPE: &str = "text/event-stream";
+const JSON_MIME_TYPE: &str = "application/json";
+const ACCEPT_MCP: &str = "text/event-stream, application/json";
+const RESERVED_HEADERS: [&str; 3] = ["accept", "mcp-session-id", "last-event-id"];
+const MAX_SSE_EVENT_BYTES: usize = 16 * 1024 * 1024;
+const SESSION_CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
+const RESPONSE_DRAIN_TIMEOUT: Duration = Duration::from_millis(50);
+const SSE_RETRY_BASE: Duration = Duration::from_secs(1);
+const CLOSED_BEFORE_RESPONSE: &str =
+    "streamable HTTP response stream closed before its final response";
+
+pub enum HttpAuth {
+    None,
+    Bearer(String),
+    OAuth(Arc<OAuthRuntime>),
+}
+
+pub fn validate_custom_headers<'a>(
+    names: impl IntoIterator<Item = &'a HeaderName>,
+) -> Result<(), String> {
+    for name in names {
+        if RESERVED_HEADERS.contains(&name.as_str()) {
+            return Err(format!(
+                "Header name '{name}' is reserved and conflicts with default headers"
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone, Default)]
+struct SessionState {
+    id: Option<Arc<str>>,
+    protocol_version: Option<HeaderValue>,
+    initialize: Option<Message>,
+}
+
+struct Shared {
+    url: String,
+    client: reqwest::Client,
+    auth: HttpAuth,
+    inbound: Inbound,
+    session: Mutex<SessionState>,
+    reinitialize: tokio::sync::Mutex<()>,
+    listener: Mutex<Option<JoinHandle<()>>>,
+}
+
+enum PostError {
+    SessionExpired,
+    Failed(String),
+}
+
+impl From<PostError> for String {
+    fn from(error: PostError) -> Self {
+        match error {
+            PostError::SessionExpired => "Session expired (HTTP 404)".to_owned(),
+            PostError::Failed(error) => error,
+        }
+    }
+}
+
+enum StreamEnd {
+    Response,
+    Closed,
+    Failed(String),
+    Fatal(String),
+}
+
+#[derive(Default)]
+struct Cursor {
+    last_event_id: Option<String>,
+    retry: Option<Duration>,
+}
+
+pub fn spawn(
+    url: String,
+    client: reqwest::Client,
+    auth: HttpAuth,
+    outgoing: Outgoing,
+    inbound: Inbound,
+) {
+    let shared = Arc::new(Shared {
+        url,
+        client,
+        auth,
+        inbound,
+        session: Mutex::new(SessionState::default()),
+        reinitialize: tokio::sync::Mutex::new(()),
+        listener: Mutex::new(None),
+    });
+    drop(tokio::spawn(drive(shared, outgoing)));
+}
+
+async fn drive(shared: Arc<Shared>, mut outgoing: Outgoing) {
+    let mut tasks = JoinSet::new();
+    let mut initialized = false;
+    loop {
+        let message = tokio::select! {
+            message = outgoing.next() => message,
+            Some(_) = tasks.join_next(), if !tasks.is_empty() => continue,
+        };
+        let Some(message) = message else {
+            break;
+        };
+        if !initialized {
+            match &message {
+                Message::Request { id, method, .. }
+                    if method == INITIALIZE && shared.state().initialize.is_none() =>
+                {
+                    match shared.post_initialize(&message).await {
+                        Ok((response, session_id)) => {
+                            *shared.state() = SessionState {
+                                id: session_id,
+                                protocol_version: negotiated_version(&response),
+                                initialize: Some(message.clone()),
+                            };
+                            shared.inbound.deliver(response);
+                        }
+                        Err(error) => shared.inbound.fail(id, SessionError::Transport(error)),
+                    }
+                    continue;
+                }
+                Message::Notification { method, .. } if method == INITIALIZED => {
+                    initialized = true;
+                    let state = shared.state().clone();
+                    if let Err(error) = shared.post(&message, &state).await {
+                        tracing::error!(
+                            error = %String::from(error),
+                            "failed to send MCP initialized notification"
+                        );
+                        shared.inbound.close();
+                        break;
+                    }
+                    shared.restart_listener();
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        let shared = Arc::clone(&shared);
+        tasks.spawn(async move { shared.dispatch(message).await });
+    }
+    if let Some(listener) = shared.listener().take() {
+        listener.abort();
+    }
+    tasks.abort_all();
+    shared.delete_session().await;
+}
+
+fn negotiated_version(message: &Message) -> Option<HeaderValue> {
+    let Message::Response { result, .. } = message else {
+        return None;
+    };
+    result
+        .get("protocolVersion")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|version| HeaderValue::from_str(version).ok())
+}
+
+fn content_type(response: &reqwest::Response) -> Option<String> {
+    response
+        .headers()
+        .get(CONTENT_TYPE)
+        .map(|value| String::from_utf8_lossy(value.as_bytes()).into_owned())
+}
+
+fn is_mime(content_type: Option<&str>, mime: &str) -> bool {
+    content_type.is_some_and(|content_type| content_type.as_bytes().starts_with(mime.as_bytes()))
+}
+
+fn client_error(error: &reqwest::Error) -> String {
+    format!("Client error: {}", crate::error_chain(error))
+}
+
+fn challenge_error(response: &reqwest::Response) -> Option<String> {
+    let header = response.headers().get(WWW_AUTHENTICATE)?;
+    let Ok(header) = header.to_str() else {
+        return Some(
+            "unexpected server response: invalid www-authenticate header value".to_owned(),
+        );
+    };
+    match response.status() {
+        StatusCode::UNAUTHORIZED => {
+            Some(format!("Auth required: authorization required: {header}"))
+        }
+        StatusCode::FORBIDDEN => Some(format!("Insufficient scope: insufficient scope: {header}")),
+        _ => None,
+    }
+}
+
+impl Shared {
+    fn state(&self) -> MutexGuard<'_, SessionState> {
+        self.session.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn listener(&self) -> MutexGuard<'_, Option<JoinHandle<()>>> {
+        self.listener.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    async fn send(
+        &self,
+        method: &Method,
+        build: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, String> {
+        let token = match &self.auth {
+            HttpAuth::None => None,
+            HttpAuth::Bearer(token) => Some(token.clone()),
+            HttpAuth::OAuth(runtime) => Some(runtime.access_token().await?),
+        };
+        let request = |token: Option<&str>| {
+            let mut request = build(self.client.request(method.clone(), &self.url));
+            if let Some(token) = token {
+                request = request.bearer_auth(token);
+            }
+            request
+        };
+        let response = request(token.as_deref())
+            .send()
+            .await
+            .map(nanocode_http::decode_response)
+            .map_err(|error| client_error(&error))?;
+        if response.status() == StatusCode::UNAUTHORIZED
+            && response.headers().contains_key(WWW_AUTHENTICATE)
+            && let (HttpAuth::OAuth(runtime), Some(sent)) = (&self.auth, token.as_deref())
+        {
+            match runtime.refresh_after_rejection(sent).await {
+                Ok(fresh) if fresh != sent => {
+                    return request(Some(&fresh))
+                        .send()
+                        .await
+                        .map(nanocode_http::decode_response)
+                        .map_err(|error| client_error(&error));
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::debug!("token refresh after server rejection failed: {error}");
+                }
+            }
+        }
+        Ok(response)
+    }
+
+    async fn post_initialize(
+        &self,
+        initialize: &Message,
+    ) -> Result<(Message, Option<Arc<str>>), String> {
+        let body = initialize
+            .to_vec()
+            .map_err(|error| format!("Deserialize error: {error}"))?;
+        let response = self
+            .send(&Method::POST, |request| {
+                request
+                    .header(ACCEPT, ACCEPT_MCP)
+                    .header(CONTENT_TYPE, JSON_MIME_TYPE)
+                    .body(body.clone())
+            })
+            .await?;
+        if let Some(error) = challenge_error(&response) {
+            return Err(error);
+        }
+        let status = response.status();
+        if matches!(status, StatusCode::ACCEPTED | StatusCode::NO_CONTENT) {
+            return Err("unexpected server response: expect initialized, accepted".to_owned());
+        }
+        let session_id = response
+            .headers()
+            .get(&HEADER_SESSION_ID)
+            .and_then(|value| value.to_str().ok())
+            .map(Arc::from);
+        let content_type = content_type(&response);
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            if is_mime(content_type.as_deref(), JSON_MIME_TYPE)
+                && let Ok(message @ Message::Error { .. }) = Message::from_slice(body.as_bytes())
+            {
+                return Ok((
+                    with_request_id(message, initialize.request_id()),
+                    session_id,
+                ));
+            }
+            return Err(format!("unexpected server response: HTTP {status}: {body}"));
+        }
+        if is_mime(content_type.as_deref(), EVENT_STREAM_MIME_TYPE) {
+            let mut response = response;
+            let mut parser = sse::Parser::new(MAX_SSE_EVENT_BYTES);
+            let mut events = Vec::new();
+            while let Some(chunk) = response
+                .chunk()
+                .await
+                .map_err(|error| format!("SSE error: {}", client_error(&error)))?
+            {
+                parser
+                    .feed(&chunk, &mut events)
+                    .map_err(|error| format!("SSE error: {error}"))?;
+                for event in events.drain(..) {
+                    let Some(data) = event.data.filter(|data| !data.trim().is_empty()) else {
+                        continue;
+                    };
+                    let message = Message::from_slice(data.as_bytes())
+                        .map_err(|error| format!("Deserialize error: {error}"))?;
+                    if message.is_response() {
+                        return Ok((message, session_id));
+                    }
+                    tracing::debug!(
+                        ?message,
+                        "received message before initialize response; continuing to drain stream"
+                    );
+                }
+            }
+            return Err("unexpected server response: empty sse stream".to_owned());
+        }
+        if is_mime(content_type.as_deref(), JSON_MIME_TYPE) {
+            let body = response
+                .bytes()
+                .await
+                .map_err(|error| client_error(&error))?;
+            let message = Message::from_slice(&body)
+                .map_err(|error| format!("Deserialize error: {error}"))?;
+            return Ok((message, session_id));
+        }
+        Err(format!("Unexpected content type: {content_type:?}"))
+    }
+
+    async fn dispatch(self: Arc<Self>, message: Message) {
+        let request_id = message.request_id().cloned();
+        if let Err(error) = self.post_with_recovery(&message).await {
+            match request_id {
+                Some(id) => self.inbound.fail(&id, SessionError::Transport(error)),
+                None => tracing::warn!(%error, "failed to send MCP message"),
+            }
+        }
+    }
+
+    async fn post_with_recovery(self: &Arc<Self>, message: &Message) -> Result<(), String> {
+        let state = self.state().clone();
+        match self.post(message, &state).await {
+            Err(PostError::SessionExpired) if state.initialize.is_some() => {
+                tracing::info!(
+                    "session expired (HTTP 404), attempting transparent re-initialization"
+                );
+                self.reinitialize(state.id.clone()).await?;
+                let state = self.state().clone();
+                self.post(message, &state).await.map_err(String::from)
+            }
+            result => result.map_err(String::from),
+        }
+    }
+
+    async fn reinitialize(self: &Arc<Self>, stale: Option<Arc<str>>) -> Result<(), String> {
+        let _guard = self.reinitialize.lock().await;
+        let state = self.state().clone();
+        if state.id != stale {
+            return Ok(());
+        }
+        let Some(initialize) = state.initialize else {
+            return Err(String::from(PostError::SessionExpired));
+        };
+        let (response, session_id) = self.post_initialize(&initialize).await?;
+        if let Message::Error { error, .. } = &response {
+            return Err(format!("MCP re-initialization failed: {error}"));
+        }
+        let state = SessionState {
+            id: session_id,
+            protocol_version: negotiated_version(&response),
+            initialize: Some(initialize),
+        };
+        self.post(&Message::notification(INITIALIZED, None), &state)
+            .await
+            .map_err(String::from)?;
+        *self.state() = state;
+        self.restart_listener();
+        Ok(())
+    }
+
+    fn with_session<'a>(
+        state: &'a SessionState,
+    ) -> impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder + 'a {
+        move |mut request| {
+            if let Some(id) = &state.id {
+                request = request.header(HEADER_SESSION_ID, id.as_ref());
+            }
+            if let Some(version) = &state.protocol_version {
+                request = request.header(HEADER_PROTOCOL_VERSION, version.clone());
+            }
+            request
+        }
+    }
+
+    async fn post(
+        self: &Arc<Self>,
+        message: &Message,
+        state: &SessionState,
+    ) -> Result<(), PostError> {
+        let body = message
+            .to_vec()
+            .map_err(|error| PostError::Failed(format!("Deserialize error: {error}")))?;
+        let session = Self::with_session(state);
+        let response = self
+            .send(&Method::POST, |request| {
+                session(request)
+                    .header(ACCEPT, ACCEPT_MCP)
+                    .header(CONTENT_TYPE, JSON_MIME_TYPE)
+                    .body(body.clone())
+            })
+            .await
+            .map_err(PostError::Failed)?;
+        if let Some(error) = challenge_error(&response) {
+            return Err(PostError::Failed(error));
+        }
+        let status = response.status();
+        if matches!(status, StatusCode::ACCEPTED | StatusCode::NO_CONTENT) {
+            return Ok(());
+        }
+        if status == StatusCode::NOT_FOUND && state.id.is_some() {
+            return Err(PostError::SessionExpired);
+        }
+        let content_type = content_type(&response);
+        let empty = response
+            .headers()
+            .get(CONTENT_LENGTH)
+            .is_some_and(|length| length.as_bytes() == b"0");
+        if status.is_success() && empty && !message.is_request() {
+            return Ok(());
+        }
+        if !status.is_success() {
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "<failed to read response body>".to_owned());
+            if is_mime(content_type.as_deref(), JSON_MIME_TYPE) {
+                match Message::from_slice(body.as_bytes()) {
+                    Ok(error @ Message::Error { .. }) => {
+                        self.inbound
+                            .deliver(with_request_id(error, message.request_id()));
+                        return Ok(());
+                    }
+                    _ => tracing::warn!(
+                        "HTTP {status}: could not parse JSON body as a JSON-RPC error"
+                    ),
+                }
+            }
+            return Err(PostError::Failed(format!(
+                "unexpected server response: HTTP {status}: {body}"
+            )));
+        }
+        if is_mime(content_type.as_deref(), EVENT_STREAM_MIME_TYPE) {
+            return self
+                .follow_response_stream(response, message.request_id())
+                .await;
+        }
+        if is_mime(content_type.as_deref(), JSON_MIME_TYPE) {
+            let body = response
+                .bytes()
+                .await
+                .map_err(|error| PostError::Failed(client_error(&error)))?;
+            return match Message::from_slice(&body) {
+                Ok(reply) => {
+                    self.inbound
+                        .deliver(with_request_id(reply, message.request_id()));
+                    Ok(())
+                }
+                Err(error) if message.is_request() => {
+                    Err(PostError::Failed(format!("Deserialize error: {error}")))
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        "could not parse JSON response as a JSON-RPC message, treating as accepted: {error}"
+                    );
+                    Ok(())
+                }
+            };
+        }
+        tracing::error!("unexpected content type: {content_type:?}");
+        Err(PostError::Failed(format!(
+            "Unexpected content type: {content_type:?}"
+        )))
+    }
+
+    async fn follow_response_stream(
+        self: &Arc<Self>,
+        response: reqwest::Response,
+        request_id: Option<&RequestId>,
+    ) -> Result<(), PostError> {
+        let mut cursor = Cursor::default();
+        let mut response = response;
+        loop {
+            let end = self.consume(response, &mut cursor, true).await;
+            let Some(id) = request_id else {
+                return Ok(());
+            };
+            let wait = match end {
+                StreamEnd::Response => return Ok(()),
+                StreamEnd::Fatal(error) => {
+                    tracing::warn!("fatal sse stream error: {error}");
+                    return Err(PostError::Failed(CLOSED_BEFORE_RESPONSE.to_owned()));
+                }
+                _ if cursor.last_event_id.is_none() => {
+                    tracing::debug!(
+                        "sse response ended before an event ID was received; cannot resume"
+                    );
+                    return Err(PostError::Failed(CLOSED_BEFORE_RESPONSE.to_owned()));
+                }
+                StreamEnd::Closed => cursor.retry.take().unwrap_or(SSE_RETRY_BASE),
+                StreamEnd::Failed(error) => {
+                    tracing::warn!("sse stream error: {error}");
+                    Duration::ZERO
+                }
+            };
+            response = self
+                .reconnect(&mut cursor, wait, Some(id))
+                .await
+                .ok_or_else(|| PostError::Failed(CLOSED_BEFORE_RESPONSE.to_owned()))?;
+        }
+    }
+
+    async fn consume(
+        &self,
+        mut response: reqwest::Response,
+        cursor: &mut Cursor,
+        close_on_response: bool,
+    ) -> StreamEnd {
+        let mut parser = sse::Parser::new(MAX_SSE_EVENT_BYTES);
+        let mut events = Vec::new();
+        loop {
+            let chunk = match response.chunk().await {
+                Ok(Some(chunk)) => chunk,
+                Ok(None) => return StreamEnd::Closed,
+                Err(error) => return StreamEnd::Failed(client_error(&error)),
+            };
+            if let Err(error) = parser.feed(&chunk, &mut events) {
+                return StreamEnd::Fatal(error.to_string());
+            }
+            for event in events.drain(..) {
+                if let Some(retry) = event.retry {
+                    cursor.retry = Some(Duration::from_millis(retry));
+                }
+                if let Some(id) = &event.id {
+                    cursor.last_event_id = Some(id.clone());
+                }
+                if !event.is_message() {
+                    continue;
+                }
+                let Some(data) = event.data else {
+                    continue;
+                };
+                let message = match Message::from_slice(data.as_bytes()) {
+                    Ok(message) => message,
+                    Err(error) => {
+                        tracing::debug!(
+                            last_event_id = cursor.last_event_id.as_deref().unwrap_or(""),
+                            "failed to deserialize server message: {error}"
+                        );
+                        continue;
+                    }
+                };
+                let is_response = message.is_response();
+                if !self.inbound.deliver(message) {
+                    return StreamEnd::Closed;
+                }
+                if close_on_response && is_response {
+                    let _ = tokio::time::timeout(RESPONSE_DRAIN_TIMEOUT, async {
+                        while let Ok(Some(_)) = response.chunk().await {}
+                    })
+                    .await;
+                    return StreamEnd::Response;
+                }
+            }
+        }
+    }
+
+    async fn reconnect(
+        &self,
+        cursor: &mut Cursor,
+        initial_wait: Duration,
+        pending: Option<&RequestId>,
+    ) -> Option<reqwest::Response> {
+        let mut wait = initial_wait;
+        let mut attempt = 0_u32;
+        loop {
+            if !wait.is_zero() {
+                tokio::time::sleep(wait).await;
+            }
+            if !self.inbound.is_alive() || pending.is_some_and(|id| !self.inbound.is_pending(id)) {
+                return None;
+            }
+            match self.get(cursor.last_event_id.as_deref()).await {
+                Ok(Some(response)) => return Some(response),
+                Ok(None) => tracing::debug!("retry sse stream error: server does not support SSE"),
+                Err(error) => tracing::debug!("retry sse stream error: {error}"),
+            }
+            attempt = attempt.saturating_add(1);
+            let backoff = SSE_RETRY_BASE.saturating_mul(2_u32.saturating_pow(attempt));
+            wait = cursor.retry.map_or(backoff, |retry| retry.max(backoff));
+        }
+    }
+
+    async fn get(&self, last_event_id: Option<&str>) -> Result<Option<reqwest::Response>, String> {
+        let state = self.state().clone();
+        let session = Self::with_session(&state);
+        let response = self
+            .send(&Method::GET, |request| {
+                let mut request = session(request).header(ACCEPT, ACCEPT_MCP);
+                if let Some(last_event_id) = last_event_id {
+                    request = request.header(HEADER_LAST_EVENT_ID, last_event_id);
+                }
+                request
+            })
+            .await?;
+        if response.status() == StatusCode::METHOD_NOT_ALLOWED {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Err(format!(
+                "Client error: HTTP status {} for url ({})",
+                response.status(),
+                self.url
+            ));
+        }
+        let content_type = content_type(&response);
+        if !is_mime(content_type.as_deref(), EVENT_STREAM_MIME_TYPE)
+            && !is_mime(content_type.as_deref(), JSON_MIME_TYPE)
+        {
+            return Err(format!("Unexpected content type: {content_type:?}"));
+        }
+        Ok(Some(response))
+    }
+
+    fn restart_listener(self: &Arc<Self>) {
+        let has_session = self.state().id.is_some();
+        let mut listener = self.listener();
+        if let Some(previous) = listener.take() {
+            previous.abort();
+        }
+        if has_session {
+            *listener = Some(tokio::spawn(Arc::clone(self).listen()));
+        }
+    }
+
+    async fn listen(self: Arc<Self>) {
+        let mut cursor = Cursor::default();
+        let mut response = match self.get(None).await {
+            Ok(Some(response)) => response,
+            Ok(None) => {
+                tracing::debug!("server doesn't support sse, skip common stream");
+                return;
+            }
+            Err(error) => {
+                tracing::error!("fail to get common stream: {error}");
+                return;
+            }
+        };
+        loop {
+            let wait = match self.consume(response, &mut cursor, false).await {
+                StreamEnd::Fatal(error) => {
+                    tracing::warn!("sse client event stream terminated with error: {error}");
+                    return;
+                }
+                StreamEnd::Closed | StreamEnd::Response => {
+                    cursor.retry.take().unwrap_or(SSE_RETRY_BASE)
+                }
+                StreamEnd::Failed(error) => {
+                    tracing::warn!("sse stream error: {error}");
+                    Duration::ZERO
+                }
+            };
+            match self.reconnect(&mut cursor, wait, None).await {
+                Some(next) => response = next,
+                None => return,
+            }
+        }
+    }
+
+    async fn delete_session(&self) {
+        let state = self.state().clone();
+        let Some(session_id) = state.id.clone() else {
+            return;
+        };
+        let session = Self::with_session(&state);
+        match tokio::time::timeout(
+            SESSION_CLEANUP_TIMEOUT,
+            self.send(&Method::DELETE, &session),
+        )
+        .await
+        {
+            Ok(Ok(response)) if response.status() == StatusCode::METHOD_NOT_ALLOWED => {
+                tracing::debug!("this server doesn't support deleting session");
+            }
+            Ok(Ok(response)) if response.status().is_success() => {
+                tracing::info!(session_id = session_id.as_ref(), "delete session success");
+            }
+            Ok(Ok(response)) => tracing::error!(
+                session_id = session_id.as_ref(),
+                "fail to delete session: HTTP status {}",
+                response.status()
+            ),
+            Ok(Err(error)) => tracing::error!(
+                session_id = session_id.as_ref(),
+                "fail to delete session: {error}"
+            ),
+            Err(_) => tracing::warn!(
+                session_id = session_id.as_ref(),
+                "session cleanup timed out after {SESSION_CLEANUP_TIMEOUT:?}"
+            ),
+        }
+    }
+}
+
+fn with_request_id(message: Message, request_id: Option<&RequestId>) -> Message {
+    match (message, request_id) {
+        (Message::Error { id: None, error }, Some(id)) => Message::Error {
+            id: Some(id.clone()),
+            error,
+        },
+        (message, _) => message,
+    }
+}

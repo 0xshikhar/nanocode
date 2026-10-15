@@ -19,6 +19,7 @@
 "chrono" = { "workspace" = true  }
 "futures-util" = { "workspace" = true }
 "nanocode-code-mode" = { "workspace" = true  }
+"nanocode-tool-runtime" = { "workspace" = true }
 "serde" = { "workspace" = true }
 "serde_json" = { "workspace" = true }
 "sha2" = { "workspace" = true  }
@@ -51,8 +52,6 @@
 "tokio" = { "workspace" = true, "features" = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time", "rt"] }
 "getrandom" = { "workspace" = true  }
 "reqwest" = { "workspace" = true  }
-"rustls" = { "workspace" = true, "features" = ["std"]  }
-"rustls-native-certs" = { "workspace" = true  }
 "tokio-tungstenite" = { "workspace" = true  }
 "url" = { "workspace" = true  }
 "nanocode-tls" = { "workspace" = true }
@@ -61,7 +60,6 @@
 ["target"."cfg(target_os = \"macos\")"]
 
 ["target"."cfg(target_os = \"macos\")"."dependencies"]
-"rustls-platform-verifier" = { "version" = "0.7.0"  }
 
 ["lints"]
 "workspace" = true

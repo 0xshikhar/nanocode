@@ -5,17 +5,18 @@ use super::{
     harness::{self, HarnessHandle},
     message::MessageThreads,
     model::{
-        AgentDescriptor, AgentId, AgentMessage, AgentMessageUpdate, AgentStatus, AgentThread,
-        AgentUpdate, MessageDeliveryState, MessageDisposition, MessageId, MessagePriority,
-        MessagePurpose, MessageSender, ScopedAgentUpdate, SubagentRuntimeId, ThreadId,
+        AgentContext, AgentDescriptor, AgentId, AgentMessage, AgentMessageUpdate, AgentStatus,
+        AgentThread, AgentUpdate, MessageDeliveryState, MessageDisposition, MessageId,
+        MessagePriority, MessagePurpose, MessageSender, ScopedAgentUpdate, SubagentRuntimeId,
+        ThreadId,
     },
     platform::{self, Task, timeout_at},
     task_tree::TaskTree,
 };
 use futures_util::future::join_all;
 use nanocode_agent::{
-    AgentEvents, AgentHandle, ModelSelection, Nanocodex, NanocodexError, Result as AgentResult,
-    SessionCheckpoint, Thinking, TurnResult, events::AgentEventKind,
+    AgentEvents, AgentHandle, ModelSelection, Nanocodex, NanocodexError, ReasoningMode,
+    Result as AgentResult, SessionCheckpoint, Thinking, TurnResult, events::AgentEventKind,
 };
 use nanocode_platform::Instant;
 use nanocode_schema::Validator;
@@ -356,6 +357,7 @@ pub struct AgentSummary {
     pub model: Option<ModelSelection>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<Thinking>,
+    pub reasoning_mode: ReasoningMode,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_output: Option<Value>,
 
@@ -376,6 +378,7 @@ pub struct AgentDirectoryEntry {
     pub model: Option<ModelSelection>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<Thinking>,
+    pub reasoning_mode: ReasoningMode,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completion_revision: Option<u64>,
@@ -759,6 +762,7 @@ impl RegistryState {
                     can_manage,
                     model: session.descriptor.model.clone(),
                     thinking: session.descriptor.thinking,
+                    reasoning_mode: session.descriptor.reasoning_mode,
                     completion_revision: session.completion_revision(),
                     resuming: false,
                 })
@@ -2531,6 +2535,7 @@ impl Registry {
         let (harness, harness_task) = harness::spawn(
             root_session_id.clone(),
             descriptor.id,
+            descriptor.context(),
             agent,
             self.capacity.clone(),
             Arc::downgrade(self),
@@ -2630,7 +2635,9 @@ impl Registry {
         root_session_id: &str,
         id: AgentId,
         recovering: bool,
+        context: Option<&AgentContext>,
     ) -> Option<u64> {
+        let mut descriptor = None;
         let revision = {
             let mut state = self.state.lock().await;
             let last_used = state.next_access();
@@ -2659,10 +2666,23 @@ impl Registry {
                 session.submitted_output = None;
                 session.last_used = last_used;
                 session.status = AgentStatus::Running;
+                if let Some(context) = context
+                    && session.descriptor.context().as_ref() != Some(context)
+                {
+                    session.descriptor.model = Some(context.model.clone());
+                    session.descriptor.thinking = Some(context.thinking);
+                    session.descriptor.reasoning_mode = context.reasoning_mode;
+                    let mut updated = session.descriptor.clone();
+                    updated.task = session.binding_task.clone();
+                    descriptor = Some(updated);
+                }
                 Some(revision)
             }
         };
         if revision.is_some() {
+            if let Some(descriptor) = descriptor {
+                self.send(root_session_id, AgentUpdate::Added(descriptor));
+            }
             self.send_status(
                 root_session_id,
                 AgentUpdate::Status {
@@ -3182,6 +3202,11 @@ impl Registry {
                 })?;
             let contract = OutputContract::compile(&schema)?;
             let needs_assignment = !snapshot.has_conversation();
+            let context = super::model::AgentContext {
+                model: snapshot.model(),
+                thinking: snapshot.thinking(),
+                reasoning_mode: snapshot.reasoning_mode(),
+            };
             let (agent, events) = parent
                 .restore_runtime(snapshot, host_context)
                 .await
@@ -3198,6 +3223,7 @@ impl Registry {
             let (harness, task) = harness::spawn(
                 root.clone(),
                 id,
+                Some(context.clone()),
                 agent,
                 self.capacity.clone(),
                 Arc::downgrade(self),
@@ -3212,6 +3238,9 @@ impl Registry {
                 .sessions
                 .get_mut(&id)
                 .expect("retained child");
+            session.descriptor.model = Some(context.model);
+            session.descriptor.thinking = Some(context.thinking);
+            session.descriptor.reasoning_mode = context.reasoning_mode;
             session.harness = Some(harness);
             session.harness_task = Some(task);
             session.event_task = Some(event_task);
@@ -3991,6 +4020,7 @@ impl ChildSession {
             status: self.status.clone(),
             model: self.descriptor.model.clone(),
             thinking: self.descriptor.thinking,
+            reasoning_mode: self.descriptor.reasoning_mode,
             last_output,
             completion_revision: self.completion_revision(),
         }

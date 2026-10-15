@@ -100,6 +100,8 @@ pub struct SessionCheckpoint {
     session_id: String,
     model: ModelSelection,
     thinking: Thinking,
+    #[serde(default, skip_serializing_if = "crate::ReasoningMode::is_standard")]
+    reasoning_mode: crate::ReasoningMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     service_tier: Option<ServiceTier>,
     lineage: Lineage,
@@ -129,6 +131,7 @@ impl SessionCheckpoint {
             session_id: session_id.into(),
             model,
             thinking,
+            reasoning_mode: crate::ReasoningMode::Standard,
             service_tier: None,
             lineage,
             conversation_id: conversation_id.into(),
@@ -178,6 +181,10 @@ impl SessionCheckpoint {
                 self.thinking.as_str()
             ));
         }
+        self.model
+            .capabilities(crate::ModelTransport::Native)
+            .check_reasoning_mode(self.reasoning_mode)
+            .map_err(|error| NanocodexError::InvalidCheckpoint(error.to_string()))?;
         let lineage = &self.lineage;
         if lineage.root_session_id.trim().is_empty() {
             return invalid("lineage root session identity must not be empty".into());
@@ -210,6 +217,17 @@ impl SessionCheckpoint {
     #[must_use]
     pub const fn thinking(&self) -> Thinking {
         self.thinking
+    }
+
+    #[must_use]
+    pub const fn reasoning_mode(&self) -> crate::ReasoningMode {
+        self.reasoning_mode
+    }
+
+    #[must_use]
+    pub const fn with_reasoning_mode(mut self, reasoning_mode: crate::ReasoningMode) -> Self {
+        self.reasoning_mode = reasoning_mode;
+        self
     }
 
     #[must_use]
@@ -289,6 +307,7 @@ impl fmt::Debug for SessionCheckpoint {
             .debug_struct("SessionCheckpoint")
             .field("session_id", &self.session_id)
             .field("model", &self.model)
+            .field("reasoning_mode", &self.reasoning_mode)
             .field("service_tier", &self.service_tier)
             .field("lineage", &self.lineage)
             .field("turn_id", &self.turn_id)

@@ -157,9 +157,7 @@ impl ObservabilityBuilder {
     }
 
     pub fn install(self) -> Result<ObservabilityGuard, ObservabilityError> {
-        if rustls::crypto::CryptoProvider::get_default().is_none() {
-            drop(rustls::crypto::ring::default_provider().install_default());
-        }
+        nanocode_tls::install_default_rustls_crypto_provider();
         let (fmt_layer, writer_guard) = match self.writer()? {
             Some(output) => {
                 let (writer, guard) = NonBlockingBuilder::default()

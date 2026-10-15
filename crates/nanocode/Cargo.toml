@@ -18,6 +18,7 @@ description = "Public composition and builders for the Nanocodex Rust agent crat
 rustdoc-args = ["-D", "warnings"]
 
 [dependencies]
+nanocode-tool-runtime.workspace = true
 nanocode-platform.workspace = true
 nanocode-agent.workspace = true
 nanocode-backend-codex.workspace = true

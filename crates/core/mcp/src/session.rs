@@ -1,0 +1,405 @@
+use std::{
+    collections::HashMap,
+    fmt,
+    sync::{Arc, Mutex, MutexGuard, PoisonError, Weak},
+};
+
+use futures_channel::{mpsc, oneshot};
+use serde::{Serialize, de::DeserializeOwned};
+use serde_json::{Value, json};
+
+use crate::{
+    jsonrpc::{METHOD_NOT_FOUND, Message, RequestId, RpcError},
+    protocol::{
+        CANCELLED, CallToolParams, CallToolResult, ELICITATION_CREATE, INITIALIZE, INITIALIZED,
+        Implementation, InitializeParams, InitializeResult, ListResourceTemplatesResult,
+        ListResourcesResult, ListToolsResult, PING, PaginatedParams, RESOURCE_TEMPLATES_LIST,
+        RESOURCES_LIST, RESOURCES_READ, ROOTS_LIST, ReadResourceParams, ReadResourceResult,
+        TOOLS_CALL, TOOLS_LIST,
+    },
+};
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Error {
+    Rpc(RpcError),
+    Transport(String),
+    Closed,
+    Cancelled(Option<String>),
+    InvalidResult { method: String, error: String },
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Rpc(error) => write!(f, "Mcp error: {error}"),
+            Self::Transport(error) => write!(f, "Transport send error: {error}"),
+            Self::Closed => f.write_str("Transport closed"),
+            Self::Cancelled(reason) => write!(
+                f,
+                "task cancelled for reason {}",
+                reason.as_deref().unwrap_or("<unknown>")
+            ),
+            Self::InvalidResult { method, error } => {
+                write!(f, "Unexpected response type for {method}: {error}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+const CLIENT_CANCELLED_REASON: &str = "request cancelled by client";
+
+type Reply = oneshot::Sender<Result<Value, Error>>;
+
+pub type Outgoing = mpsc::UnboundedReceiver<Message>;
+
+struct State {
+    next_id: u32,
+    pending: HashMap<RequestId, Reply>,
+    closed: bool,
+    server: Option<InitializeResult>,
+}
+
+struct Shared {
+    outbound: mpsc::UnboundedSender<Message>,
+    state: Mutex<State>,
+}
+
+impl Shared {
+    fn state(&self) -> MutexGuard<'_, State> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn take_pending(&self, id: &RequestId) -> Option<Reply> {
+        let mut state = self.state();
+        if let Some(reply) = state.pending.remove(id) {
+            return Some(reply);
+        }
+        id.numeric_equivalent()
+            .and_then(|id| state.pending.remove(&id))
+    }
+
+    fn close(&self) {
+        let pending = {
+            let mut state = self.state();
+            state.closed = true;
+            std::mem::take(&mut state.pending)
+        };
+        for reply in pending.into_values() {
+            let _ = reply.send(Err(Error::Closed));
+        }
+        self.outbound.close_channel();
+    }
+}
+
+#[derive(Clone)]
+pub struct Session {
+    shared: Arc<Shared>,
+}
+
+#[derive(Clone)]
+pub struct Inbound {
+    shared: Weak<Shared>,
+}
+
+struct PendingGuard<'a> {
+    shared: &'a Shared,
+    id: Option<RequestId>,
+    cancellable: bool,
+}
+
+impl Drop for PendingGuard<'_> {
+    fn drop(&mut self) {
+        let Some(id) = self.id.take() else {
+            return;
+        };
+        let pending = {
+            let mut state = self.shared.state();
+            state.pending.remove(&id).is_some() && !state.closed
+        };
+        if pending && self.cancellable {
+            let _ = self.shared.outbound.unbounded_send(Message::notification(
+                CANCELLED,
+                Some(json!({"requestId": id, "reason": CLIENT_CANCELLED_REASON})),
+            ));
+        }
+    }
+}
+
+impl Session {
+    #[must_use]
+    pub fn new() -> (Self, Outgoing, Inbound) {
+        let (outbound, receiver) = mpsc::unbounded();
+        let shared = Arc::new(Shared {
+            outbound,
+            state: Mutex::new(State {
+                next_id: 0,
+                pending: HashMap::new(),
+                closed: false,
+                server: None,
+            }),
+        });
+        let inbound = Inbound {
+            shared: Arc::downgrade(&shared),
+        };
+        (Self { shared }, receiver, inbound)
+    }
+
+    #[must_use]
+    pub fn inbound(&self) -> Inbound {
+        Inbound {
+            shared: Arc::downgrade(&self.shared),
+        }
+    }
+
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.shared.state().closed
+    }
+
+    pub fn close(&self) {
+        self.shared.close();
+    }
+
+    #[must_use]
+    pub fn server(&self) -> Option<InitializeResult> {
+        self.shared.state().server.clone()
+    }
+
+    #[must_use]
+    pub fn supports_tools(&self) -> bool {
+        self.shared
+            .state()
+            .server
+            .as_ref()
+            .is_some_and(|server| server.capabilities.supports_tools())
+    }
+
+    #[must_use]
+    pub fn supports_resources(&self) -> bool {
+        self.shared
+            .state()
+            .server
+            .as_ref()
+            .is_some_and(|server| server.capabilities.supports_resources())
+    }
+
+    pub async fn request_value(&self, method: &str, params: Option<Value>) -> Result<Value, Error> {
+        let (reply, response) = oneshot::channel();
+        let id = {
+            let mut state = self.shared.state();
+            if state.closed {
+                return Err(Error::Closed);
+            }
+            let id = RequestId::Number(i64::from(state.next_id));
+            state.next_id = state.next_id.wrapping_add(1);
+            state.pending.insert(id.clone(), reply);
+            id
+        };
+        let mut guard = PendingGuard {
+            shared: &self.shared,
+            id: Some(id.clone()),
+            cancellable: method != INITIALIZE,
+        };
+        self.shared
+            .outbound
+            .unbounded_send(Message::request(id, method, params))
+            .map_err(|_| Error::Closed)?;
+        let result = response.await.map_err(|_| Error::Closed)?;
+        guard.id = None;
+        result
+    }
+
+    pub async fn request<P, R>(&self, method: &str, params: &P) -> Result<R, Error>
+    where
+        P: Serialize + ?Sized,
+        R: DeserializeOwned,
+    {
+        let params = serde_json::to_value(params).map_err(|error| Error::InvalidResult {
+            method: method.to_owned(),
+            error: error.to_string(),
+        })?;
+        let result = self.request_value(method, Some(params)).await?;
+        serde_json::from_value(result).map_err(|error| Error::InvalidResult {
+            method: method.to_owned(),
+            error: error.to_string(),
+        })
+    }
+
+    pub fn notify(&self, method: &str, params: Option<Value>) -> Result<(), Error> {
+        if self.shared.state().closed {
+            return Err(Error::Closed);
+        }
+        self.shared
+            .outbound
+            .unbounded_send(Message::notification(method, params))
+            .map_err(|_| Error::Closed)
+    }
+
+    pub async fn initialize(&self, client_info: Implementation) -> Result<InitializeResult, Error> {
+        let result: InitializeResult = self
+            .request(INITIALIZE, &InitializeParams::new(client_info))
+            .await?;
+        self.shared.state().server = Some(result.clone());
+        self.notify(INITIALIZED, None)?;
+        Ok(result)
+    }
+
+    pub async fn list_tools(&self, cursor: Option<String>) -> Result<ListToolsResult, Error> {
+        self.paginated(TOOLS_LIST, cursor).await
+    }
+
+    pub async fn list_resources(
+        &self,
+        cursor: Option<String>,
+    ) -> Result<ListResourcesResult, Error> {
+        self.paginated(RESOURCES_LIST, cursor).await
+    }
+
+    pub async fn list_resource_templates(
+        &self,
+        cursor: Option<String>,
+    ) -> Result<ListResourceTemplatesResult, Error> {
+        self.paginated(RESOURCE_TEMPLATES_LIST, cursor).await
+    }
+
+    pub async fn read_resource(&self, uri: &str) -> Result<ReadResourceResult, Error> {
+        self.request(
+            RESOURCES_READ,
+            &ReadResourceParams {
+                uri: uri.to_owned(),
+            },
+        )
+        .await
+    }
+
+    pub async fn call_tool(&self, params: &CallToolParams) -> Result<CallToolResult, Error> {
+        self.request(TOOLS_CALL, params).await
+    }
+
+    async fn paginated<R: DeserializeOwned>(
+        &self,
+        method: &str,
+        cursor: Option<String>,
+    ) -> Result<R, Error> {
+        match cursor {
+            Some(cursor) => {
+                self.request(
+                    method,
+                    &PaginatedParams {
+                        cursor: Some(cursor),
+                    },
+                )
+                .await
+            }
+            None => {
+                let result = self.request_value(method, None).await?;
+                serde_json::from_value(result).map_err(|error| Error::InvalidResult {
+                    method: method.to_owned(),
+                    error: error.to_string(),
+                })
+            }
+        }
+    }
+}
+
+impl Inbound {
+    pub fn deliver(&self, message: Message) -> bool {
+        let Some(shared) = self.shared.upgrade() else {
+            return false;
+        };
+        match message {
+            Message::Response { id, result } => complete(&shared, &id, Ok(result)),
+            Message::Error {
+                id: Some(id),
+                error,
+            } => complete(&shared, &id, Err(Error::Rpc(error))),
+            Message::Error { id: None, error } => {
+                tracing::debug!(%error, "MCP server sent an error without a request id");
+            }
+            Message::Request { id, method, .. } => {
+                let reply = server_request_reply(id, &method);
+                let _ = shared.outbound.unbounded_send(reply);
+            }
+            Message::Notification { method, params } if method == CANCELLED => {
+                let params = params.unwrap_or_default();
+                let reason = params
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                if let Some(id) = params
+                    .get("requestId")
+                    .cloned()
+                    .and_then(|id| serde_json::from_value::<RequestId>(id).ok())
+                {
+                    tracing::info!(%id, reason, "MCP server cancelled request");
+                    complete(&shared, &id, Err(Error::Cancelled(reason)));
+                }
+            }
+            Message::Notification { method, .. } => {
+                tracing::trace!(%method, "MCP server notification");
+            }
+        }
+        true
+    }
+
+    pub fn send(&self, message: Message) -> bool {
+        self.shared
+            .upgrade()
+            .is_some_and(|shared| shared.outbound.unbounded_send(message).is_ok())
+    }
+
+    #[must_use]
+    pub fn is_pending(&self, id: &RequestId) -> bool {
+        self.shared.upgrade().is_some_and(|shared| {
+            let state = shared.state();
+            state.pending.contains_key(id)
+                || id
+                    .numeric_equivalent()
+                    .is_some_and(|id| state.pending.contains_key(&id))
+        })
+    }
+
+    pub fn fail(&self, id: &RequestId, error: Error) {
+        if let Some(shared) = self.shared.upgrade() {
+            complete(&shared, id, Err(error));
+        }
+    }
+
+    pub fn close(&self) {
+        if let Some(shared) = self.shared.upgrade() {
+            shared.close();
+        }
+    }
+
+    #[must_use]
+    pub fn is_alive(&self) -> bool {
+        self.shared.strong_count() > 0
+    }
+}
+
+fn complete(shared: &Shared, id: &RequestId, result: Result<Value, Error>) {
+    match shared.take_pending(id) {
+        Some(reply) => {
+            let _ = reply.send(result);
+        }
+        None => tracing::debug!(%id, "MCP response did not match a pending request"),
+    }
+}
+
+#[must_use]
+pub fn server_request_reply(id: RequestId, method: &str) -> Message {
+    let result = match method {
+        PING => json!({}),
+        ROOTS_LIST => json!({"roots": []}),
+        ELICITATION_CREATE => json!({"action": "decline"}),
+        _ => {
+            return Message::Error {
+                id: Some(id),
+                error: RpcError::new(METHOD_NOT_FOUND, method),
+            };
+        }
+    };
+    Message::Response { id, result }
+}

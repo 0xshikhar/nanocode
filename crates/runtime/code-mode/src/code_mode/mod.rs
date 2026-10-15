@@ -1,11 +1,9 @@
 mod audio;
-mod embedded;
 mod output;
 use crate::code_mode_spec as spec;
 
 use std::{
-    collections::{BTreeSet, HashMap, VecDeque},
-    path::PathBuf,
+    collections::{HashMap, VecDeque},
     sync::{
         Arc, Mutex as StdMutex,
         atomic::{AtomicU8, AtomicU64, Ordering},
@@ -25,13 +23,15 @@ use tokio::{
 use tracing::{Instrument, info_span};
 
 use super::{ToolContext, ToolOutputBody, ToolOutputContent};
+use crate::embedded::OwnedToolContext;
 pub use crate::embedded::{
     CodeModeCell, CodeModeExecution, CodeModeNotification, CodeModeObserver, CodeModeUpdate,
     NestedToolCall,
 };
-use crate::runtime::{OwnedToolContext, ToolRegistry};
-use embedded::EmbeddedHost;
-pub(crate) use spec::{exec_spec, wait_spec};
+pub use crate::{CodeModeToolObservation, CodeModeToolset};
+use nanocode_code_mode_engine::{EmbeddedHost as ExecutionWorker, RuntimeEvent};
+use nanocode_tools::ToolProcessTraceWire;
+pub use spec::{exec_spec, wait_spec};
 
 const INITIAL_YIELD: Duration = Duration::from_secs(10);
 const DEFAULT_WAIT_YIELD: Duration = Duration::from_secs(10);
@@ -44,7 +44,7 @@ const CELL_TERMINATING: u8 = 1;
 const CELL_COMPLETION_CLAIMED: u8 = 2;
 const CELL_CLOSED: u8 = 3;
 
-pub(crate) struct CodeModeRuntime {
+pub struct CodeModeRuntime {
     admission: Arc<Mutex<()>>,
     admission_epoch: Arc<AtomicU64>,
 
@@ -57,7 +57,7 @@ pub(crate) struct CodeModeRuntime {
 }
 
 #[derive(Clone)]
-pub(crate) struct CodeModeControl {
+pub struct CodeModeControl {
     current_turn: Arc<AtomicU64>,
     preempt: watch::Sender<(u64, u64)>,
     preempt_consumed: Arc<AtomicU64>,
@@ -68,12 +68,16 @@ pub(crate) struct CodeModeControl {
     host: Arc<Mutex<SharedJsHost>>,
 }
 
-pub(super) struct CodeModeQuiescence {
+pub struct CodeModeQuiescence {
     _admission: OwnedMutexGuard<()>,
 }
 
 struct SharedJsHost {
     host: Option<EmbeddedHost>,
+}
+
+struct EmbeddedHost {
+    worker: ExecutionWorker,
 }
 
 impl SharedJsHost {
@@ -103,7 +107,9 @@ fn spawn_host() -> Result<EmbeddedHost, String> {
         status = tracing::field::Empty,
         duration_ns = tracing::field::Empty,
     );
-    let result = span.in_scope(EmbeddedHost::spawn);
+    let result = span
+        .in_scope(ExecutionWorker::spawn)
+        .map(|worker| EmbeddedHost { worker });
     span.record(
         "status",
         if result.is_ok() {
@@ -129,6 +135,7 @@ struct CellRegistry {
 }
 
 struct LiveCell {
+    tools: Arc<dyn CodeModeToolset>,
     id: u64,
     origin_call_id: String,
     turn_id: AtomicU64,
@@ -192,59 +199,17 @@ impl CodeModeObserver for IgnoreCodeModeUpdates {
     fn update(&mut self, _update: CodeModeUpdate<'_>) {}
 }
 
-enum RuntimeEvent {
-    ToolCall {
-        cell_id: u64,
-        id: u64,
-        name: String,
-        input: Value,
-    },
-    Notify {
-        cell_id: u64,
-        text: String,
-    },
-    Content {
-        cell_id: u64,
-        content: ToolOutputContent,
-    },
-    Yielded {
-        cell_id: u64,
-    },
-    Done {
-        cell_id: u64,
-        stored: HashMap<String, Value>,
-    },
-    Error {
-        cell_id: u64,
-        message: String,
-        stored: HashMap<String, Value>,
-    },
-}
-
-impl RuntimeEvent {
-    const fn cell_id(&self) -> u64 {
-        match self {
-            Self::ToolCall { cell_id, .. }
-            | Self::Notify { cell_id, .. }
-            | Self::Content { cell_id, .. }
-            | Self::Yielded { cell_id, .. }
-            | Self::Done { cell_id, .. }
-            | Self::Error { cell_id, .. } => *cell_id,
-        }
-    }
-}
-
 struct CompletedNestedCall {
     id: u64,
     value: Value,
     call: NestedToolCall,
-    shell_session_id: Option<i64>,
+    process_trace: Option<ToolProcessTraceWire>,
 }
 
 struct ObservedNestedCall {
     id: u64,
     call: NestedToolCall,
-    shell_session_id: Option<i64>,
+    process_trace: Option<ToolProcessTraceWire>,
     delivered: bool,
 }
 
@@ -262,7 +227,7 @@ impl Drop for PendingCallReceipts {
                 .send(CellUpdate::NestedCall(ObservedNestedCall {
                     id,
                     call,
-                    shell_session_id: None,
+                    process_trace: None,
                     delivered: false,
                 }));
         }
@@ -285,7 +250,7 @@ struct HostFailure {
 }
 
 impl CodeModeRuntime {
-    pub(super) fn new_with_turn(_workspace: PathBuf, current_turn: Arc<AtomicU64>) -> Self {
+    pub fn new_with_turn(current_turn: Arc<AtomicU64>) -> Self {
         Self {
             admission: Arc::new(Mutex::new(())),
             admission_epoch: Arc::new(AtomicU64::new(0)),
@@ -302,7 +267,7 @@ impl CodeModeRuntime {
         }
     }
 
-    pub(super) fn control(&self) -> CodeModeControl {
+    pub fn control(&self) -> CodeModeControl {
         CodeModeControl {
             current_turn: Arc::clone(&self.current_turn),
             preempt: self.preempt.clone(),
@@ -315,20 +280,20 @@ impl CodeModeRuntime {
         }
     }
 
-    pub(super) async fn execute(
+    pub async fn execute(
         &self,
         source: &str,
-        tools: Arc<ToolRegistry>,
+        tools: Arc<dyn CodeModeToolset>,
         context: OwnedToolContext,
     ) -> CodeModeExecution {
         self.execute_with_updates(source, tools, context, &mut IgnoreCodeModeUpdates)
             .await
     }
 
-    pub(super) async fn execute_with_updates(
+    pub async fn execute_with_updates(
         &self,
         source: &str,
-        tools: Arc<ToolRegistry>,
+        tools: Arc<dyn CodeModeToolset>,
         context: OwnedToolContext,
         observer: &mut dyn CodeModeObserver,
     ) -> CodeModeExecution {
@@ -374,7 +339,7 @@ impl CodeModeRuntime {
     async fn execute_inner(
         &self,
         source: &str,
-        tools: Arc<ToolRegistry>,
+        tools: Arc<dyn CodeModeToolset>,
         context: OwnedToolContext,
         started_at: Instant,
         observer: &mut dyn CodeModeObserver,
@@ -399,6 +364,7 @@ impl CodeModeRuntime {
         let admission = self.admission.lock().await;
         if self.admission_epoch.load(Ordering::Acquire) != admission_epoch {
             return observed_execution(
+                tools.as_ref(),
                 "Script terminated",
                 true,
                 started_at,
@@ -452,12 +418,12 @@ impl CodeModeRuntime {
         execution
     }
 
-    pub(super) async fn wait(&self, input: &str, _context: ToolContext<'_>) -> CodeModeExecution {
+    pub async fn wait(&self, input: &str, _context: ToolContext<'_>) -> CodeModeExecution {
         self.wait_with_updates(input, &mut IgnoreCodeModeUpdates)
             .await
     }
 
-    pub(super) async fn wait_with_updates(
+    pub async fn wait_with_updates(
         &self,
         input: &str,
         observer: &mut dyn CodeModeObserver,
@@ -574,18 +540,18 @@ fn observer_yield_timeout(yield_time: Duration) -> Duration {
 }
 
 impl CodeModeControl {
-    pub(super) fn preempt_turn(&self) {
+    pub fn preempt_turn(&self) {
         let turn = self.current_turn.load(Ordering::Acquire);
         self.preempt
             .send_modify(|generation| *generation = (turn, generation.1.wrapping_add(1)));
     }
 
-    pub(super) fn settle_preempt(&self) {
+    pub fn settle_preempt(&self) {
         self.preempt_consumed
             .store(self.preempt.borrow().1, Ordering::Release);
     }
 
-    pub(super) async fn detach_turn(
+    pub async fn detach_turn(
         &self,
         turn_id: u64,
         sink: &mut (dyn FnMut(&str) -> Box<dyn CodeModeObserver> + Send),
@@ -604,7 +570,7 @@ impl CodeModeControl {
         }
     }
 
-    pub(super) async fn terminate_turn(
+    pub async fn terminate_turn(
         &self,
         turn_id: u64,
         mut observer: Option<&mut dyn CodeModeObserver>,
@@ -636,7 +602,7 @@ impl CodeModeControl {
         }
     }
 
-    pub(super) async fn terminate_all(
+    pub async fn terminate_all(
         &self,
         mut observer: Option<&mut dyn CodeModeObserver>,
     ) -> CodeModeQuiescence {
@@ -661,7 +627,7 @@ impl CodeModeControl {
 
         let mut shared_host = self.host.lock().await;
         if let Some(mut host) = shared_host.host.take() {
-            host.terminate().await;
+            host.worker.terminate().await;
         }
         drop(shared_host);
         CodeModeQuiescence {
@@ -789,7 +755,7 @@ impl LiveCell {
         id: u64,
         turn_id: u64,
         source: String,
-        tools: Arc<ToolRegistry>,
+        tools: Arc<dyn CodeModeToolset>,
         context: OwnedToolContext,
         stored: HashMap<String, Value>,
         shared_stored: Arc<Mutex<HashMap<String, Value>>>,
@@ -818,7 +784,7 @@ impl LiveCell {
                 host,
                 id,
                 source,
-                tools,
+                Arc::clone(&tools),
                 context,
                 stored,
                 shared_stored,
@@ -829,6 +795,7 @@ impl LiveCell {
             .instrument(actor_span),
         );
         Self {
+            tools,
             id,
             origin_call_id,
             turn_id: AtomicU64::new(turn_id),
@@ -999,8 +966,16 @@ async fn relay_cell_updates(
             update = observation.updates.recv() => update,
         };
         let Some(mut update) = update else {
+            sink.completed();
             break;
         };
+        let terminal = matches!(
+            update,
+            CellUpdate::Completed
+                | CellUpdate::Terminated
+                | CellUpdate::ScriptFailed { .. }
+                | CellUpdate::HostFailed(_)
+        );
         match &mut update {
             CellUpdate::NestedCallStarted {
                 call_id,
@@ -1022,6 +997,10 @@ async fn relay_cell_updates(
             _ => {}
         }
         observation.replay.push_back(update);
+        if terminal {
+            sink.completed();
+            break;
+        }
     }
 }
 
@@ -1034,6 +1013,7 @@ async fn observe_cell(
     max_output_tokens: Option<usize>,
     observer: &mut dyn CodeModeObserver,
 ) -> (CodeModeExecution, bool) {
+    let tools = cell.tools.as_ref();
     let (yield_after, terminating, mut preempt) = match mode {
         ObservationMode::YieldAfter(yield_after, preempt) => {
             (Some(yield_after), false, Some(preempt))
@@ -1053,6 +1033,7 @@ async fn observe_cell(
         if preempt_remaining == Some(0) {
             let buffered = std::mem::take(&mut observation.buffered);
             return running_observation(
+                tools,
                 cell.id,
                 started_at,
                 buffered.content,
@@ -1089,6 +1070,7 @@ async fn observe_cell(
             } => {
                 let buffered = std::mem::take(&mut observation.buffered);
                 return running_observation(
+                    tools,
                     cell.id,
                     started_at,
                     buffered.content,
@@ -1132,6 +1114,7 @@ async fn observe_cell(
             Some(CellUpdate::Yielded) => {
                 let buffered = std::mem::take(&mut observation.buffered);
                 return running_observation(
+                    tools,
                     cell.id,
                     started_at,
                     buffered.content,
@@ -1144,6 +1127,7 @@ async fn observe_cell(
                 let buffered = std::mem::take(&mut observation.buffered);
                 return (
                     observed_execution(
+                        tools,
                         "Script completed",
                         true,
                         started_at,
@@ -1159,6 +1143,7 @@ async fn observe_cell(
                 let buffered = std::mem::take(&mut observation.buffered);
                 return (
                     observed_execution(
+                        tools,
                         "Script terminated",
                         true,
                         started_at,
@@ -1180,6 +1165,7 @@ async fn observe_cell(
                 let buffered = std::mem::take(&mut observation.buffered);
                 return (
                     observed_execution(
+                        tools,
                         "Script failed",
                         false,
                         started_at,
@@ -1199,6 +1185,7 @@ async fn observe_cell(
                 let buffered = std::mem::take(&mut observation.buffered);
                 return (
                     observed_execution(
+                        tools,
                         "Script failed",
                         false,
                         started_at,
@@ -1220,6 +1207,7 @@ async fn observe_cell(
                 let buffered = std::mem::take(&mut observation.buffered);
                 return (
                     observed_execution(
+                        tools,
                         "Script failed",
                         false,
                         started_at,
@@ -1236,6 +1224,7 @@ async fn observe_cell(
 }
 
 fn running_observation(
+    tools: &dyn CodeModeToolset,
     cell_id: u64,
     started_at: Instant,
     content: Vec<ToolOutputContent>,
@@ -1245,6 +1234,7 @@ fn running_observation(
 ) -> (CodeModeExecution, bool) {
     (
         observed_execution(
+            tools,
             &format!("Script running with cell ID {cell_id}"),
             true,
             started_at,
@@ -1258,6 +1248,7 @@ fn running_observation(
 }
 
 fn observed_execution(
+    tools: &dyn CodeModeToolset,
     status: &str,
     success: bool,
     started_at: Instant,
@@ -1266,7 +1257,14 @@ fn observed_execution(
     nested_calls: Vec<ObservedNestedCall>,
     notifications: Vec<CodeModeNotification>,
 ) -> CodeModeExecution {
-    expose_running_shell_sessions(&mut content, &nested_calls);
+    let observations = nested_calls
+        .iter()
+        .map(|observed| CodeModeToolObservation {
+            call: &observed.call,
+            process_trace: observed.process_trace.as_ref(),
+        })
+        .collect::<Vec<_>>();
+    tools.append_observation_content(&observations, &mut content);
     let content = output::truncate_content(content, max_output_tokens);
     CodeModeExecution {
         cell: None,
@@ -1277,60 +1275,12 @@ fn observed_execution(
     }
 }
 
-fn expose_running_shell_sessions(
-    content: &mut Vec<ToolOutputContent>,
-    nested_calls: &[ObservedNestedCall],
-) {
-    let mut running = BTreeSet::new();
-    for observed in nested_calls {
-        let call = &observed.call;
-        if !matches!(call.name.as_str(), "exec_command" | "write_stdin") {
-            continue;
-        }
-        if call.name == "write_stdin"
-            && let Some(input_session_id) = call.input.get("session_id").and_then(Value::as_i64)
-        {
-            running.remove(&input_session_id);
-        }
-        if let Some(session_id) = observed.shell_session_id {
-            running.insert(session_id);
-        }
-    }
-    for session_id in running {
-        if content
-            .iter()
-            .filter_map(|item| match item {
-                ToolOutputContent::InputText { text } => Some(text),
-                ToolOutputContent::InputImage { .. }
-                | ToolOutputContent::InputImageFile { .. }
-                | ToolOutputContent::InputAudio { .. }
-                | ToolOutputContent::EncryptedContent { .. } => None,
-            })
-            .any(|text| text_exposes_session_id(text, session_id))
-        {
-            continue;
-        }
-        content.push(ToolOutputContent::InputText {
-            text: format!(
-                "Nested shell process is still running with session ID {session_id}. Resume it with tools.write_stdin({{ session_id: {session_id}, chars: \"\" }})."
-            ),
-        });
-    }
-}
-
-fn text_exposes_session_id(text: &str, session_id: i64) -> bool {
-    serde_json::from_str::<Value>(text).is_ok_and(|value| {
-        value.as_i64() == Some(session_id)
-            || value.get("session_id").and_then(Value::as_i64) == Some(session_id)
-    })
-}
-
 impl EmbeddedHost {
     async fn drive_cell(
         &mut self,
         cell_id: u64,
         parent_call_id: &str,
-        tools: &ToolRegistry,
+        tools: &dyn CodeModeToolset,
         context: &OwnedToolContext,
         updates: &mpsc::UnboundedSender<CellUpdate>,
         actor_started_at: Instant,
@@ -1352,7 +1302,7 @@ impl EmbeddedHost {
 
                     self.send_completed_call(cell_id, completed, &mut pending_receipts)?;
                 }
-                event = self.read_event() => {
+                event = self.worker.read_event() => {
                     let event = event.map_err(HostFailure::new)?;
                     event_count = event_count.saturating_add(1);
                     if event_count == 1 {
@@ -1446,7 +1396,7 @@ impl EmbeddedHost {
             id,
             value,
             call,
-            shell_session_id,
+            process_trace,
         } = completed;
         let success = call.success;
 
@@ -1456,10 +1406,11 @@ impl EmbeddedHost {
             .send(CellUpdate::NestedCall(ObservedNestedCall {
                 id,
                 call,
-                shell_session_id,
+                process_trace,
                 delivered: false,
             }));
-        self.send_tool_result(cell_id, id, value, success)
+        self.worker
+            .send_tool_result(cell_id, id, value, success)
             .map_err(HostFailure::new)
     }
 }
@@ -1469,7 +1420,7 @@ async fn run_cell_actor(
     shared_host: Arc<Mutex<SharedJsHost>>,
     cell_id: u64,
     source: String,
-    tools: Arc<ToolRegistry>,
+    tools: Arc<dyn CodeModeToolset>,
     context: OwnedToolContext,
     stored: HashMap<String, Value>,
     shared_stored: Arc<Mutex<HashMap<String, Value>>>,
@@ -1506,7 +1457,8 @@ async fn run_cell_actor(
     record_elapsed("host.wait_ns", host_wait_started_at);
     tracing::Span::current().record("host.reused", reused);
     let run = async {
-        host.start_cell(cell_id, &source, stored, tools.nested_tool_metadata())
+        host.worker
+            .start_cell(cell_id, &source, stored, tools.nested_tool_metadata())
             .map_err(HostFailure::new)?;
         host.drive_cell(
             cell_id,
@@ -1529,7 +1481,7 @@ async fn run_cell_actor(
         Some(terminal) if lifecycle.claim_completion() => terminal,
         Some(_) | None => {
             let termination_started_at = Instant::now();
-            host.terminate().await;
+            host.worker.terminate().await;
             record_elapsed("host.termination_ns", termination_started_at);
             Ok(CellTerminal::Terminated)
         }
@@ -1568,11 +1520,11 @@ async fn run_cell_actor(
             shared_host.host = Some(host);
         } else {
             drop(shared_host);
-            host.terminate().await;
+            host.worker.terminate().await;
         }
     } else if !terminated {
         let termination_started_at = Instant::now();
-        host.terminate().await;
+        host.worker.terminate().await;
         record_elapsed("host.termination_ns", termination_started_at);
     }
     lifecycle.close();
@@ -1598,7 +1550,7 @@ fn ordered_calls(mut calls: Vec<ObservedNestedCall>) -> Vec<NestedToolCall> {
 }
 
 async fn execute_nested_call(
-    tools: &ToolRegistry,
+    tools: &dyn CodeModeToolset,
     id: u64,
     name: String,
     input: Value,
@@ -1623,14 +1575,11 @@ async fn execute_nested_call(
     let execution = tools.execute_nested(&name, input.clone(), context).await;
     let duration_ns = u64::try_from(started_at.elapsed().as_nanos()).unwrap_or(u64::MAX);
     let value = execution.structured_result();
-    let shell_session_id = execution
-        .process_trace()
-        .and_then(|process| process.session_id)
-        .or_else(|| value.get("session_id").and_then(Value::as_i64));
+    let process_trace = execution.process_trace().copied().map(Into::into);
     CompletedNestedCall {
         id,
         value: value.clone(),
-        shell_session_id,
+        process_trace,
         call: NestedToolCall {
             call_id,
             name,

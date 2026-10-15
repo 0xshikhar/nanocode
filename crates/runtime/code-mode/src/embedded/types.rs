@@ -6,14 +6,14 @@ use serde::Deserialize;
 use serde_json::{Value, value::RawValue};
 
 pub struct OwnedToolContext {
-    pub(crate) instruction_revision: Option<u64>,
-    pub(crate) model: String,
-    pub(crate) session_id: String,
-    pub(crate) call_id: String,
-    pub(crate) turn_id: Option<Arc<str>>,
-    pub(crate) history: Arc<Vec<ResponseItem>>,
-    pub(crate) output_token_budget: usize,
-    pub(crate) host_context: Option<Arc<str>>,
+    pub instruction_revision: Option<u64>,
+    pub model: String,
+    pub session_id: String,
+    pub call_id: String,
+    pub turn_id: Option<Arc<str>>,
+    pub history: Arc<Vec<ResponseItem>>,
+    pub output_token_budget: usize,
+    pub host_context: Option<Arc<str>>,
 }
 
 impl OwnedToolContext {
@@ -84,8 +84,7 @@ impl OwnedToolContext {
         self
     }
 
-    #[cfg(not(target_family = "wasm"))]
-    pub(crate) const fn with_output_token_budget(mut self, output_token_budget: usize) -> Self {
+    pub const fn with_output_token_budget(mut self, output_token_budget: usize) -> Self {
         self.output_token_budget = output_token_budget;
         self
     }
@@ -125,7 +124,7 @@ pub struct CodeModeNotification {
 
 impl CodeModeNotification {
     #[cfg(not(target_family = "wasm"))]
-    pub(crate) fn new(call_id: &str, text: String) -> Self {
+    pub fn new(call_id: &str, text: String) -> Self {
         Self {
             call_id: call_id.to_owned(),
             text,
@@ -147,6 +146,8 @@ pub enum CodeModeUpdate<'a> {
 
 pub trait CodeModeObserver: Send {
     fn update(&mut self, update: CodeModeUpdate<'_>);
+
+    fn completed(&mut self) {}
 }
 
 #[derive(Debug, Deserialize)]

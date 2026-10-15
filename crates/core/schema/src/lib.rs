@@ -12,6 +12,7 @@ mod numbers;
 mod output;
 mod root;
 mod roots;
+mod unicode;
 mod util;
 mod validator;
 

@@ -12,59 +12,28 @@ homepage.workspace = true
 repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Shared tool registry, Code Mode and execution runtime for Codex and Claude"
+description = "Backend-generic Code Mode execution and host contracts"
 
 [package.metadata.docs.rs]
 rustdoc-args = ["-D", "warnings"]
 
 [dependencies]
 nanocode-types.workspace = true
-nanocode-media = { path = "../../core/media", version = "0.6.7"   }
+nanocode-media = { path = "../../core/media", version = "0.6.7" }
 nanocode-tools.workspace = true
-base64 = { workspace = true  }
-nanocode-home.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sha1 = { workspace = true  }
-thiserror = { workspace = true  }
 tracing.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-async-trait = { workspace = true  }
-futures-util = { workspace = true  }
-getrandom = { workspace = true  }
-http = { workspace = true  }
-httpdate = { workspace = true  }
-oauth2 = { workspace = true  }
-nanocode-tools-macros = { workspace = true  }
-portable-pty = { workspace = true  }
-reqwest = { workspace = true  }
-regex = { workspace = true  }
-rquickjs = { workspace = true  }
-rmcp = { workspace = true  }
-rustls = { workspace = true  }
-schemars = { workspace = true  }
-tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "process", "rt", "signal", "sync", "time"]  }
-tokio-util = { workspace = true  }
-tokio-tungstenite = { workspace = true  }
-url = { workspace = true  }
-uuid = { workspace = true, features = ["v4"] }
-
-[target.'cfg(unix)'.dependencies]
-nix = { workspace = true  }
-rustix = { workspace = true, features = ["process"]  }
+futures-util.workspace = true
+nanocode-code-mode-engine.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 
 [lints]
-workspace = true
-
-[target.'cfg(not(target_family = "wasm"))'.dependencies.nanocode-tls]
 workspace = true
 
 [lib]
 test = false
 doctest = false
 bench = false
-
-[[test]]
-name = "mcp_search"
-path = "tests/mcp_search.rs"

@@ -396,6 +396,7 @@ pub(super) fn handle_idle_command<S>(
                 session_id: session_id.to_owned(),
                 model: defaults.model,
                 thinking: defaults.thinking,
+                reasoning_mode: spawner.config.reasoning_mode,
                 service_tier: defaults.service_tier,
                 stateless_http: is_stateless_http(&spawner.config),
                 conversation: latest.map(|checkpoint| checkpoint.snapshot()),
@@ -456,10 +457,15 @@ pub(super) fn handle_idle_command<S>(
                         ));
                     };
                     let thinking = resolved.thinking.unwrap_or(defaults.thinking);
+                    let reasoning_mode = crate::ModelSelection::Codex(model)
+                        .capabilities(crate::ModelTransport::Native)
+                        .normalize_reasoning_mode(
+                            resolved.selected_reasoning_mode().unwrap_or_default(),
+                        );
                     validate_model_thinking(model, thinking)?;
-                    Ok((model, thinking))
+                    Ok((model, thinking, reasoning_mode))
                 })
-                .and_then(|(model, thinking)| {
+                .and_then(|(model, thinking, reasoning_mode)| {
                     if let Some(snapshot) = restore {
                         return spawner.restore_child(
                             snapshot,
@@ -474,6 +480,7 @@ pub(super) fn handle_idle_command<S>(
                         session_id,
                         model,
                         thinking,
+                        reasoning_mode,
                         defaults.service_tier,
                         stateless_http,
                         host_context.or_else(|| spawner.host_context.as_ref().map(Arc::clone)),

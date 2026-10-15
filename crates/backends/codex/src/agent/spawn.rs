@@ -161,7 +161,7 @@ where
         .materialize(child_handle.clone())?
         .for_session(&child_handle.session_environment());
 
-    if tools.exposure() == nanocode_code_mode::ToolExposure::Hidden {
+    if tools.exposure() == nanocode_tool_runtime::ToolExposure::Hidden {
         return Err(NanocodexError::InvalidRequest(
             "Nanocodex agents require Code Mode or direct tool exposure".to_owned(),
         ));
@@ -213,6 +213,7 @@ where
         origin.lineage.clone(),
         Arc::clone(&spawner.lineage_id),
         is_stateless_http(&spawner.config),
+        spawner.config.reasoning_mode,
     ));
     let (initial_persisted, initial_ready) = oneshot::channel();
     let agent = runtime.bind(LocalLifecycle {

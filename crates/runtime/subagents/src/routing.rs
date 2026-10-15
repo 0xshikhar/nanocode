@@ -27,6 +27,15 @@ impl SpawnRoute {
                 "subagent route conflicts with explicit harness",
             ));
         }
+        if let (Some(requested), Some(selected)) = (
+            requested.selected_reasoning_mode(),
+            self.options.selected_reasoning_mode(),
+        ) && requested != selected
+        {
+            return Err(std::io::Error::other(
+                "subagent route conflicts with explicit reasoning mode",
+            ));
+        }
         if requested
             .selected_harness_model()
             .is_some_and(|value| value != model)
@@ -70,7 +79,13 @@ impl SpawnDecision {
 
     pub(crate) fn options(&self, requested: SpawnOptions) -> SpawnOptions {
         match self {
-            Self::Routed(route) => route.options.clone(),
+            Self::Routed(route) => {
+                let mut options = route.options.clone();
+                if options.selected_reasoning_mode().is_none() {
+                    options.reasoning_mode = requested.selected_reasoning_mode();
+                }
+                options
+            }
             Self::Native { .. } => requested,
         }
     }

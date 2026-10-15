@@ -3,18 +3,29 @@ members = [
     "crates/nanocode",
     "crates/runtime/agent",
     "crates/runtime/code-mode",
+    "crates/runtime/code-mode-engine",
     "crates/runtime/durability",
     "crates/runtime/subagents",
     "crates/backends/claude",
     "crates/backends/codex",
     "crates/core/home",
+    "crates/core/http",
+    "crates/core/zstd",
+    "crates/core/mcp",
+    "crates/core/mcp-http",
     "crates/core/platform",
     "crates/core/schema",
     "crates/core/media",
+    "crates/core/tool-provider",
+    "crates/core/image",
+    "crates/core/audio",
     "crates/core/tls",
     "crates/core/tools",
     "crates/core/tools-macros",
     "crates/core/types",
+    "crates/integrations/tool-runtime",
+    "crates/integrations/process",
+    "crates/integrations/mcp-tools",
     "crates/integrations/cua",
     "crates/integrations/decisions",
     "crates/integrations/observability",
@@ -43,6 +54,8 @@ publish = true
 nanocode-backend-codex = { version = "0.6.7", path = "crates/backends/codex" }
 nanocode-agent = { version = "0.6.7", path = "crates/runtime/agent" }
 nanocode-media = { version = "0.6.7", path = "crates/core/media" }
+nanocode-image = { version = "0.6.7", path = "crates/core/image" }
+nanocode-audio = { version = "0.6.7", path = "crates/core/audio" }
 nanocode-tls = { version = "0.6.7", path = "crates/core/tls" }
 nanocode-types = { version = "0.6.7", path = "crates/core/types" }
 nanocode-cua = { version = "0.6.7", path = "crates/integrations/cua" }
@@ -53,11 +66,13 @@ nanocode-store-sqlite = { version = "0.6.7", path = "crates/integrations/store-s
 nanocode-store-postgres = { version = "0.6.7", path = "crates/integrations/store-postgres" }
 libc = "0.2"
 base64 = "0.22.1"
+brotli-decompressor = "5.0.3"
 async-trait = "=0.1.89"
 axum = { version = "0.8.9", default-features = false, features = ["form", "http1", "json", "query", "tokio"] }
 chrono = { version = "0.4.43", default-features = false, features = ["std"] }
 clap = { version = "4.5.54", features = ["derive", "env"] }
 eyre = "0.6.12"
+futures-channel = "0.3.31"
 futures-util = { version = "0.3.31", default-features = false, features = ["async-await", "sink", "std"] }
 roxmltree = "0.21.1"
 getrandom = "0.4.3"
@@ -67,14 +82,22 @@ ignore = "0.4.31"
 nanocode = { version = "0.6.7", path = "crates/nanocode" }
 nanocode-backend-claude = { version = "0.6.7", path = "crates/backends/claude" }
 nanocode-home = { version = "0.6.7", path = "crates/core/home" }
+nanocode-http = { version = "0.6.7", path = "crates/core/http" }
+nanocode-mcp = { version = "0.6.7", path = "crates/core/mcp" }
+nanocode-mcp-http = { version = "0.6.7", path = "crates/core/mcp-http" }
 nanocode-platform = { version = "0.6.7", path = "crates/core/platform" }
 nanocode-schema = { version = "0.6.7", path = "crates/core/schema" }
 nanocode-durability = { version = "0.6.7", path = "crates/runtime/durability" }
 nanocode-observability = { version = "0.6.7", path = "crates/integrations/observability" }
 nanocode-subagents = { version = "0.6.7", path = "crates/runtime/subagents" }
 nanocode-code-mode = { version = "0.6.7", path = "crates/runtime/code-mode"  }
+nanocode-tool-runtime = { version = "0.6.7", path = "crates/integrations/tool-runtime" }
+nanocode-tool-provider = { version = "0.6.7", path = "crates/core/tool-provider" }
+nanocode-process = { version = "0.6.7", path = "crates/integrations/process" }
+nanocode-mcp-tools = { version = "0.6.7", path = "crates/integrations/mcp-tools" }
+nanocode-code-mode-engine = { version = "0.6.7", path = "crates/runtime/code-mode-engine" }
 nanocode-tools-macros = { version = "0.6.7", path = "crates/core/tools-macros" }
-image = { version = "0.25.9", default-features = false, features = ["bmp", "gif", "jpeg", "png", "pnm", "webp"] }
+image = { version = "=0.25.6", default-features = false, features = ["bmp", "gif", "jpeg", "png", "pnm", "webp"] }
 iana-time-zone = "0.1.64"
 nix = { version = "0.31.3", default-features = false, features = ["process", "resource", "signal", "socket", "user"] }
 portable-pty = "0.9.0"
@@ -89,13 +112,11 @@ quote = "1.0.46"
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls-no-provider"] }
 rustix = { version = "1.1.4", features = ["thread"] }
 rustls-native-certs = "0.8.4"
-rustls = { version = "0.23.45", default-features = false, features = ["ring"] }
+rustls = { version = "0.23.45", default-features = false, features = ["std"] }
 regex = "1"
 rusqlite = { version = "0.38", features = ["bundled"] }
 tokio-postgres = "0.7"
 rquickjs = "0.12.1"
-rmcp = { version = "=3.0.0", default-features = false, features = ["auth", "client", "reqwest-tls-no-provider", "transport-async-rw", "transport-streamable-http-client-reqwest"] }
-oauth2 = { version = "5.0", default-features = false }
 schemars = "0.8.22"
 serde = { version = "1.0.228", features = ["derive", "rc"] }
 serde_json = { version = "1.0.149", features = ["raw_value"] }
@@ -118,6 +139,7 @@ tracing-opentelemetry = { version = "0.33", default-features = false, features =
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt", "json"] }
 url = "2.5.7"
 uuid = { version = "1", features = ["serde", "v5"] }
+nanocode-zstd = { version = "0.6.7", path = "crates/core/zstd" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

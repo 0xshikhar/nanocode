@@ -127,6 +127,16 @@ impl<F> NanocodexBuilder<F> {
             .workspace(request.workspace)
             .spawn_factory(request.spawn_factory)
             .host_context(request.host_context);
+        builder = builder.reasoning_mode(
+            nanocode_agent::ModelSelection::Codex(model)
+                .capabilities(nanocode_agent::ModelTransport::Native)
+                .normalize_reasoning_mode(
+                    request
+                        .options
+                        .selected_reasoning_mode()
+                        .unwrap_or_default(),
+                ),
+        );
         if let Some(checkpoint) = request.checkpoint {
             builder = builder.resume(checkpoint)?;
         }

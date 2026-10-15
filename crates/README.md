@@ -17,6 +17,13 @@ and `runtime/`. `scripts/check-dependency-boundaries.mjs` enforces both.
 Directory placement describes ownership. Cargo dependencies determine rebuilds;
 keep backend details out of shared contracts and runtime-only changes out of backends.
 
+`nanocode-code-mode-engine` owns the native QuickJS execution worker and its
+event protocol. It depends only on core tool contracts and the execution engine,
+so Cargo can compile it alongside MCP rather than inside the Code Mode facade.
+`nanocode-code-mode` preserves the existing entry points and orchestrates both.
+The native worker is gated out on WASM, which continues to use the Rust host
+interface for Code Mode execution.
+
 ## Durability
 
 `nanocode-durability` owns the durable state machine, the `StateStore` contract,
@@ -118,6 +125,15 @@ locally maintained adaptation of Boon with full draft 4 through 2020-12 support.
 It replaces the broad jsonschema dependency tree while keeping schema checking,
 references, format behavior and validation error locations. Its sources retain
 upstream licenses and provenance. No project Cargo features are needed.
+
+The MCP client uses [`nanocode-mcp`](core/mcp/README.md) rather than rmcp and
+oauth2. The portable crate provides JSON-RPC and protocol types, the client
+session, SSE parsing and OAuth helpers. `nanocode-mcp-http` holds the native
+Streamable HTTP transport and the OAuth discovery, login and refresh flows; it
+compiles to an empty library on WASM. Code Mode keeps the stdio transport and
+the tool and runtime orchestration, and re-exports the public OAuth types. Stdio, Streamable HTTP with
+SSE, session re-initialization, paginated discovery, payments, OAuth login and
+refresh keep their existing behavior.
 
 MCP tool discovery uses an internal immutable BM25 index rather than the bm25
 crate. Tokenization and scoring parameters are preserved; ties are deterministic.
