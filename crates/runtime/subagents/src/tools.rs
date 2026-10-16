@@ -758,7 +758,7 @@ impl Tool for SpawnAgent {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             SPAWN_AGENT_TOOL,
-            "Starts a reusable clean-room subagent without inherited conversation history and immediately returns its ID. When the root agent is durable, the task tree survives runtime restarts with the same IDs and interrupted children resume from their latest committed checkpoint; otherwise children are dropped when the parent runtime restarts.",
+            "Starts a reusable clean-room subagent without inherited conversation history and immediately returns its ID. When the root agent is durable, the task tree survives runtime restarts with the same IDs and interrupted children resume from their latest committed checkpoint; otherwise children are dropped when the parent runtime restarts. Delegate meaningful, separable work and handle trivial or tightly coupled work directly. When Code Mode is available, build multi-agent pipelines in it: start independent subtasks in parallel, await and reduce their results, then dispatch dependent stages. Do not repeat delegated work; double-check results against the relevant evidence before relying on them. Use output contracts that expose the fields downstream stages need, keep concurrent write scopes disjoint, and own final synthesis and verification.",
             spawn_agent_parameters_for(
                 &self
                     .registry
@@ -1135,7 +1135,7 @@ impl Tool for ListAgents {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             LIST_AGENTS_TOOL,
-            "Lists a compact directory of agents in the same task tree. Pending, running, and recoverable interrupted agents are returned by default; other retained agents can be included when a follow-up message is needed.",
+            "Lists agents in the same task tree. Pending, running, and recoverable interrupted agents are returned by default. Set include_completed to retrieve terminal statuses and completed results in status.output. After reuse or closure, last_output retains the latest completed result.",
             json!({
                 "type": "object",
                 "properties": {
@@ -1180,9 +1180,17 @@ struct WaitAgent {
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl Tool for WaitAgent {
     fn definition(&self) -> ToolDefinition {
+        let mut description = "Waits until any requested subagent reaches a terminal status and returns a snapshot of every requested agent. The result includes pending, running, and closing agents; consumers must preserve those nonterminal agents and act only on completed, failed, interrupted, or closed entries. Each entry's status is an object; read its terminal state from status.state. Only results this caller has not yet received end the wait: already-reported terminal agents do not, so waiting again with the same IDs blocks for the next result. When every requested agent is terminal and already reported, the snapshot returns immediately; repeating that identical call errors because nothing is left to wait for. Use one call with multiple IDs instead of polling the workspace.".to_owned();
+        if self
+            .registry
+            .upgrade()
+            .is_some_and(|registry| registry.continues_root())
+        {
+            description.push_str(" Use wait_agent only while other work still needs this turn to stay alive. When the root agent has no other work and is only waiting on running direct children, end the turn instead of blocking on them: the runtime continues the root when any direct child completes, fails, or is interrupted. Subagents are not continued by their children, so a subagent keeps its turn alive until it can submit its result.");
+        }
         ToolDefinition::function(
             WAIT_AGENT_TOOL,
-            "Waits until any requested subagent reaches a terminal status and returns a snapshot of every requested agent. The result includes pending, running, and closing agents; consumers must preserve those nonterminal agents and act only on completed, failed, interrupted, or closed entries. Each entry's status is an object; read its terminal state from status.state. Only results this caller has not yet received end the wait: already-reported terminal agents do not, so waiting again with the same IDs blocks for the next result. When every requested agent is terminal and already reported, the snapshot returns immediately; repeating that identical call errors because nothing is left to wait for. Use one call with multiple IDs instead of polling the workspace.",
+            description,
             json!({
                 "type": "object",
                 "properties": {

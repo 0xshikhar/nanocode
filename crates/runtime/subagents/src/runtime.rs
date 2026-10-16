@@ -373,6 +373,8 @@ pub struct AgentDirectoryEntry {
     pub task: String,
     pub parent_agent_id: Option<AgentId>,
     pub status: AgentStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_output: Option<Value>,
     pub can_message: bool,
     pub can_manage: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -759,6 +761,11 @@ impl RegistryState {
                     task: bounded_summary(&session.descriptor.task),
                     parent_agent_id: session.descriptor.parent,
                     status: session.status.clone(),
+                    last_output: if matches!(session.status, AgentStatus::Completed { .. }) {
+                        None
+                    } else {
+                        session.last_output.clone()
+                    },
                     can_message,
                     can_manage,
                     model: session.descriptor.model.clone(),
@@ -1243,6 +1250,13 @@ impl Registry {
             .parent_resolver
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(resolver);
+    }
+
+    pub(crate) fn continues_root(&self) -> bool {
+        self.parent_resolver
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some()
     }
 
     fn store_for(&self, root_session_id: &str) -> Option<Arc<dyn SubagentStore>> {
