@@ -1,1 +1,1 @@
-pub use nanocode_media::audio::*;
+pub use nanocode_audio::*;
