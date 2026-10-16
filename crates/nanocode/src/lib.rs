@@ -98,7 +98,6 @@ pub mod tools;
 #[doc(inline)]
 pub use tools as oai_tools;
 
-#[cfg(not(target_family = "wasm"))]
 #[doc(inline)]
 pub use nanocode_backend_claude::tools as claude_tools;
 
