@@ -13,6 +13,7 @@ pub enum NodeStatus {
     Completed,
     Failed,
     Closed,
+    Unrecoverable,
 }
 
 impl NodeStatus {
@@ -25,12 +26,18 @@ impl NodeStatus {
             Self::Completed => "done",
             Self::Failed => "failed",
             Self::Closed => "closed",
+            Self::Unrecoverable => "interrupted, not recoverable",
         }
     }
 
     #[must_use]
     pub const fn is_active(self) -> bool {
         matches!(self, Self::Pending | Self::Running)
+    }
+
+    #[must_use]
+    pub const fn is_listed(self) -> bool {
+        matches!(self, Self::Pending | Self::Running | Self::Idle)
     }
 }
 
@@ -57,6 +64,19 @@ impl AgentTree {
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.nodes.is_empty()
+    }
+
+    #[must_use]
+    pub fn listed(&self) -> usize {
+        self.nodes
+            .iter()
+            .filter(|node| node.status.is_listed())
+            .count()
+    }
+
+    #[must_use]
+    pub fn finished(&self) -> usize {
+        self.nodes.len() - self.listed()
     }
 
     pub fn upsert(&mut self, node: TreeNode) {
@@ -89,15 +109,18 @@ impl AgentTree {
     #[must_use]
     pub fn ordered(&self) -> Vec<(usize, Vec<bool>, &TreeNode)> {
         let mut ordered = Vec::new();
-        let roots = self
-            .nodes
-            .iter()
-            .filter(|node| {
-                node.parent.as_ref().is_none_or(|parent| {
-                    !self.nodes.iter().any(|candidate| &candidate.id == parent)
+        let roots =
+            self.nodes
+                .iter()
+                .filter(|node| node.status.is_listed())
+                .filter(|node| {
+                    node.parent.as_ref().is_none_or(|parent| {
+                        !self.nodes.iter().any(|candidate| {
+                            &candidate.id == parent && candidate.status.is_listed()
+                        })
+                    })
                 })
-            })
-            .collect::<Vec<_>>();
+                .collect::<Vec<_>>();
         let count = roots.len();
         for (index, root) in roots.into_iter().enumerate() {
             self.visit(root, Vec::new(), index + 1 == count, &mut ordered);
@@ -118,7 +141,9 @@ impl AgentTree {
         let children = self
             .nodes
             .iter()
-            .filter(|child| child.parent.as_deref() == Some(node.id.as_str()))
+            .filter(|child| {
+                child.status.is_listed() && child.parent.as_deref() == Some(node.id.as_str())
+            })
             .collect::<Vec<_>>();
         let count = children.len();
         for (index, child) in children.into_iter().enumerate() {
@@ -153,7 +178,7 @@ impl AgentTree {
                     NodeStatus::Pending | NodeStatus::Running => (spinner, theme.accent()),
                     NodeStatus::Idle => ("○", theme.muted()),
                     NodeStatus::Completed => ("✓", theme.thinking_low()),
-                    NodeStatus::Failed => ("✗", theme.thinking_max()),
+                    NodeStatus::Failed | NodeStatus::Unrecoverable => ("✗", theme.thinking_max()),
                     NodeStatus::Closed => ("·", theme.muted()),
                 };
                 let mut label_style = Style::default().fg(theme.text());

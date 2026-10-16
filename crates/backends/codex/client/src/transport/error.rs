@@ -110,6 +110,13 @@ pub enum ResponsesError {
 
     #[error("Responses HTTPS stream contained invalid UTF-8: {detail}")]
     InvalidSseUtf8 { detail: String },
+
+    #[error("the {gateway} Responses gateway does not document {operation}")]
+    GatewayUnsupported {
+        gateway: &'static str,
+
+        operation: &'static str,
+    },
 }
 
 const INVALID_IMAGE_ERROR: &str = "The image data you provided does not represent a valid image";
@@ -245,6 +252,7 @@ impl ResponsesError {
             Self::HttpRejected { status, .. } if (500..=599).contains(status) => "https_server",
             Self::HttpRejected { .. } => "https_rejected",
             Self::InvalidSseUtf8 { .. } => "invalid_sse_utf8",
+            Self::GatewayUnsupported { .. } => "gateway_unsupported",
         }
     }
 

@@ -35,11 +35,14 @@ pub fn features(model: &ModelSelection) -> String {
     features.join(" · ")
 }
 
-pub fn model_picker(current: &ModelSelection) -> Picker {
+pub fn model_picker(current: &ModelSelection, gateway: Option<&crate::host::Gateway>) -> Picker {
     let mut items = Vec::new();
     for (family, models) in catalog() {
         items.push(PickerItem::header(harness_title(&family)));
         for model in models {
+            if gateway.is_some_and(|gateway| !gateway.serves(&model)) {
+                continue;
+            }
             let capabilities = model.capabilities(ModelTransport::Native);
             let thinking = capabilities
                 .thinking()

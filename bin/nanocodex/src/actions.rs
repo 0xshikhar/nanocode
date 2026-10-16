@@ -1,5 +1,5 @@
 use nanocode::{
-    AgentUpdate, ModelSelection, Mutability, ScopedAgentUpdate, ServiceTier, Thinking,
+    AgentStatus, AgentUpdate, ModelSelection, Mutability, ScopedAgentUpdate, ServiceTier, Thinking,
     agent::events::AgentEventKind,
 };
 use nanocode_tui::{
@@ -180,6 +180,13 @@ impl App {
     }
 
     pub(crate) fn subagent(&mut self, scoped: ScopedAgentUpdate) {
+        if self
+            .agent
+            .as_ref()
+            .is_some_and(|agent| agent.session_id() != scoped.root_session_id)
+        {
+            return;
+        }
         match scoped.update {
             AgentUpdate::Added(descriptor) => {
                 self.track_subagent(&descriptor);
@@ -197,6 +204,9 @@ impl App {
                 });
             }
             AgentUpdate::Status { id, status } => {
+                if matches!(status, AgentStatus::Interrupted) {
+                    self.refresh_agents();
+                }
                 let (status, detail) = subagent_status(&status);
                 self.tree.update(&id.to_string(), |node| {
                     node.status = status;
@@ -206,6 +216,9 @@ impl App {
                 });
             }
             AgentUpdate::Completion { id, status, .. } => {
+                if matches!(status, AgentStatus::Interrupted) {
+                    self.refresh_agents();
+                }
                 let (node_status, detail) = subagent_status(&status);
                 let key = id.to_string();
                 self.tree.update(&key, |node| {
@@ -251,7 +264,7 @@ impl App {
                 if let Some(detail) = detail {
                     self.tree.update(&key, |node| {
                         node.detail = detail;
-                        if !node.status.is_active() {
+                        if node.status == NodeStatus::Idle {
                             node.status = NodeStatus::Running;
                         }
                     });
@@ -365,6 +378,18 @@ impl App {
         };
         if !matches!(self.turn, TurnState::Idle) {
             self.flash("wait for the turn to finish before compacting");
+            return;
+        }
+        if let Some(gateway) = &self.host.config.gateway
+            && !gateway.compacts(&self.model)
+        {
+            self.notice(
+                NoticeLevel::Warning,
+                format!(
+                    "the {} gateway does not support compaction; use /new to start a fresh thread",
+                    gateway.name()
+                ),
+            );
             return;
         }
         let tx = self.tx.clone();

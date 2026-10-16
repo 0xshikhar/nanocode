@@ -128,6 +128,7 @@ async fn prepare(args: &SessionArgs, notify: &mut dyn FnMut(&str)) -> Result<Pre
         None => std::env::current_dir()?,
     };
     let home = host::home_dir(args.home.as_deref())?;
+    let gateway = host::gateway(&args.gateway)?;
     let model = match (&args.model, args.harness) {
         (Some(model), harness) => {
             let model = host::parse_model(model)?;
@@ -145,6 +146,9 @@ async fn prepare(args: &SessionArgs, notify: &mut dyn FnMut(&str)) -> Result<Pre
         (None, Some(harness)) => family(harness).default_model(),
         (None, None) => nanocode::HarnessFamily::Codex.default_model(),
     };
+    if let Some(gateway) = &gateway {
+        gateway.check(&model)?;
+    }
     let defaulted = args.model.is_none() && args.harness.is_none();
     let capabilities = model.capabilities(nanocode::ModelTransport::Native);
     let thinking = match &args.thinking {
@@ -157,7 +161,10 @@ async fn prepare(args: &SessionArgs, notify: &mut dyn FnMut(&str)) -> Result<Pre
         .check_thinking(thinking)?;
     let tier = match &args.tier {
         Some(value) => host::parse_tier(value)?,
-        None if defaulted && capabilities.supports_service_tier(ServiceTier::Fast) => {
+        None if defaulted
+            && gateway.is_none()
+            && capabilities.supports_service_tier(ServiceTier::Fast) =>
+        {
             ServiceTier::Fast
         }
         None => ServiceTier::Standard,
@@ -180,6 +187,7 @@ async fn prepare(args: &SessionArgs, notify: &mut dyn FnMut(&str)) -> Result<Pre
         subagents: !args.no_subagents,
         runners,
         runner_servers,
+        gateway,
     };
     let host = Host::build(config, &model, thinking)?;
     host.runtime.initialize_runners().await?;

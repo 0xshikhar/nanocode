@@ -18,7 +18,7 @@ use crate::app::{App, Overlay, TurnState};
 
 pub const STATUS_VISIBLE: Duration = Duration::from_secs(4);
 
-pub const BINDINGS: [Binding; 30] = [
+pub const BINDINGS: [Binding; 32] = [
     Binding {
         keys: "enter",
         action: "send · queue while a turn runs",
@@ -88,8 +88,16 @@ pub const BINDINGS: [Binding; 30] = [
         action: "cycle tools and reasoning: collapsed → beautified → raw",
     },
     Binding {
-        keys: "ctrl+t",
-        action: "toggle the subagent tree",
+        keys: "ctrl+t · /agents",
+        action: "toggle the tree of active subagents; /agents all lists finished ones too",
+    },
+    Binding {
+        keys: "/agent #id",
+        action: "focus a subagent, including finished ones; /agent alone returns",
+    },
+    Binding {
+        keys: "/stop [#id|role]",
+        action: "close a subagent and its children (not resumable); alone closes the focused one",
     },
     Binding {
         keys: "pgup / pgdn · wheel",
@@ -173,7 +181,7 @@ pub fn draw(app: &mut App, frame: &mut Canvas<'_>) {
             Span::styled("  · /detach removes", Style::default().fg(theme.muted())),
         ]));
     }
-    let tree_lines = if app.show_tree && !app.tree.is_empty() {
+    let tree_lines = if app.show_tree && app.tree.listed() > 0 {
         let focused = app.focus.map(|id| id.to_string());
         let selected = focused.and_then(|key| {
             app.tree
@@ -210,8 +218,19 @@ pub fn draw(app: &mut App, frame: &mut Canvas<'_>) {
     let buffer = frame.buffer_mut();
     transcripts(app, transcript_area, buffer, &theme, spinner);
     if tree_height > 0 {
+        let finished = match app.tree.finished() {
+            0 => String::new(),
+            count => format!(" · {count} finished in /agents all"),
+        };
+        let interrupted = match app.tree.listed() - app.tree.active() {
+            0 => String::new(),
+            count => format!(" · {count} interrupted"),
+        };
         let mut lines = vec![Line::styled(
-            format!("agents · {} active · ctrl+t to hide", app.tree.active()),
+            format!(
+                "agents · {} running{interrupted}{finished} · /stop #id · ctrl+t to hide",
+                app.tree.active()
+            ),
             Style::default()
                 .fg(theme.muted())
                 .add_modifier(Modifier::BOLD),
@@ -386,12 +405,17 @@ fn finder_popup(app: &App, composer_area: Rect, transcript_area: Rect, frame: &m
 
 fn command_popup(app: &App, composer_area: Rect, transcript_area: Rect, frame: &mut Canvas<'_>) {
     let text = app.composer.text();
-    if app.overlay.is_some() || !text.starts_with('/') || text.contains(' ') || text.contains('\n')
-    {
+    if app.overlay.is_some() || !text.starts_with('/') || text.contains('\n') {
         return;
     }
     let theme = &app.theme;
-    let matches = crate::commands::matching(text).collect::<Vec<_>>();
+    let matches = if text.contains(' ') {
+        app.agent_argument_candidates(text).unwrap_or_default()
+    } else {
+        crate::commands::matching(text)
+            .map(|(command, description)| (command.to_owned(), description.to_owned()))
+            .collect::<Vec<_>>()
+    };
     if matches.is_empty() {
         return;
     }
@@ -589,6 +613,14 @@ fn footer(app: &App) -> Line<'static> {
         spans.push(Span::styled(
             format!(" · {}", app.tier.as_str()),
             Style::default().fg(theme.thinking_high()),
+        ));
+    }
+    if let Some(gateway) = &app.host.config.gateway
+        && app.model.as_codex().is_some()
+    {
+        spans.push(Span::styled(
+            format!(" · via {}", gateway.name()),
+            Style::default().fg(theme.muted()),
         ));
     }
     if let Some((model, thinking, _)) = &app.pending_switch {

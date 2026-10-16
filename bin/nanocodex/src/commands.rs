@@ -1,4 +1,4 @@
-pub const COMMANDS: [(&str, &str); 29] = [
+pub const COMMANDS: [(&str, &str); 30] = [
     (
         "/model",
         "choose harness, model, thinking and speed for a new thread",
@@ -15,7 +15,10 @@ pub const COMMANDS: [(&str, &str); 29] = [
     ),
     ("/resume", "resume a saved session"),
     ("/new", "start a new session"),
-    ("/agents", "toggle the subagent tree"),
+    (
+        "/agents",
+        "toggle the tree of active subagents; /agents all lists finished ones too",
+    ),
     ("/compact", "compact the conversation context"),
     ("/context", "token usage for the last turn and the session"),
     ("/copy", "copy the last reply to the clipboard"),
@@ -43,6 +46,10 @@ pub const COMMANDS: [(&str, &str); 29] = [
     (
         "/agent",
         "focus a subagent by #id or role and message it; /agent alone returns to the main thread",
+    ),
+    (
+        "/stop",
+        "close a subagent and its children for good by #id or role; alone closes the focused one; esc esc only interrupts",
     ),
     (
         "/reload",

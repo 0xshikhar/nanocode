@@ -444,6 +444,19 @@ impl ResponsesService {
         request: &ResponsesAttempt,
         transport: ResponsesTransport,
     ) -> Result<EncodedRequest, ResponsesServiceError> {
+        if matches!(request.kind, ResponsesAttemptKind::Compaction)
+            && let Some(gateway) = self.config.responses_gateway.as_deref()
+            && !gateway.supports_inline_compaction()
+        {
+            return Err(ResponsesServiceError::responses(
+                ResponsesError::GatewayUnsupported {
+                    gateway: gateway.name(),
+                    operation: "Codex compaction requests (compaction_trigger input and compaction output items)",
+                },
+                FailurePhase::Encode,
+                connection.generation,
+            ));
+        }
         let encoded = match request.kind {
             ResponsesAttemptKind::Warmup => EncodedRequest::new(&ResponseCreate::warmup(
                 &self.config,

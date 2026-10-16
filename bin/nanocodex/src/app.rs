@@ -95,6 +95,19 @@ pub enum AppEvent {
     },
     Subagent(ScopedAgentUpdate),
     FocusReady(Box<crate::focus::FocusReady>),
+    AgentStopped {
+        root: String,
+        id: nanocode::subagents::AgentId,
+        result: std::result::Result<Vec<nanocode::subagents::AgentId>, String>,
+    },
+    AgentDirectory {
+        root: String,
+        result: std::result::Result<Vec<nanocode::subagents::AgentDirectoryEntry>, String>,
+    },
+    AgentsListed {
+        root: String,
+        result: std::result::Result<String, String>,
+    },
     Notice(NoticeLevel, String),
     Applied(std::result::Result<(ModelSelection, Thinking, ServiceTier, String), String>),
 }
@@ -119,6 +132,9 @@ impl AppEvent {
             Self::Side { .. } => "side",
             Self::Subagent(_) => "subagent",
             Self::FocusReady(_) => "focus_ready",
+            Self::AgentStopped { .. } => "agent_stopped",
+            Self::AgentDirectory { .. } => "agent_directory",
+            Self::AgentsListed { .. } => "agents_listed",
             Self::Notice(..) => "notice",
             Self::Applied(_) => "applied",
         }
@@ -875,6 +891,29 @@ impl App {
                 self.focus_ready(*ready);
                 true
             }
+            AppEvent::AgentStopped { root, id, result } => {
+                if self.session_id().as_deref() == Some(root.as_str()) {
+                    self.agent_stopped(id, result);
+                }
+                true
+            }
+            AppEvent::AgentDirectory { root, result } => {
+                if self.session_id().as_deref() == Some(root.as_str()) {
+                    self.agent_directory(result);
+                }
+                true
+            }
+            AppEvent::AgentsListed { root, result } => {
+                if self.session_id().as_deref() == Some(root.as_str()) {
+                    match result {
+                        Ok(text) => self.notice(NoticeLevel::Info, text),
+                        Err(error) => {
+                            self.notice(NoticeLevel::Error, format!("listing subagents: {error}"))
+                        }
+                    }
+                }
+                true
+            }
             AppEvent::Applied(result) => {
                 self.starting = false;
                 match result {
@@ -897,6 +936,15 @@ impl App {
     fn ready(&mut self, ready: Ready) {
         self.starting = false;
         self.generation += 1;
+        if !ready.reset_transcript
+            && self
+                .agent
+                .as_ref()
+                .is_some_and(|agent| agent.session_id() != ready.agent.session_id())
+        {
+            self.tree = AgentTree::default();
+            self.reset_focus();
+        }
         if ready.reset_transcript {
             self.transcript.clear();
             self.mapper.reset();
@@ -938,6 +986,7 @@ impl App {
             }
         });
         self.agent = Some(ready.agent);
+        self.refresh_agents();
         self.notice(NoticeLevel::Info, ready.notice);
         let unavailable = self.host.runtime.computer_use_unavailable();
         if unavailable.is_some() && unavailable != self.computer_use_notice {
@@ -1493,6 +1542,7 @@ impl App {
                     self.composer.set_text(format!("{command} "));
                 }
             }
+            KeyCode::Tab if self.complete_agent_argument() => {}
             KeyCode::Tab if !self.composer.is_empty() && busy => {
                 let text = self.composer.take();
                 self.composer.history_mut().push(text.clone());
@@ -1740,10 +1790,17 @@ impl App {
             "model" | "m" if argument.is_empty() => {
                 self.overlay = Some(Overlay::Picker(
                     PickerPurpose::Model,
-                    models::model_picker(&self.model),
+                    models::model_picker(&self.model, self.host.config.gateway.as_ref()),
                 ));
             }
-            "model" | "m" => match crate::host::parse_model(argument) {
+            "model" | "m" => match crate::host::parse_model(argument).and_then(|model| match &self
+                .host
+                .config
+                .gateway
+            {
+                Some(gateway) => gateway.check(&model).map(|()| model),
+                None => Ok(model),
+            }) {
                 Ok(model) => {
                     let picker = models::thinking_picker(&model, self.thinking);
                     self.overlay = Some(Overlay::Picker(PickerPurpose::Thinking(model), picker));
@@ -1785,7 +1842,8 @@ impl App {
             "zoom" => self.zoom_pane(),
             "resume" | "sessions" => self.open_session_picker(),
             "new" | "clear" => self.new_session(),
-            "agents" => self.show_tree = !self.show_tree,
+            "agents" => self.agents_command(argument),
+            "stop" | "stop-agent" => self.stop_command(argument),
             "compact" => self.compact(),
             "runner" => self.runner_command(argument),
             "session" | "status" => {
@@ -1796,10 +1854,16 @@ impl App {
                     "ephemeral"
                 };
                 let remote = self.runner_status();
+                let route = self
+                    .host
+                    .config
+                    .gateway
+                    .as_ref()
+                    .map_or_else(String::new, |gateway| format!(" · {}", gateway.describe()));
                 self.notice(
                     NoticeLevel::Info,
                     format!(
-                        "session {session} ({store}) · {} · thinking {} · {} · {} · {remote}",
+                        "session {session} ({store}) · {} · thinking {} · {} · {} · {remote}{route}",
                         self.model,
                         self.thinking,
                         self.tier.as_str(),

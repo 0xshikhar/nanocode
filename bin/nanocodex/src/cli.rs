@@ -45,6 +45,22 @@ pub enum HarnessArg {
     Claude,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum GatewayArg {
+    #[value(help = "OpenRouter Responses API; key from OPENROUTER_API_KEY")]
+    Openrouter,
+    #[value(help = "Vercel AI Gateway; key from AI_GATEWAY_API_KEY or VERCEL_OIDC_TOKEN")]
+    Vercel,
+    #[value(
+        help = "Cloudflare unified API; token from CLOUDFLARE_API_TOKEN, needs --cloudflare-account"
+    )]
+    Cloudflare,
+    #[value(
+        help = "Cloudflare AI Gateway OpenAI proxy; OPENAI_API_KEY, CF_AIG_TOKEN for stored keys, or CLOUDFLARE_API_TOKEN for Unified Billing; needs --cloudflare-account and --cloudflare-gateway"
+    )]
+    CloudflareGateway,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 pub enum RunnerModeArg {
     #[default]
@@ -128,12 +144,50 @@ pub struct SessionArgs {
     pub no_subagents: bool,
 
     #[command(flatten)]
+    pub gateway: GatewayArgs,
+
+    #[command(flatten)]
     pub remote: RemoteArgs,
 }
 
+#[derive(Clone, Debug, Default, Args)]
+pub struct GatewayArgs {
+    #[arg(
+        long,
+        value_enum,
+        env = "NANOCODEX_GATEWAY",
+        help = "Route Codex models (gpt-6.1-sol, luna, astra) through a Responses gateway for this process, including /new, /model and resumed sessions; keys are read from the provider's environment variable and never saved; Claude models keep their own login; restart to change"
+    )]
+    pub gateway: Option<GatewayArg>,
+
+    #[arg(
+        long,
+        env = "CLOUDFLARE_ACCOUNT_ID",
+        value_name = "ID",
+        help = "Cloudflare account id for --gateway cloudflare or cloudflare-gateway"
+    )]
+    pub cloudflare_account: Option<String>,
+
+    #[arg(
+        long,
+        env = "CLOUDFLARE_GATEWAY_ID",
+        value_name = "ID",
+        help = "Cloudflare AI Gateway id; required for cloudflare-gateway, optional for cloudflare (account default gateway when unset)"
+    )]
+    pub cloudflare_gateway: Option<String>,
+
+    #[arg(
+        long,
+        value_name = "URL",
+        requires = "gateway",
+        help = "Override the gateway base URL, for example a Cloudflare custom domain"
+    )]
+    pub gateway_base_url: Option<String>,
+}
+
 impl SessionArgs {
-    pub fn or(self, root: SessionArgs) -> SessionArgs {
-        SessionArgs {
+    pub fn or(self, root: Self) -> Self {
+        Self {
             prompt: self.prompt.or(root.prompt),
             model: self.model.or(root.model),
             harness: self.harness.or(root.harness),
@@ -146,6 +200,21 @@ impl SessionArgs {
             home: self.home.or(root.home),
             no_mouse: self.no_mouse || root.no_mouse,
             no_subagents: self.no_subagents || root.no_subagents,
+            gateway: GatewayArgs {
+                gateway: self.gateway.gateway.or(root.gateway.gateway),
+                cloudflare_account: self
+                    .gateway
+                    .cloudflare_account
+                    .or(root.gateway.cloudflare_account),
+                cloudflare_gateway: self
+                    .gateway
+                    .cloudflare_gateway
+                    .or(root.gateway.cloudflare_gateway),
+                gateway_base_url: self
+                    .gateway
+                    .gateway_base_url
+                    .or(root.gateway.gateway_base_url),
+            },
             remote: RemoteArgs {
                 runner_connect: self.remote.runner_connect.or(root.remote.runner_connect),
                 runner_host: self.remote.runner_host.or(root.remote.runner_host),
