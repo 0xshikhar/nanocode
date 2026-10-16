@@ -6325,6 +6325,15 @@ impl LifecycleBackend for Driver {
                     for cancel in state.cancellations.lock().await.values() {
                         cancel.cancel();
                     }
+                    loop {
+                        let notified = state.idle.notified();
+                        tokio::pin!(notified);
+                        notified.as_mut().enable();
+                        if state.cancellations.lock().await.is_empty() {
+                            break;
+                        }
+                        notified.await;
+                    }
                     let mut context = state.conversation.lock().await;
                     let mut operation = None;
                     let mut _compaction_attempt = None;
@@ -6343,7 +6352,10 @@ impl LifecycleBackend for Driver {
                             }
                             Admission::Cancelled => return Err(NanocodexError::TurnCancelled),
                             Admission::Execute | Admission::Resume => {
-                                policy.begin_attempt(id.clone()).await?;
+                                if let Err(error) = policy.begin_attempt(id.clone()).await {
+                                    retire_unstarted(policy.as_ref(), id).await;
+                                    return Err(error);
+                                }
                                 _compaction_attempt = Some(AttemptGuard::begin(state.clone()));
                             }
                         }
