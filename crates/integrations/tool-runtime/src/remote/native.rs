@@ -181,7 +181,7 @@ async fn write<S: Sink<Message, Error = tungstenite::Error> + Unpin>(
     }
     tokio::time::timeout(policy.request_timeout, socket.send(Message::text(text)))
         .await
-        .map_err(|_| error("runner write deadline elapsed; dispatched outcome unknown"))?
+        .map_err(|_| error("remote write deadline elapsed"))?
         .map_err(error)
 }
 
@@ -237,6 +237,14 @@ impl SocketTransport {
         let Some(Frame::Catalog { definitions }) = catalog else {
             return Err(error("runner did not publish a code mode catalog"));
         };
+        crate::host::validate_public_tool_catalog_names(
+            definitions.iter().map(ToolDefinition::name),
+        )
+        .map_err(|issue| {
+            error(format!(
+                "runner published an invalid code mode catalog: {issue}"
+            ))
+        })?;
         let (sink, mut socket) = socket.split();
         let (wire, mut writer) = writer(sink, policy);
         let (outgoing, mut incoming) = mpsc::unbounded_channel();
@@ -274,7 +282,7 @@ impl SocketTransport {
                         },
                         Some(completed) = callback_tasks.join_next(), if !callback_tasks.is_empty() => { if let Ok(id) = completed { callback_aborts.remove(&id); } },
                         frame = read(&mut socket) => {
-                            let Some(frame) = frame? else { return Err(error("runner disconnected; dispatched operations have unknown outcomes and are not retried")); };
+                            let Some(frame) = frame.map_err(|issue| error(format!("runner connection failed: {issue}")))? else { return Err(error("runner disconnected")); };
                             let Some(client) = weak.upgrade() else { return Ok(()); };
                             match frame {
                                 Frame::Reply { id, .. } | Frame::Update { id, .. } => {
@@ -316,11 +324,14 @@ impl SocketTransport {
                 let message = result
                     .err()
                     .map_or_else(|| "remote connection closed".into(), |e| e.to_string());
-                *client.failure.lock().unwrap() = Some(message.clone());
+                let uncertain = format!(
+                    "{message}; the dispatched operation has an unknown outcome and was not retried"
+                );
+                *client.failure.lock().unwrap() = Some(message);
                 for (id, channel) in client.pending.lock().unwrap().drain() {
                     let _ = channel.send(Frame::Reply {
                         id,
-                        result: Err(message.clone()),
+                        result: Err(uncertain.clone()),
                     });
                 }
             }
@@ -337,12 +348,16 @@ struct Pending {
     client: Arc<Client>,
     id: u64,
     session_id: Option<String>,
+    origin: Option<(String, String)>,
     complete: bool,
 }
 impl Drop for Pending {
     fn drop(&mut self) {
         self.client.pending.lock().unwrap().remove(&self.id);
         if !self.complete {
+            if let Some(origin) = self.origin.take() {
+                self.client.callbacks.lock().unwrap().remove(&origin);
+            }
             if let Some(session_id) = self.session_id.take() {
                 let id = self.client.next.fetch_add(1, Ordering::Relaxed);
                 let _ = self.client.outgoing.send(Frame::Request {
@@ -363,7 +378,9 @@ impl RemoteTransport for SocketTransport {
     ) -> HostFuture<'a, Result<Option<CodeModeExecution>, CodeModeHostError>> {
         Box::pin(async move {
             if let Some(failure) = self.client.failure.lock().unwrap().clone() {
-                return Err(error(failure));
+                return Err(error(format!(
+                    "{failure}; the operation was not dispatched"
+                )));
             }
             let origin_call_id = match &operation {
                 RemoteOperation::Execute { context, .. } => Some(context.call_id.clone()),
@@ -404,12 +421,13 @@ impl RemoteTransport for SocketTransport {
                 client: Arc::clone(&self.client),
                 id,
                 session_id: session_id.clone(),
+                origin: session_id.clone().zip(origin_call_id.clone()),
                 complete: false,
             };
             self.client
                 .outgoing
                 .send(Frame::Request { id, operation })
-                .map_err(error)?;
+                .map_err(|_| error("remote connection closed; the operation was not dispatched"))?;
             let result: Result<Option<CodeModeExecution>, CodeModeHostError> = tokio::time::timeout(self.client.policy.request_timeout, async {
                 while let Some(frame) = rx.recv().await {
                     match frame {

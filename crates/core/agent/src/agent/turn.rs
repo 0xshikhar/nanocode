@@ -271,7 +271,6 @@ impl PromptRequest {
         self
     }
 
-    #[doc(hidden)]
     #[must_use]
     pub const fn cancel_on_admission(mut self) -> Self {
         self.cancel_on_admission = true;
