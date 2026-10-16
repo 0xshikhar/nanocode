@@ -881,8 +881,9 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
                                 let turn = catalog.turn();
                                 (runtime, catalog, turn)
                             });
-                            if let Some((runtime, catalog, _)) = &runtime {
+                            if let Some((runtime, catalog, turn)) = &runtime {
                                 match &operation {
+                                    RemoteOperation::CancelTurn { .. } => { runtime.control().cancel_turn_with_updates(&mut Observer { id, outgoing:outgoing.clone() }).await; catalog.finish_turn(Some(*turn)); outgoing.send(Frame::Reply { id, result:Ok(None) }).map_err(error)?; continue; },
                                     RemoteOperation::BeginTurn { .. } => { runtime.control().begin_turn(); catalog.begin_turn(); outgoing.send(Frame::Reply { id, result:Ok(None) }).map_err(error)?; continue; },
                                     RemoteOperation::SettlePreempt { .. } => { runtime.control().settle_preempt(); outgoing.send(Frame::Reply { id, result:Ok(None) }).map_err(error)?; continue; },
                                     RemoteOperation::DetachTurn { session_id } => { runtime.control().detach_turn_with_updates(&mut |origin| Box::new(DetachedObserver { session_id:session_id.clone(), origin_call_id:origin.into(), outgoing:outgoing.clone(), catalog:catalog.clone() })).await; outgoing.send(Frame::Reply { id, result:Ok(None) }).map_err(error)?; continue; },
