@@ -5,7 +5,7 @@ use ratatui::{
     text::{Line, Span},
 };
 use std::sync::Arc;
-use syntect::easy::HighlightLines;
+use syntect::{easy::HighlightLines, highlighting::HighlightState, parsing::ParseState};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -31,6 +31,15 @@ struct HighlightedBlock {
     language: Option<String>,
     code: String,
     lines: Vec<Vec<Span<'static>>>,
+    resume: Option<Resume>,
+}
+
+#[derive(Clone)]
+struct Resume {
+    offset: usize,
+    lines: usize,
+    highlight: HighlightState,
+    parse: ParseState,
 }
 
 pub fn render(markdown: &str, width: u16, theme: &Theme) -> Layout {
@@ -480,30 +489,67 @@ impl<'a> Renderer<'a> {
     fn highlight(&mut self, code: String, language: Option<&str>) -> Vec<Vec<Span<'static>>> {
         let block = self.block;
         self.block += 1;
-        if let Some(cached) = self.highlights.blocks.get(block)
+        let cached = self
+            .highlights
+            .blocks
+            .get_mut(block)
+            .filter(|cached| cached.language.as_deref() == language);
+        if let Some(cached) = &cached
             && cached.code == code
-            && cached.language.as_deref() == language
         {
             return cached.lines.clone();
         }
         self.highlighted += 1;
         let assets = super::highlight::assets();
-        let syntax = language.map_or_else(
-            || assets.syntaxes.find_syntax_plain_text(),
-            |language| super::highlight::syntax_for_token(&assets.syntaxes, language),
-        );
-        let mut highlighter = HighlightLines::new(syntax, super::highlight::theme());
-        let lines = code
-            .trim_end_matches('\n')
-            .split('\n')
-            .map(|source_line| {
+        let theme = super::highlight::theme();
+        let source = code.trim_end_matches('\n');
+        let resumed = cached.and_then(|cached| {
+            let resume = cached.resume.take()?;
+            (source.len() > resume.offset
+                && source.as_bytes()[..resume.offset] == cached.code.as_bytes()[..resume.offset])
+                .then(|| {
+                    let mut lines = std::mem::take(&mut cached.lines);
+                    lines.truncate(resume.lines);
+                    (
+                        lines,
+                        resume.offset,
+                        HighlightLines::from_state(theme, resume.highlight, resume.parse),
+                    )
+                })
+        });
+        let (mut lines, offset, mut highlighter) = resumed.unwrap_or_else(|| {
+            let syntax = language.map_or_else(
+                || assets.syntaxes.find_syntax_plain_text(),
+                |language| super::highlight::syntax_for_token(&assets.syntaxes, language),
+            );
+            (Vec::new(), 0, HighlightLines::new(syntax, theme))
+        });
+        let (complete, last) = source[offset..]
+            .rsplit_once('\n')
+            .unwrap_or(("", &source[offset..]));
+        if offset < source.len() - last.len() {
+            lines.extend(complete.split('\n').map(|source_line| {
                 super::highlight::line(&mut highlighter, source_line, &assets.syntaxes)
-            })
-            .collect::<Vec<_>>();
+            }));
+        }
+        let (highlight, parse) = highlighter.state();
+        let resume = Resume {
+            offset: source.len() - last.len(),
+            lines: lines.len(),
+            highlight: highlight.clone(),
+            parse: parse.clone(),
+        };
+        let mut highlighter = HighlightLines::from_state(theme, highlight, parse);
+        lines.push(super::highlight::line(
+            &mut highlighter,
+            last,
+            &assets.syntaxes,
+        ));
         let highlighted = HighlightedBlock {
             language: language.map(str::to_owned),
             code,
             lines: lines.clone(),
+            resume: Some(resume),
         };
         if let Some(slot) = self.highlights.blocks.get_mut(block) {
             *slot = highlighted;
