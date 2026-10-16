@@ -2212,7 +2212,7 @@ impl Registry {
 
     pub fn set_max_resident(&self, limit: usize) {
         self.max_resident_explicit.store(true, Ordering::Relaxed);
-        self.max_resident.store(limit.max(1), Ordering::Relaxed);
+        self.max_resident.store(limit, Ordering::Relaxed);
     }
 
     pub async fn is_root_session(&self, session_id: &str) -> bool {
