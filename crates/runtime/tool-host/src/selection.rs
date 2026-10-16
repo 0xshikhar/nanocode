@@ -104,6 +104,8 @@ pub struct Tools {
     pub(crate) embedded_host: Option<Arc<dyn crate::embedded::CodeModeHost>>,
 
     pub(crate) embedded_session_id: Option<Arc<str>>,
+
+    code_mode_policies: Vec<Arc<dyn crate::CodeModeToolPolicy>>,
 }
 
 impl Default for Tools {
@@ -145,6 +147,8 @@ impl Default for Tools {
             embedded_host: None,
 
             embedded_session_id: None,
+
+            code_mode_policies: Vec::new(),
         }
     }
 }
@@ -229,7 +233,7 @@ impl Tools {
     }
 
     #[cfg(not(target_family = "wasm"))]
-    pub fn workspace_source(&self) -> Option<&crate::WorkspaceTools> {
+    pub const fn workspace_source(&self) -> Option<&crate::WorkspaceTools> {
         self.workspace_tools.as_ref()
     }
 
@@ -237,6 +241,37 @@ impl Tools {
     pub fn with_workspace_source(mut self, source: crate::WorkspaceTools) -> Self {
         self.workspace_tools = Some(source);
         self
+    }
+
+    #[must_use]
+    pub fn with_code_mode_policy(mut self, policy: Arc<dyn crate::CodeModeToolPolicy>) -> Self {
+        if !self
+            .code_mode_policies
+            .iter()
+            .any(|existing| Arc::ptr_eq(existing, &policy))
+        {
+            self.code_mode_policies.push(policy);
+        }
+        self
+    }
+
+    #[must_use]
+    pub fn code_mode_policies(&self) -> Vec<Arc<dyn crate::CodeModeToolPolicy>> {
+        #[cfg(not(target_family = "wasm"))]
+        if let Some(policy) = self
+            .workspace_tools
+            .as_ref()
+            .and_then(crate::WorkspaceTools::code_mode_policy)
+            && !self
+                .code_mode_policies
+                .iter()
+                .any(|existing| Arc::ptr_eq(existing, &policy))
+        {
+            let mut policies = self.code_mode_policies.clone();
+            policies.push(policy);
+            return policies;
+        }
+        self.code_mode_policies.clone()
     }
 
     #[must_use]
@@ -318,7 +353,6 @@ impl Tools {
     }
 
     #[must_use]
-
     pub fn for_session(mut self, session: &crate::SessionEnvironment) -> Self {
         self.embedded_session_id = Some(Arc::from(session.session_id()));
         #[cfg(not(target_family = "wasm"))]
@@ -351,7 +385,6 @@ impl Tools {
     }
 
     #[cfg(not(target_family = "wasm"))]
-
     pub fn remote_http_client(&self) -> Option<reqwest::Client> {
         self.remote_http_client.clone()
     }

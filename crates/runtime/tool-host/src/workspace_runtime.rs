@@ -18,6 +18,10 @@ pub trait WorkspaceToolFactory: Send + Sync {
         environment: Vec<(OsString, OsString)>,
         max_wire_bytes: Option<u64>,
     ) -> Arc<dyn WorkspaceExecutor>;
+
+    fn code_mode_policy(&self) -> Option<Arc<dyn crate::CodeModeToolPolicy>> {
+        None
+    }
 }
 
 #[derive(Clone)]
@@ -48,5 +52,10 @@ impl WorkspaceTools {
     ) -> Arc<dyn WorkspaceExecutor> {
         self.factory
             .create(self.root.clone(), environment, max_wire_bytes)
+    }
+
+    #[must_use]
+    pub fn code_mode_policy(&self) -> Option<Arc<dyn crate::CodeModeToolPolicy>> {
+        self.factory.code_mode_policy()
     }
 }

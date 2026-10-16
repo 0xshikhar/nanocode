@@ -8,13 +8,20 @@ use crate::{
     ToolsBuilder, host::RoutingCatalog,
 };
 use async_trait::async_trait;
-use nanocode_tool_host::attachment::{RemoteRoute, RemoteRunnerCatalog, WorkspaceRouter};
+use nanocode_tool_host::{
+    CodeModeToolObservation, CodeModeToolPolicy, WorkspaceToolRouting,
+    attachment::{RemoteRoute, RemoteRunnerCatalog, WorkspaceRouter},
+    contract::ToolOutputContent,
+};
 use serde_json::Value;
 use std::{
     any::Any,
+    collections::{BTreeSet, HashSet},
     path::{Component, Path, PathBuf},
     sync::Arc,
 };
+
+type Policies = Arc<[Arc<dyn CodeModeToolPolicy>]>;
 
 struct RemoteCatalog(RemoteTools);
 
@@ -94,6 +101,7 @@ impl WorkspaceRouter for AttachmentRouter {
         }
         let local_names = catalog.names();
         let providers = catalog.providers().to_vec();
+        let policies: Policies = catalog.policies().into();
         for remote in routes.iter().flat_map(|route| route.tools.iter()) {
             let definition = remote.native_definition();
             if !catalog.contains(definition.name()) {
@@ -106,27 +114,24 @@ impl WorkspaceRouter for AttachmentRouter {
                 );
             }
         }
+        let mut known = routes.clone();
+        if let Some(pool) = &pool {
+            known.extend(pool.routes());
+        }
+        let guidance = Arc::new(RoutingGuidance::new(&policies, &known, &local_names));
         let routes = Arc::new(routes);
+        catalog.add_policy(Arc::new(AdvertisedProcessSessions {
+            local: Arc::clone(&policies),
+            routes: Arc::clone(&routes),
+            pool: pool.clone(),
+        }));
         let sessions = Arc::new(ProcessRoutes::new(store));
         let local_runtime_id: Arc<str> = uuid::Uuid::new_v4().to_string().into();
         catalog.wrap(|tool| {
             let name = tool.definition().name().to_owned();
-            let routed = matches!(
-                name.as_str(),
-                "exec_command" | "write_stdin" | "apply_patch" | "view_image"
-            ) || (pool.is_some()
-                && (name.starts_with("mcp__")
-                    || matches!(
-                        name.as_str(),
-                        "Read"
-                            | "Write"
-                            | "Edit"
-                            | "Glob"
-                            | "Grep"
-                            | "Bash"
-                            | "TaskOutput"
-                            | "TaskStop"
-                    )))
+            let routing = classify(&policies, &known, &name);
+            let routed = routing.is_some_and(|routing| pool.is_some() || !pool_only(routing))
+                || (pool.is_some() && name.starts_with("mcp__"))
                 || routes.iter().any(|route| {
                     route
                         .tools
@@ -142,6 +147,8 @@ impl WorkspaceRouter for AttachmentRouter {
                     pool: pool.clone(),
                     sessions: Arc::clone(&sessions),
                     local_runtime_id: Arc::clone(&local_runtime_id),
+                    routing,
+                    guidance: Arc::clone(&guidance),
                 }) as Arc<dyn Tool>
             })
         });
@@ -152,6 +159,8 @@ impl WorkspaceRouter for AttachmentRouter {
                 sessions,
                 local_runtime_id,
                 providers: catalog.providers().to_vec(),
+                policies,
+                local_names,
             });
             catalog.insert_provider_first(provider);
         }
@@ -172,6 +181,171 @@ pub(crate) struct RoutedTool {
     pub sessions: Arc<ProcessRoutes>,
     pub local_runtime_id: Arc<str>,
     pub local_desktop: bool,
+    pub routing: Option<WorkspaceToolRouting>,
+    pub guidance: Arc<RoutingGuidance>,
+}
+
+pub(crate) struct RoutingGuidance {
+    process_input: Option<Box<str>>,
+    patch: Option<Box<str>>,
+}
+
+impl RoutingGuidance {
+    fn new(
+        policies: &[Arc<dyn CodeModeToolPolicy>],
+        routes: &[Route],
+        local: &HashSet<Box<str>>,
+    ) -> Self {
+        let names = local
+            .iter()
+            .map(AsRef::as_ref)
+            .chain(
+                routes
+                    .iter()
+                    .flat_map(|route| route.tools.iter().map(super::RemoteTool::remote_name)),
+            )
+            .collect::<BTreeSet<_>>();
+        let find = |wanted| {
+            names
+                .iter()
+                .find(|name| classify(policies, routes, name) == Some(wanted))
+                .map(|name| Box::from(*name))
+        };
+        Self {
+            process_input: find(WorkspaceToolRouting::ProcessInput),
+            patch: find(WorkspaceToolRouting::Patch),
+        }
+    }
+}
+
+fn classify(
+    policies: &[Arc<dyn CodeModeToolPolicy>],
+    routes: &[Route],
+    name: &str,
+) -> Option<WorkspaceToolRouting> {
+    policies
+        .iter()
+        .find_map(|policy| policy.workspace_routing(name))
+        .or_else(|| {
+            routes
+                .iter()
+                .flat_map(|route| route.tools.iter())
+                .find(|tool| tool.remote_name() == name)
+                .and_then(super::RemoteTool::routing)
+        })
+}
+
+struct AdvertisedProcessSessions {
+    local: Policies,
+    routes: Arc<Vec<Route>>,
+    pool: Option<super::RunnerPool>,
+}
+
+impl CodeModeToolPolicy for AdvertisedProcessSessions {
+    fn append_observation_content(
+        &self,
+        calls: &[CodeModeToolObservation<'_>],
+        content: &mut Vec<ToolOutputContent>,
+    ) {
+        let mut routes = self.routes.as_ref().clone();
+        if let Some(pool) = &self.pool {
+            routes.extend(pool.routes());
+        }
+        let advertised = |name: &str| {
+            if self
+                .local
+                .iter()
+                .any(|policy| policy.workspace_routing(name).is_some())
+            {
+                return None;
+            }
+            routes
+                .iter()
+                .flat_map(|route| route.tools.iter())
+                .find(|tool| tool.remote_name() == name)
+                .and_then(super::RemoteTool::routing)
+        };
+        let mut running = std::collections::BTreeMap::new();
+        for observed in calls {
+            let call = observed.call;
+            match advertised(&call.name) {
+                Some(WorkspaceToolRouting::ProcessInput) => {
+                    if let Some(session_id) = call.input.get("session_id").and_then(Value::as_i64) {
+                        running.remove(&session_id);
+                    }
+                }
+                Some(WorkspaceToolRouting::ProcessStart) => {}
+                _ => continue,
+            }
+            if let Some(session_id) = observed
+                .process_trace
+                .and_then(|trace| trace.session_id)
+                .or_else(|| {
+                    call.structured_result
+                        .get("session_id")
+                        .and_then(Value::as_i64)
+                })
+            {
+                running.insert(session_id, call.name.as_str());
+            }
+        }
+        for (session_id, origin) in running {
+            if content
+                .iter()
+                .filter_map(|item| match item {
+                    ToolOutputContent::InputText { text } => Some(text),
+                    _ => None,
+                })
+                .any(|text| {
+                    serde_json::from_str::<Value>(text).is_ok_and(|value| {
+                        value.as_i64() == Some(session_id)
+                            || value.get("session_id").and_then(Value::as_i64) == Some(session_id)
+                    })
+                })
+            {
+                continue;
+            }
+            let input = if advertised(origin) == Some(WorkspaceToolRouting::ProcessInput) {
+                Some(origin)
+            } else {
+                let inputs = routes
+                    .iter()
+                    .filter(|route| route.tools.iter().any(|tool| tool.remote_name() == origin))
+                    .flat_map(|route| route.tools.iter())
+                    .map(super::RemoteTool::remote_name)
+                    .filter(|name| advertised(name) == Some(WorkspaceToolRouting::ProcessInput))
+                    .collect::<BTreeSet<_>>();
+                (inputs.len() == 1)
+                    .then(|| inputs.into_iter().next())
+                    .flatten()
+            };
+            content.push(ToolOutputContent::InputText {
+                text: match input {
+                    Some(input) => format!("Nested process is still running with session ID {session_id}. Resume it with tools.{input}({{ session_id: {session_id} }})."),
+                    None => format!("Nested process is still running with session ID {session_id}."),
+                },
+            });
+        }
+    }
+}
+
+const fn pool_only(routing: WorkspaceToolRouting) -> bool {
+    matches!(
+        routing,
+        WorkspaceToolRouting::Shell | WorkspaceToolRouting::File
+    )
+}
+
+const fn keeps_own_paths(routing: Option<WorkspaceToolRouting>) -> bool {
+    matches!(
+        routing,
+        Some(
+            WorkspaceToolRouting::ProcessStart
+                | WorkspaceToolRouting::ProcessInput
+                | WorkspaceToolRouting::Path
+                | WorkspaceToolRouting::Patch
+        )
+    )
 }
 
 pub(crate) struct RemoteOnlyTool {
@@ -284,11 +458,11 @@ impl RoutedTool {
 impl Tool for RoutedTool {
     fn definition(&self) -> ToolDefinition {
         let mut definition = self.local.definition();
-        let guidance = if self.pool.is_some() {
-            " Workspace routing: omitted workdir uses the configured default host. An attached runner is selected by /<runner-name>/...; paths below that root map to its workspace. Runner availability and mounts are announced in conversation messages. write_stdin uses the returned logical session_id. apply_patch uses absolute paths within a single host.".to_owned()
+        let mut guidance = if self.pool.is_some() {
+            " Workspace routing: omitted workdir uses the configured default host. An attached runner is selected by /<runner-name>/...; paths below that root map to its workspace. Runner availability and mounts are announced in conversation messages.".to_owned()
         } else {
             format!(
-                " Workspace routing: default cwd executes {}. Remote mounts: {}. Paths under a mount map to its workspace. write_stdin routes by the returned session_id. apply_patch routes by absolute file paths; do not mix machines in one patch.",
+                " Workspace routing: default cwd executes {}. Remote mounts: {}. Paths under a mount map to its workspace.",
                 if self
                     .routes
                     .iter()
@@ -309,6 +483,20 @@ impl Tool for RoutedTool {
                     .join(", ")
             )
         };
+        if let Some(name) = &self.guidance.process_input {
+            guidance.push_str(&if self.pool.is_some() {
+                format!(" {name} uses the returned logical session_id.")
+            } else {
+                format!(" {name} routes by the returned session_id.")
+            });
+        }
+        if let Some(name) = &self.guidance.patch {
+            guidance.push_str(&if self.pool.is_some() {
+                format!(" {name} uses absolute paths within a single host.")
+            } else {
+                format!(" {name} routes by absolute file paths; do not mix machines in one patch.")
+            });
+        }
         match &mut definition {
             ToolDefinition::Function { description, .. }
             | ToolDefinition::Custom { description, .. } => {
@@ -319,10 +507,7 @@ impl Tool for RoutedTool {
         if let ToolDefinition::Function { parameters, .. } = &mut definition {
             let mut schema = parameters.as_value().clone();
             if let Some(object) = schema.as_object_mut() {
-                if !matches!(
-                    definition_name(&self.local).as_str(),
-                    "exec_command" | "write_stdin" | "view_image"
-                ) {
+                if !keeps_own_paths(self.routing) {
                     if let Some(properties) = object
                         .entry("properties")
                         .or_insert_with(|| serde_json::json!({}))
@@ -434,7 +619,7 @@ impl Tool for RoutedTool {
                         }
                     }
                 }
-                if name == "write_stdin" {
+                if self.routing == Some(WorkspaceToolRouting::ProcessInput) {
                     if let Some(session) = value.get("session_id").and_then(Value::as_i64) {
                         let stored = self
                             .sessions
@@ -509,14 +694,14 @@ impl Tool for RoutedTool {
                         }
                     }
                 }
-                if name == "Bash"
+                if self.routing == Some(WorkspaceToolRouting::Shell)
                     && let Some(workdir) = value.get("workdir").and_then(Value::as_str)
                     && let Some(command) = value.get("command").and_then(Value::as_str)
                 {
                     value["command"] =
                         format!("cd '{}' && {command}", workdir.replace('\'', "'\\''")).into();
                 }
-                if !matches!(name, "exec_command" | "write_stdin" | "view_image") {
+                if !keeps_own_paths(self.routing) {
                     if let Some(object) = value.as_object_mut() {
                         object.remove("workdir");
                     }
@@ -591,7 +776,10 @@ impl Tool for RoutedTool {
         } else {
             (self.local.execute(input, context).await?, None)
         };
-        if matches!(name, "exec_command" | "write_stdin") {
+        if matches!(
+            self.routing,
+            Some(WorkspaceToolRouting::ProcessStart | WorkspaceToolRouting::ProcessInput)
+        ) {
             {
                 let mut result = output.structured_result();
                 if let Some(original) = result.get("session_id").and_then(Value::as_i64) {
@@ -634,6 +822,66 @@ pub(crate) struct RunnerProvider {
     pub sessions: Arc<ProcessRoutes>,
     pub local_runtime_id: Arc<str>,
     pub providers: Vec<Arc<dyn crate::DynamicToolProvider>>,
+    pub policies: Policies,
+    pub local_names: HashSet<Box<str>>,
+}
+
+struct Snapshot {
+    pool: Vec<Route>,
+    effective: Vec<Route>,
+    guidance: Arc<RoutingGuidance>,
+}
+
+impl RunnerProvider {
+    fn snapshot(&self) -> Snapshot {
+        let pool = self.pool.routes();
+        let mut effective = self.routes.as_ref().clone();
+        effective.extend(pool.iter().cloned());
+        let guidance = Arc::new(RoutingGuidance::new(
+            &self.policies,
+            &effective,
+            &self.local_names,
+        ));
+        Snapshot {
+            pool,
+            effective,
+            guidance,
+        }
+    }
+
+    fn definitions(&self, snapshot: &Snapshot) -> Vec<ToolDefinition> {
+        let mut seen = HashSet::new();
+        self.providers
+            .iter()
+            .flat_map(|provider| provider.available_definitions())
+            .chain(
+                snapshot
+                    .pool
+                    .iter()
+                    .flat_map(|route| route.tools.iter().map(|tool| tool.native_definition())),
+            )
+            .filter(|definition| seen.insert(definition.name().to_owned()))
+            .collect()
+    }
+
+    fn routed(&self, definition: ToolDefinition, snapshot: &Snapshot) -> RoutedTool {
+        RoutedTool {
+            local_desktop: self
+                .providers
+                .iter()
+                .any(|provider| provider.contains(definition.name())),
+            routing: classify(&self.policies, &snapshot.effective, definition.name()),
+            local: Arc::new(RemoteOnlyTool {
+                definition,
+                providers: self.providers.clone(),
+            }),
+            routes: self.routes.clone(),
+            pool: Some(self.pool.clone()),
+            sessions: self.sessions.clone(),
+            local_runtime_id: self.local_runtime_id.clone(),
+            guidance: Arc::clone(&snapshot.guidance),
+        }
+    }
 }
 
 #[async_trait]
@@ -646,36 +894,10 @@ impl crate::DynamicToolProvider for RunnerProvider {
         false
     }
     fn available_definitions(&self) -> Vec<ToolDefinition> {
-        let mut seen = std::collections::HashSet::new();
-        self.providers
-            .iter()
-            .flat_map(|provider| provider.available_definitions())
-            .chain(
-                self.pool
-                    .routes()
-                    .iter()
-                    .flat_map(|route| route.tools.iter().map(|tool| tool.native_definition()))
-                    .collect::<Vec<_>>(),
-            )
-            .filter(|definition| seen.insert(definition.name().to_owned()))
-            .map(|definition| {
-                let local_desktop = self
-                    .providers
-                    .iter()
-                    .any(|provider| provider.contains(definition.name()));
-                RoutedTool {
-                    local_desktop,
-                    local: Arc::new(RemoteOnlyTool {
-                        definition,
-                        providers: self.providers.clone(),
-                    }),
-                    routes: self.routes.clone(),
-                    pool: Some(self.pool.clone()),
-                    sessions: self.sessions.clone(),
-                    local_runtime_id: self.local_runtime_id.clone(),
-                }
-                .definition()
-            })
+        let snapshot = self.snapshot();
+        self.definitions(&snapshot)
+            .into_iter()
+            .map(|definition| self.routed(definition, &snapshot).definition())
             .collect()
     }
     async fn execute(
@@ -684,24 +906,12 @@ impl crate::DynamicToolProvider for RunnerProvider {
         input: Value,
         context: ToolContext<'_>,
     ) -> Option<crate::ToolOutput> {
+        let snapshot = self.snapshot();
         let definition = self
-            .available_definitions()
+            .definitions(&snapshot)
             .into_iter()
             .find(|definition| definition.name() == name)?;
-        let routed = RoutedTool {
-            local_desktop: self
-                .providers
-                .iter()
-                .any(|provider| provider.contains(name)),
-            local: Arc::new(RemoteOnlyTool {
-                definition,
-                providers: self.providers.clone(),
-            }),
-            routes: self.routes.clone(),
-            pool: Some(self.pool.clone()),
-            sessions: self.sessions.clone(),
-            local_runtime_id: self.local_runtime_id.clone(),
-        };
+        let routed = self.routed(definition, &snapshot);
         Some(match serde_json::value::to_raw_value(&input) {
             Ok(raw) => match routed.execute(ToolInput::Function(raw), context).await {
                 Ok(output) => output,

@@ -404,6 +404,15 @@ impl NativeToolRuntime {
     fn with_tools(mut self, tools: &Tools) -> Self {
         tools.start_providers();
         let registry = Arc::make_mut(&mut self.registry);
+        for policy in tools.code_mode_policies() {
+            if !registry
+                .policies
+                .iter()
+                .any(|existing| Arc::ptr_eq(existing, &policy))
+            {
+                registry.policies.push(policy);
+            }
+        }
         if self.exposure.is_none() {
             let exposure = tools.exposure();
             self.exposure = Some(exposure);

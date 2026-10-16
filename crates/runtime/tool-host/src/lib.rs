@@ -10,7 +10,10 @@ pub mod contract {
 }
 
 pub mod embedded;
+mod policy;
 mod selection;
+pub use nanocode_code_mode::CodeModeToolObservation;
+pub use policy::{CodeModeToolPolicy, WorkspaceToolRouting};
 #[cfg(not(target_family = "wasm"))]
 pub use selection::{AttachTarget, RemoteRunnerTools};
 pub use selection::{ToolExposure, ToolSource, Tools, ToolsBuildError, ToolsBuilder};

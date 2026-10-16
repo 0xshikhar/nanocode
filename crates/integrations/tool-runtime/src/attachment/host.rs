@@ -81,6 +81,7 @@ struct RemoteSpec {
     definition: ToolDefinition,
     parallel_safe: bool,
     timeout_ms: u64,
+    routing: Option<nanocode_tool_host::WorkspaceToolRouting>,
 }
 
 #[derive(Deserialize)]
@@ -114,6 +115,8 @@ struct CatalogEntry {
     definition: ToolDefinition,
     parallel_safe: bool,
     timeout_ms: u64,
+    #[serde(default)]
+    routing: Option<Box<str>>,
 }
 
 #[derive(Deserialize)]
@@ -810,6 +813,10 @@ impl RemoteTool {
         &self.spec.remote_name
     }
 
+    pub(crate) fn routing(&self) -> Option<nanocode_tool_host::WorkspaceToolRouting> {
+        self.spec.routing
+    }
+
     #[must_use]
     pub fn namespace(&self) -> &str {
         &self.runner.namespace
@@ -1132,11 +1139,25 @@ fn parse_catalog(
                     ));
                 }
             };
+            let routing = entry
+                .routing
+                .map(|routing| {
+                    nanocode_tool_host::WorkspaceToolRouting::from_wire(&routing).ok_or_else(|| {
+                        AttachmentError::Catalog(
+                            format!(
+                                "attached tool `{remote_name}` has unknown routing `{routing}`"
+                            )
+                            .into(),
+                        )
+                    })
+                })
+                .transpose()?;
             Ok(Arc::new(RemoteSpec {
                 remote_name,
                 definition,
                 parallel_safe: entry.parallel_safe,
                 timeout_ms: entry.timeout_ms,
+                routing,
             }))
         })
         .collect()

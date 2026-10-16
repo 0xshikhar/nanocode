@@ -83,6 +83,11 @@ impl PreparedTools {
             }
         }
 
+        let policies = tools.code_mode_policies();
+        for entry in &mut entries {
+            entry.classify(&policies);
+        }
+
         let mcps = tools
             .attachable_providers()
             .iter()

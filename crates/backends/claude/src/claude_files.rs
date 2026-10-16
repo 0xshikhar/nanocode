@@ -34,7 +34,9 @@ pub(super) fn selection(
             session: session.clone(),
         });
     }
-    super::claude_bash::install(tools, workspace, session, jobs, executor).build()
+    super::claude_bash::install(tools, workspace, session, jobs, executor)
+        .build()
+        .map(|tools| tools.with_code_mode_policy(crate::code_mode_policy::claude_tool_policy()))
 }
 
 struct ClaudeFileTool {

@@ -9,9 +9,12 @@ pub mod contract {
 pub use nanocode_media::image;
 
 pub mod apply_patch;
+mod code_mode_policy;
 pub mod extensions;
 pub mod standard;
 pub use standard::StandardTool;
+#[cfg(not(target_family = "wasm"))]
+mod gateway_unsupported;
 #[cfg(not(target_family = "wasm"))]
 mod plan;
 #[cfg(not(target_family = "wasm"))]
@@ -42,21 +45,22 @@ pub fn tool_runtime(
     tools: &nanocode_tool_host::Tools,
 ) -> nanocode_tool_host::runtime::ToolRuntime {
     let workspace = workspace.as_ref();
+    let tools = tools
+        .clone()
+        .with_code_mode_policy(code_mode_policy::standard_tool_policy());
     if tools.has_code_mode_host() {
         return nanocode_tool_host::runtime::ToolRuntime::new_with_tools(
             workspace,
             Vec::new(),
-            tools,
+            &tools,
         );
     }
     #[cfg(not(target_family = "wasm"))]
     {
         let tools = if tools.workspace_enabled() && tools.workspace_source().is_none() {
-            tools
-                .clone()
-                .with_workspace_source(WorkspaceTools::new(workspace).source)
+            tools.with_workspace_source(WorkspaceTools::new(workspace).source)
         } else {
-            tools.clone()
+            tools
         };
         let mut handlers = if tools.web_search_enabled() || tools.image_generation_enabled() {
             nanocode_tls::install_default_rustls_crypto_provider();
@@ -77,6 +81,9 @@ pub fn tool_runtime(
         } else {
             Vec::new()
         };
+        if let Some(gateway) = config.responses_gateway.as_deref() {
+            handlers = gateway_unsupported::wrap(handlers, gateway.name());
+        }
         if tools.workspace_enabled() {
             handlers.push(std::sync::Arc::new(plan::UpdatePlanTool::new()));
         }
@@ -85,7 +92,7 @@ pub fn tool_runtime(
     #[cfg(target_family = "wasm")]
     {
         let _ = config;
-        nanocode_tool_host::runtime::ToolRuntime::new_with_tools(workspace, Vec::new(), tools)
+        nanocode_tool_host::runtime::ToolRuntime::new_with_tools(workspace, Vec::new(), &tools)
     }
 }
 

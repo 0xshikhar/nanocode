@@ -31,6 +31,7 @@ pub(crate) struct PreparedToolEntry {
     definition: ToolDefinition,
     supports_parallel_tool_calls: bool,
     timeout_ms: u64,
+    routing: Option<nanocode_tool_host::WorkspaceToolRouting>,
     handler: PreparedToolHandler,
 }
 
@@ -47,6 +48,7 @@ impl PreparedToolEntry {
             definition,
             supports_parallel_tool_calls,
             timeout_ms: DEFAULT_TOOL_TIMEOUT_MS,
+            routing: None,
             handler: PreparedToolHandler::Fixed(tool),
         }
     }
@@ -62,6 +64,7 @@ impl PreparedToolEntry {
             definition,
             supports_parallel_tool_calls: tool.supports_parallel_tool_calls(),
             timeout_ms: timeout_ms.unwrap_or(DEFAULT_TOOL_TIMEOUT_MS),
+            routing: None,
             handler: PreparedToolHandler::Fixed(tool),
         }
     }
@@ -73,12 +76,22 @@ impl PreparedToolEntry {
             definition: tool.definition().clone(),
             supports_parallel_tool_calls: tool.supports_parallel_tool_calls(),
             timeout_ms: u64::try_from(tool.timeout().as_millis()).unwrap_or(u64::MAX),
+            routing: None,
             handler: PreparedToolHandler::Mcp(tool),
         }
     }
 
     pub(crate) const fn definition(&self) -> &ToolDefinition {
         &self.definition
+    }
+
+    pub(crate) fn classify(
+        &mut self,
+        policies: &[Arc<dyn nanocode_tool_host::CodeModeToolPolicy>],
+    ) {
+        self.routing = policies
+            .iter()
+            .find_map(|policy| policy.workspace_routing(&self.remote_name));
     }
 }
 
@@ -121,6 +134,8 @@ pub(crate) struct PreparedToolCatalogEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     summary: Option<Box<str>>,
     timeout_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    routing: Option<&'static str>,
 }
 
 #[doc(hidden)]
@@ -385,6 +400,9 @@ fn catalog_entry(entry: &PreparedToolEntry) -> Result<PreparedToolCatalogEntry, 
         parallel_safe: entry.supports_parallel_tool_calls,
         summary: None,
         timeout_ms: entry.timeout_ms,
+        routing: entry
+            .routing
+            .map(nanocode_tool_host::WorkspaceToolRouting::as_str),
     })
 }
 

@@ -28,7 +28,10 @@ pub(super) fn install(
     workspace: PathBuf,
     handle: &AgentHandle,
 ) -> Result<ClaudeTools> {
-    let tools = tools.clone().for_session(&handle.session_environment());
+    let tools = tools
+        .clone()
+        .for_session(&handle.session_environment())
+        .with_code_mode_policy(crate::code_mode_policy::claude_tool_policy());
     let runtime = Arc::new(ToolRuntime::new_with_tools(
         workspace.clone(),
         Vec::new(),

@@ -36,7 +36,7 @@ const forbiddenDependencies = {
   "nanocode-store-postgres": new Set(["nanocode-durability"]),
   "nanocode-agent-config": new Set(["nanocode-agent", "nanocode-subagents"]),
   "nanocode-backend-codex-client": new Set([
-    "nanocode-agent-core",
+    "nanocode-agent-core", "nanocode-media", "nanocode-image",
     "nanocode-agent-config", "nanocode-tool-host", "nanocode-code-mode", "nanocode-durability",
   ]),
   "nanocode-backend-claude-client": new Set([

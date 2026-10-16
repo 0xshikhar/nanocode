@@ -29,6 +29,7 @@ pub struct EmbeddedToolRuntime {
     session_id: Option<Arc<str>>,
     local: Vec<LocalTool>,
     callable_tool_names: RwLock<HashSet<String>>,
+    policies: Vec<Arc<dyn crate::CodeModeToolPolicy>>,
 }
 
 struct LocalTool {
@@ -59,6 +60,7 @@ impl EmbeddedToolRuntime {
                 })
                 .collect(),
             callable_tool_names: RwLock::new(HashSet::new()),
+            policies: Vec::new(),
         }
     }
 
@@ -74,6 +76,7 @@ impl EmbeddedToolRuntime {
     fn with_tools(mut self, tools: &Tools) -> Self {
         self.host.clone_from(&tools.embedded_host);
         self.session_id.clone_from(&tools.embedded_session_id);
+        self.policies = tools.code_mode_policies();
         self.local
             .extend(tools.registered.iter().map(|registered| LocalTool {
                 name: Arc::from(registered.handler.definition().name()),
@@ -200,7 +203,10 @@ impl EmbeddedToolRuntime {
             definitions.into_iter().partition(|definition| {
                 mode != EmbeddedToolMode::CodeOnly
                     && (matches!(definition, ToolDefinition::ToolSearch { .. })
-                        || is_standard_workspace_tool(definition.name()))
+                        || self
+                            .policies
+                            .iter()
+                            .any(|policy| policy.direct_host_tool(definition.name())))
             });
         direct_definitions = direct_definitions
             .into_iter()
@@ -490,13 +496,6 @@ impl EmbeddedToolRuntime {
 struct IgnoreUpdates;
 impl CodeModeObserver for IgnoreUpdates {
     fn update(&mut self, _update: super::CodeModeUpdate<'_>) {}
-}
-
-fn is_standard_workspace_tool(name: &str) -> bool {
-    matches!(
-        name,
-        "exec_command" | "write_stdin" | "update_plan" | "apply_patch" | "view_image"
-    )
 }
 
 fn normalize_identifier(name: &str) -> String {

@@ -94,6 +94,10 @@ impl WorkspaceToolFactory for ConfiguredWorkspaceFactory {
             self.0.shell(environment),
         ))
     }
+
+    fn code_mode_policy(&self) -> Option<Arc<dyn nanocode_tool_host::CodeModeToolPolicy>> {
+        Some(super::code_mode_policy::standard_tool_policy())
+    }
 }
 
 impl WorkspaceToolFactory for CodexWorkspaceFactory {
@@ -108,6 +112,10 @@ impl WorkspaceToolFactory for CodexWorkspaceFactory {
             max_wire_bytes,
             Arc::new(environment),
         ))
+    }
+
+    fn code_mode_policy(&self) -> Option<Arc<dyn nanocode_tool_host::CodeModeToolPolicy>> {
+        Some(super::code_mode_policy::standard_tool_policy())
     }
 }
 

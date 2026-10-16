@@ -38,6 +38,15 @@ impl RoutingCatalog<'_> {
         }
     }
 
+    #[must_use]
+    pub fn policies(&self) -> &[Arc<dyn crate::CodeModeToolPolicy>] {
+        &self.registry.policies
+    }
+
+    pub fn add_policy(&mut self, policy: Arc<dyn crate::CodeModeToolPolicy>) {
+        self.registry.policies.push(policy);
+    }
+
     pub fn insert_provider_first(&mut self, provider: Arc<dyn DynamicToolProvider>) {
         self.registry.providers.insert(0, provider);
     }
@@ -50,6 +59,7 @@ pub(crate) struct ToolRegistry {
     exposures: Vec<ToolExposure>,
     by_name: HashMap<Box<str>, usize>,
     pub(super) providers: Vec<Arc<dyn DynamicToolProvider>>,
+    pub(super) policies: Vec<Arc<dyn crate::CodeModeToolPolicy>>,
 }
 
 impl ToolRegistry {
@@ -294,6 +304,7 @@ impl ToolRegistry {
             definitions,
             by_name,
             providers: Vec::new(),
+            policies: Vec::new(),
         }
     }
 
@@ -479,7 +490,7 @@ fn nested_definition(definition: ToolDefinition) -> ToolDefinition {
 
 impl nanocode_code_mode::CodeModeToolset for ToolRegistry {
     fn nested_tool_metadata(&self) -> Vec<Value> {
-        ToolRegistry::nested_tool_metadata(self)
+        Self::nested_tool_metadata(self)
     }
 
     fn execute_nested<'a>(
@@ -488,7 +499,7 @@ impl nanocode_code_mode::CodeModeToolset for ToolRegistry {
         input: Value,
         context: ToolContext<'a>,
     ) -> crate::embedded::HostFuture<'a, ToolOutput> {
-        Box::pin(ToolRegistry::execute_nested(self, name, input, context))
+        Box::pin(Self::execute_nested(self, name, input, context))
     }
 
     fn append_observation_content(
@@ -496,48 +507,8 @@ impl nanocode_code_mode::CodeModeToolset for ToolRegistry {
         calls: &[nanocode_code_mode::CodeModeToolObservation<'_>],
         content: &mut Vec<crate::ToolOutputContent>,
     ) {
-        let mut running = std::collections::BTreeSet::new();
-        for observed in calls {
-            let call = observed.call;
-            if !matches!(call.name.as_str(), "exec_command" | "write_stdin") {
-                continue;
-            }
-            if call.name == "write_stdin"
-                && let Some(session_id) = call.input.get("session_id").and_then(Value::as_i64)
-            {
-                running.remove(&session_id);
-            }
-            if let Some(session_id) = observed
-                .process_trace
-                .and_then(|trace| trace.session_id)
-                .or_else(|| {
-                    call.structured_result
-                        .get("session_id")
-                        .and_then(Value::as_i64)
-                })
-            {
-                running.insert(session_id);
-            }
-        }
-        for session_id in running {
-            if content
-                .iter()
-                .filter_map(|item| match item {
-                    crate::ToolOutputContent::InputText { text } => Some(text),
-                    _ => None,
-                })
-                .any(|text| {
-                    serde_json::from_str::<Value>(text).is_ok_and(|value| {
-                        value.as_i64() == Some(session_id)
-                            || value.get("session_id").and_then(Value::as_i64) == Some(session_id)
-                    })
-                })
-            {
-                continue;
-            }
-            content.push(crate::ToolOutputContent::InputText {
-                text: format!("Nested shell process is still running with session ID {session_id}. Resume it with tools.write_stdin({{ session_id: {session_id}, chars: \"\" }})."),
-            });
+        for policy in &self.policies {
+            policy.append_observation_content(calls, content);
         }
     }
 }

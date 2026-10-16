@@ -36,6 +36,7 @@ mod claude_bash;
 mod claude_files;
 mod claude_tools;
 pub use claude_tools::install_shared_tools;
+mod code_mode_policy;
 #[cfg(not(target_family = "wasm"))]
 mod defaults;
 #[cfg(not(target_family = "wasm"))]
