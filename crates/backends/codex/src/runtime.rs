@@ -160,7 +160,7 @@ impl RuntimeBackend for CodexHarness {
                     if let Some(subagents) = &subagents {
                         use nanocode_tools::ToolCollection as _;
                         for tool in subagents.tools(
-                            handle.clone(),
+                            handle,
                             nanocode_agent_config::configuration::DelegationAuthority::Session,
                         ) {
                             selected = selected.add_shared_tool(tool)?;

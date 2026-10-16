@@ -31,8 +31,7 @@ use crate::client::{
     pricing::{ServiceTier, estimate_for_model},
     responses::{ContentItem, MessageRole, RequestProfile, ResponseItem, ToolDefinition, Usage},
     tower::{
-        CodeCall, CodeCallKind, GenerationOutput as TurnResult, ResponsesAttempt, ResponsesClient,
-        ResponsesOutput, ResponsesServiceResponse,
+        CodeCall, CodeCallKind, GenerationOutput as TurnResult, ResponsesAttempt, ResponsesOutput,
     },
     transport::{ResponsesError, ResponsesTransport, TransportStats, TransportStatsSnapshot},
 };
@@ -41,7 +40,6 @@ use nanocode_platform::{Duration, Instant, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, value::RawValue};
 use tokio::sync::watch;
-use tower::Service;
 use tracing::{Instrument, info, info_span};
 
 use super::{
@@ -58,7 +56,7 @@ use super::{
 };
 use crate::{
     NanocodexError, Result,
-    agent::{AgentSend, ContextSource, ExecutionSteps, execution::QueuedSteer},
+    agent::{ContextSource, ExecutionSteps, ResponsesClientBox, execution::QueuedSteer},
     prompt_cache::ModelPromptCache,
     usage::TurnUsage,
 };
@@ -70,14 +68,14 @@ use nanocode_tool_host::{
     runtime::{OwnedToolContext, ToolRuntime, ToolRuntimeControl},
 };
 
-pub(crate) struct ModelRun<S> {
+pub(crate) struct ModelRun {
     events: EventSink,
     provider_session_id: Arc<str>,
     config: Arc<ModelConfig>,
     model: Model,
     thinking: Thinking,
     service_tier: ServiceTier,
-    client: ResponsesClient<S>,
+    client: ResponsesClientBox,
     transport_stats: Arc<TransportStats>,
     started_at: Instant,
     operation_started_at: Option<Duration>,
@@ -255,7 +253,7 @@ impl ModelCheckpoint {
     }
 }
 
-impl<S> ModelRun<S> {
+impl ModelRun {
     #[allow(
         clippy::too_many_arguments,
         reason = "the private run owns each injected lifecycle component directly"
@@ -264,7 +262,7 @@ impl<S> ModelRun<S> {
         events: EventSink,
         provider_session_id: Arc<str>,
         config: Arc<ModelConfig>,
-        client: ResponsesClient<S>,
+        client: ResponsesClientBox,
         transport_stats: Arc<TransportStats>,
         tools: Tools,
         prompt_cache: ModelPromptCache,
@@ -314,7 +312,7 @@ impl<S> ModelRun<S> {
     pub(crate) fn from_checkpoint(
         events: EventSink,
         config: Arc<ModelConfig>,
-        client: ResponsesClient<S>,
+        client: ResponsesClientBox,
         transport_stats: Arc<TransportStats>,
         tools: Tools,
         prompt_cache: ModelPromptCache,
@@ -406,7 +404,7 @@ impl<S> ModelRun<S> {
         self.events = events;
     }
 
-    pub(crate) fn replace_client(&mut self, client: ResponsesClient<S>) {
+    pub(crate) fn replace_client(&mut self, client: ResponsesClientBox) {
         self.client = client;
     }
 

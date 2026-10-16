@@ -106,7 +106,7 @@ fn validate_model(model: &str) -> Result<()> {
     model
         .parse::<Model>()
         .map(|_| ())
-        .map_err(|error| NanocodexError::InvalidRequest(error.to_string()))
+        .map_err(NanocodexError::InvalidRequest)
 }
 
 impl<F> NanocodexBuilder<F> {
@@ -120,7 +120,7 @@ impl<F> NanocodexBuilder<F> {
             .model
             .model
             .parse::<Model>()
-            .map_err(|error| NanocodexError::InvalidRequest(error.to_string()))?;
+            .map_err(NanocodexError::InvalidRequest)?;
         let mut builder = self
             .runtime_tools(request.tools)
             .model(model)

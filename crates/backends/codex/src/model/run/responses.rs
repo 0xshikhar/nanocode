@@ -16,12 +16,7 @@ pub(super) struct ModelCallOutcome {
     pub(super) server_reasoning_included: bool,
 }
 
-impl<S> ModelRun<S>
-where
-    S: Service<ResponsesAttempt, Response = ResponsesServiceResponse> + AgentSend + 'static,
-    S::Error: Into<crate::client::ResponseError>,
-    S::Future: AgentSend,
-{
+impl ModelRun {
     pub(super) async fn perform_model_call(
         &mut self,
         call_index: u32,
@@ -100,7 +95,7 @@ where
                     return self.model_call_failed(
                         call_index,
                         started_at,
-                        NanocodexError::from(Into::<crate::client::ResponseError>::into(error)),
+                        NanocodexError::from(error),
                     );
                 }
             };

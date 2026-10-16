@@ -65,15 +65,15 @@
     },
     {
       "path": "src/model/run/mod.rs",
-      "sha256": "3e39a665c01479e667d986295a38a54dcbd2777ee0c9380452026b3bf04c207d"
+      "sha256": "455cb134a3a912146fe172873d97bec54afe89e7755d3f86fcda9acbc64b5daf"
     },
     {
       "path": "src/model/run/turn.rs",
-      "sha256": "a979376f5c2d9458e848942494827fffb3a0596c491acb4d450cfa981d241ab7"
+      "sha256": "f12d2b783bd45c8942f33259d7f013ccd5658129c78ad2511833bfe5a64e934f"
     },
     {
       "path": "src/model/run/lifecycle.rs",
-      "sha256": "a7bf75950cefb34598aa553426110916ab7ec06be44e28752ba662ed263f3be6"
+      "sha256": "90d3209ef7030e84a6e40269bb0a8ca6f0da94efeca47c9a087da01abc0fcd33"
     }
   ],
   "scope": "Reviewed StandardTool definitions only, before host routing or Code Mode exposure. Tool source and implementation hashes certify the reviewed artifacts; they are not an automatic Rust semantic equivalence proof. Input names, descriptions, schemas, strict=false and apply_patch grammar match the selected upstream profile. Output schemas remain host metadata and are skipped on the Responses wire, as upstream does. Host handlers, availability, Code Mode, remote routing, permission policy, output budgets and result rendering are SDK behavior.",

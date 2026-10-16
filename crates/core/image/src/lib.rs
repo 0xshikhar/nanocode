@@ -14,11 +14,11 @@ use image::{
 mod metadata;
 mod pam;
 
-pub use nanocode_types::ImageDetail;
-use nanocode_types::{PromptInput, UserInput, responses::ContentItem};
+pub use nanocode_types_core::ImageDetail;
+use nanocode_types_core::{PromptInput, UserInput, responses::ContentItem};
 use sha1::{Digest as _, Sha1};
 
-use nanocode_types::tools::{ToolOutputBody, ToolOutputContent};
+use nanocode_types_core::tools::{ToolOutputBody, ToolOutputContent};
 
 pub const IMAGE_PROCESSING_ERROR_PLACEHOLDER: &str =
     "image content omitted because it could not be processed";
@@ -168,7 +168,7 @@ pub async fn prepare_output_images(output: &mut ToolOutputBody) {
     };
     for item in content.iter_mut() {
         if let ToolOutputContent::InputImageFile { file_id, .. } = item
-            && !nanocode_types::responses::valid_image_file_id(file_id)
+            && !nanocode_types_core::responses::valid_image_file_id(file_id)
         {
             *item = ToolOutputContent::InputText {
                 text: "Image file reference is malformed".to_owned(),
@@ -204,8 +204,8 @@ pub async fn prepare_output_images(output: &mut ToolOutputBody) {
     }
 }
 
-pub fn prepare_history_images(items: &mut [nanocode_types::responses::ResponseItem]) -> bool {
-    use nanocode_types::responses::{FunctionOutputBody, FunctionOutputContent, ResponseItem};
+pub fn prepare_history_images(items: &mut [nanocode_types_core::responses::ResponseItem]) -> bool {
+    use nanocode_types_core::responses::{FunctionOutputBody, FunctionOutputContent, ResponseItem};
     let mut changed = false;
     for item in items {
         match item {
@@ -305,7 +305,7 @@ fn prepare_user_content_for_host(input: Vec<UserInput>, embedded: bool) -> Vec<C
         match item {
             UserInput::Text { text } => content.push(input_text(text)),
             UserInput::ImageFile { file_id, detail } => {
-                if nanocode_types::responses::valid_image_file_id(&file_id) {
+                if nanocode_types_core::responses::valid_image_file_id(&file_id) {
                     content.push(ContentItem::InputImageFile {
                         file_id: file_id.into_boxed_str(),
                         detail,

@@ -1,6 +1,6 @@
 use super::*;
 
-pub(in crate::agent) struct BranchSpawner<S> {
+pub(in crate::agent) struct BranchSpawner {
     pub(in crate::agent) instant_tool_steering: bool,
     pub(in crate::agent) config: Arc<ModelConfig>,
     pub(in crate::agent) tools: ToolsConfiguration,
@@ -18,7 +18,7 @@ pub(in crate::agent) struct BranchSpawner<S> {
     pub(in crate::agent) execution: ExecutionConfig,
     pub(in crate::agent) restored_snapshot: Option<SessionSnapshot>,
     pub(in crate::agent) host_context: Option<Arc<str>>,
-    pub(in crate::agent) service_factory: ServiceFactory<S>,
+    pub(in crate::agent) service_factory: ServiceFactory,
 }
 
 #[derive(Clone)]
@@ -48,7 +48,7 @@ impl AgentOrigin {
     }
 }
 
-impl<S> BranchSpawner<S> {
+impl BranchSpawner {
     fn for_new_thread(
         &self,
         operation: &'static str,
@@ -86,12 +86,7 @@ impl<S> BranchSpawner<S> {
     }
 }
 
-impl<S> BranchSpawner<S>
-where
-    S: Service<ResponsesAttempt, Response = ResponsesServiceResponse> + AgentSend + 'static,
-    S::Error: Into<ResponseError> + AgentSend + 'static,
-    S::Future: AgentSend,
-{
+impl BranchSpawner {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn spawn_fork(
         &self,

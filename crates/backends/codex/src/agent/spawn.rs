@@ -1,7 +1,7 @@
 use super::*;
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn build_agent<S>(
+pub(super) fn build_agent(
     mut config: Arc<ModelConfig>,
     tools: ToolsConfiguration,
     workspace: Option<PathBuf>,
@@ -10,13 +10,8 @@ pub(super) fn build_agent<S>(
     codex: CodexCompatibility,
     resume: Option<SessionSnapshot>,
     lineage: Option<Lineage>,
-    service_factory: ServiceFactory<S>,
-) -> Result<(Nanocodex, AgentEvents)>
-where
-    S: Service<ResponsesAttempt, Response = ResponsesServiceResponse> + AgentSend + 'static,
-    S::Error: Into<ResponseError> + AgentSend + 'static,
-    S::Future: AgentSend,
-{
+    service_factory: ServiceFactory,
+) -> Result<(Nanocodex, AgentEvents)> {
     #[cfg(not(target_family = "wasm"))]
     crate::client::transport::install_default_rustls_crypto_provider();
     let session_id = session_id.unwrap_or_default();
@@ -122,19 +117,14 @@ where
     )
 }
 
-pub(super) fn spawn_agent_driver<S>(
-    spawner: BranchSpawner<S>,
+pub(super) fn spawn_agent_driver(
+    spawner: BranchSpawner,
     session_id: SessionId,
     workspace: Option<Arc<str>>,
-    service: S,
+    service: ResponsesClientBox,
     initial_resume: Option<InitialResume>,
     start: crate::session::SessionStart,
-) -> Result<(Nanocodex, AgentEvents)>
-where
-    S: Service<ResponsesAttempt, Response = ResponsesServiceResponse> + AgentSend + 'static,
-    S::Error: Into<ResponseError> + AgentSend + 'static,
-    S::Future: AgentSend,
-{
+) -> Result<(Nanocodex, AgentEvents)> {
     let session_id_text = session_id.to_string();
     let origin = AgentOrigin {
         start,
@@ -229,7 +219,7 @@ where
     let driver = AgentDriver {
         commands: receiver,
         events,
-        client: ResponsesClient::new(service),
+        client: service,
         transport_stats,
         tools,
         workspace,
@@ -252,7 +242,7 @@ where
         }
         shutdown.complete(outcome);
     };
-    spawn_driver(driver_task)?;
+    spawn_driver(Box::pin(driver_task))?;
     Ok((agent, event_stream))
 }
 

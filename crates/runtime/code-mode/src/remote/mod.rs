@@ -19,7 +19,7 @@ pub struct RemoteContext {
     pub call_id: String,
     pub turn_id: Option<String>,
     #[serde(skip)]
-    pub history: Arc<Vec<nanocode_types::responses::ResponseItem>>,
+    pub history: Arc<Vec<nanocode_types_core::responses::ResponseItem>>,
     pub output_token_budget: usize,
     pub instruction_revision: Option<u64>,
     pub host_context: Option<String>,

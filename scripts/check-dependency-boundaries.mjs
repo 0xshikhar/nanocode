@@ -17,6 +17,8 @@ const forbidden = {
   "crates/tui": ["crates/core", "crates/runtime", "crates/backends", "crates/integrations", "crates/nanocode"],
 };
 const forbiddenDependencies = {
+  "nanocode-image": new Set(["nanocode-types"]),
+  "nanocode-code-mode": new Set(["nanocode-types"]),
   "nanocode-backend-claude-tools": new Set([
     "nanocode-backend-claude-client", "nanocode-agent-core", "nanocode-agent-types",
     "nanocode-agent-config", "nanocode-tool-host", "nanocode-code-mode", "nanocode-durability",

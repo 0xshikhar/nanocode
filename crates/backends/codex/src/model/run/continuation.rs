@@ -46,12 +46,7 @@ pub(super) enum ExecutionPhase {
     Compact,
 }
 
-impl<S> ModelRun<S>
-where
-    S: Service<ResponsesAttempt, Response = ResponsesServiceResponse> + AgentSend + 'static,
-    S::Error: Into<crate::client::ResponseError>,
-    S::Future: AgentSend,
-{
+impl ModelRun {
     pub(super) async fn restore_execution(
         &mut self,
         requested_workspace: Option<&str>,

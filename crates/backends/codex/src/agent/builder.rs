@@ -75,7 +75,7 @@ impl Default for CodexCompatibility {
 
 impl<F> NanocodexBuilder<F> {
     #[must_use]
-    pub fn stateless_http(mut self) -> Self {
+    pub const fn stateless_http(mut self) -> Self {
         self.config.responses_transport = ResponsesTransport::Https;
         self.config.responses_history = ResponsesHistory::FullReplay;
         self.config.store_responses = false;
@@ -298,7 +298,7 @@ impl<F> NanocodexBuilder<F> {
 
     #[doc(hidden)]
     #[must_use]
-    pub fn initial_settings(
+    pub const fn initial_settings(
         mut self,
         model: Model,
         thinking: Thinking,
@@ -402,7 +402,8 @@ where
     validate_execution_environment(builder.codex.context.execution_environment())?;
     let config = Arc::new(builder.config);
     let factory = builder.factory;
-    let service_factory: ServiceFactory<F::Service> = Arc::new(move |config| factory.make(config));
+    let service_factory: ServiceFactory =
+        Arc::new(move |config| Box::new(ResponsesClient::new(factory.make(config))));
     build_agent(
         config,
         builder.tools,

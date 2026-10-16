@@ -329,18 +329,14 @@ pub(super) async fn begin_shutdown(
     mark_all_queued_turns_cancelled(queued_turns);
 }
 
-fn spawn_side_question<S>(
+fn spawn_side_question(
     latest: Option<&Arc<CommittedSession>>,
-    spawner: &BranchSpawner<S>,
+    spawner: &BranchSpawner,
     defaults: TurnDefaults,
     session_id: &str,
     question: String,
     result: oneshot::Sender<Result<nanocode_agent_core::SideAnswer>>,
-) where
-    S: Service<ResponsesAttempt, Response = ResponsesServiceResponse> + AgentSend + 'static,
-    S::Error: Into<ResponseError> + AgentSend + 'static,
-    S::Future: AgentSend,
-{
+) {
     let Some(latest) = latest.map(Arc::clone) else {
         drop(result.send(Err(NanocodexError::InvalidRequest(
             "a side question requires a completed turn".to_owned(),
@@ -365,7 +361,7 @@ fn spawn_side_question<S>(
             .await;
         drop(result.send(outcome));
     };
-    if let Err(error) = crate::agent::executor::spawn_driver(task) {
+    if let Err(error) = crate::agent::executor::spawn_driver(Box::pin(task)) {
         tracing::warn!(target: "nanocode", %error, "side question could not start");
     }
 }
@@ -377,19 +373,15 @@ pub(super) struct TurnDefaults {
     pub(super) service_tier: ServiceTier,
 }
 
-pub(super) fn handle_idle_command<S>(
+pub(super) fn handle_idle_command(
     command: Command,
     latest: Option<&Arc<CommittedSession>>,
-    spawner: &BranchSpawner<S>,
+    spawner: &BranchSpawner,
     defaults: TurnDefaults,
     session_id: &str,
     workspace: Option<Arc<str>>,
     execution: &Execution,
-) where
-    S: Service<ResponsesAttempt, Response = ResponsesServiceResponse> + AgentSend + 'static,
-    S::Error: Into<ResponseError> + AgentSend + 'static,
-    S::Future: AgentSend,
-{
+) {
     match command {
         Command::ChildSnapshot { result } => {
             drop(result.send(Ok(ChildState {

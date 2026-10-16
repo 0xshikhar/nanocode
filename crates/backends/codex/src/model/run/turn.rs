@@ -1,11 +1,7 @@
 use super::*;
+use crate::agent::execution::ExecutionFuture;
 
-impl<S> ModelRun<S>
-where
-    S: Service<ResponsesAttempt, Response = ResponsesServiceResponse> + AgentSend + 'static,
-    S::Error: Into<crate::client::ResponseError>,
-    S::Future: AgentSend,
-{
+impl ModelRun {
     fn start_timing(&mut self) {
         self.started_at = Instant::now();
         self.operation_started_at = nanocode_platform::system_time()
@@ -24,16 +20,16 @@ where
         execution_steps: Option<ExecutionSteps>,
     ) -> Result<ModelCompactOutcome> {
         let configured = (Arc::clone(&self.config), self.model);
-        let outcome = self
-            .compact_inner(
+        let execution: ExecutionFuture<'_, Result<ModelCompactOutcome>> =
+            Box::pin(self.compact_inner(
                 requested_workspace,
                 thinking,
                 service_tier,
                 logical_turn,
                 cancel,
                 execution_steps,
-            )
-            .await;
+            ));
+        let outcome = execution.await;
         self.restore_runtime(configured, logical_turn)?;
         outcome
     }
@@ -277,16 +273,15 @@ where
         )?;
 
         let configured = (Arc::clone(&self.config), self.model);
-        let outcome = self
-            .execute_task(
-                task,
-                workspace,
-                logical_turn,
-                steering,
-                &mut cancel,
-                &fork_snapshots,
-            )
-            .await;
+        let execution: ExecutionFuture<'_, Result<ModelTaskOutcome>> = Box::pin(self.execute_task(
+            task,
+            workspace,
+            logical_turn,
+            steering,
+            &mut cancel,
+            &fork_snapshots,
+        ));
+        let outcome = execution.await;
         self.restore_runtime(configured, logical_turn)?;
         match outcome {
             Ok(ModelTaskOutcome::Completed(message)) => {

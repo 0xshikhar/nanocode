@@ -168,7 +168,7 @@ use execution::{Execution, ExecutionConfig};
 
 pub(crate) use execution::{ExecutionStep, ExecutionSteps};
 
-pub(crate) use executor::{AgentFactory, AgentSend};
+pub(crate) use executor::{AgentFactory, AgentSend, ResponsesClientBox};
 
 use executor::{ServiceFactory, spawn_driver};
 

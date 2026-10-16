@@ -1,5 +1,5 @@
 use nanocode_tool_contracts::ToolOutputBody;
-use nanocode_types::{PromptInput, responses::ContentItem};
+use nanocode_types_core::{PromptInput, responses::ContentItem};
 
 #[allow(
     clippy::unused_async,

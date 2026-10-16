@@ -121,10 +121,10 @@ const fn add_usage(total: &mut Usage, usage: &Usage) {
 }
 
 #[cfg(not(target_family = "wasm"))]
-type ToolResultFuture =
-    Pin<Box<dyn Future<Output = std::result::Result<ClaudeToolReply, String>> + Send>>;
+type AgentFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 #[cfg(target_family = "wasm")]
-type ToolResultFuture = Pin<Box<dyn Future<Output = std::result::Result<ClaudeToolReply, String>>>>;
+type AgentFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
+type ToolResultFuture = AgentFuture<'static, std::result::Result<ClaudeToolReply, String>>;
 type Handler = Arc<dyn Fn(Value, ClaudeToolInvocation) -> ToolResultFuture + Send + Sync>;
 type ToolCleanup = Arc<dyn Fn() -> BackendFuture<()> + Send + Sync>;
 type CodeTurnCleanup = Arc<dyn Fn(ClaudeToolProgress) -> BackendFuture<()> + Send + Sync>;
@@ -3067,10 +3067,7 @@ async fn start_turn(
         let _ = sender.send(result);
     }
     .instrument(turn_span);
-    #[cfg(not(target_family = "wasm"))]
-    tokio::spawn(task);
-    #[cfg(target_family = "wasm")]
-    nanocode_platform::spawn_local(task);
+    spawn_task(Box::pin(task));
     BackendTurn {
         request_id,
         result: Box::pin(async move { receiver.await.unwrap_or(Err(NanocodexError::TurnStopped)) }),
@@ -3168,10 +3165,7 @@ async fn defer_turn(
         let _ = sender.send(result);
     }
     .instrument(tracing::Span::current());
-    #[cfg(not(target_family = "wasm"))]
-    tokio::spawn(task);
-    #[cfg(target_family = "wasm")]
-    nanocode_platform::spawn_local(task);
+    spawn_task(Box::pin(task));
     BackendTurn {
         request_id,
         result: Box::pin(async move { receiver.await.unwrap_or(Err(NanocodexError::TurnStopped)) }),
@@ -4220,9 +4214,9 @@ impl State {
         let notices_before = conversation.recovery_notices.len();
 
         self.publish_round_boundary(&conversation).await;
-        let mut result = self
-            .run_locked(&mut conversation, &request, speed, &cancel)
-            .await;
+        let execution: AgentFuture<'_, Result<TurnResult>> =
+            Box::pin(self.run_locked(&mut conversation, &request, speed, &cancel));
+        let mut result = execution.await;
 
         let mut model_call_index = 0;
         if let Some(turn) = self.steering.lock().await.get_mut(&request.key) {
@@ -6154,10 +6148,7 @@ impl LifecycleBackend for Driver {
                 let _ = accepted.send(result);
             }
             .instrument(parent);
-            #[cfg(not(target_family = "wasm"))]
-            tokio::spawn(task);
-            #[cfg(target_family = "wasm")]
-            nanocode_platform::spawn_local(task);
+            spawn_task(Box::pin(task));
             receipt.await.unwrap_or(Err(NanocodexError::TurnStopped))
         })
     }
@@ -6434,10 +6425,7 @@ impl LifecycleBackend for Driver {
                 }
                 let _ = accepted.send(result);
             };
-            #[cfg(not(target_family = "wasm"))]
-            tokio::spawn(task);
-            #[cfg(target_family = "wasm")]
-            nanocode_platform::spawn_local(task);
+            spawn_task(Box::pin(task));
             receipt.await.unwrap_or(Err(NanocodexError::TurnStopped))
         })
     }
@@ -6560,10 +6548,7 @@ impl LifecycleBackend for Driver {
 
                 let _ = state.release_local().await;
             };
-            #[cfg(not(target_family = "wasm"))]
-            tokio::spawn(release);
-            #[cfg(target_family = "wasm")]
-            nanocode_platform::spawn_local(release);
+            spawn_task(Box::pin(release));
             Ok(())
         })
     }
@@ -6796,4 +6781,11 @@ impl ClaudeBuilder {
         }
         Ok(builder)
     }
+}
+
+fn spawn_task(task: BackendFuture<()>) {
+    #[cfg(not(target_family = "wasm"))]
+    drop(tokio::spawn(task));
+    #[cfg(target_family = "wasm")]
+    nanocode_platform::spawn_local(task);
 }

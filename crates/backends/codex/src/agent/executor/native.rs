@@ -1,10 +1,11 @@
-use std::{future::Future, sync::Arc};
+use std::sync::Arc;
 
 use crate::client::__private::ModelConfig;
 
 use crate::{NanocodexError, Result};
 
-pub(crate) type ServiceFactory<S> = Arc<dyn Fn(Arc<ModelConfig>) -> S + Send + Sync>;
+pub(crate) type ServiceFactory =
+    Arc<dyn Fn(Arc<ModelConfig>) -> super::ResponsesClientBox + Send + Sync>;
 
 pub(crate) trait AgentSend: Send {}
 
@@ -14,10 +15,9 @@ pub(crate) trait AgentFactory: Send + Sync {}
 
 impl<T: Send + Sync> AgentFactory for T {}
 
-pub(crate) fn spawn_driver<F>(driver: F) -> Result<()>
-where
-    F: Future<Output = ()> + Send + 'static,
-{
+pub(crate) fn spawn_driver(
+    driver: crate::agent::execution::ExecutionFuture<'static, ()>,
+) -> Result<()> {
     let runtime = tokio::runtime::Handle::try_current()
         .map_err(|_| NanocodexError::TokioRuntimeUnavailable)?;
     drop(runtime.spawn(driver));

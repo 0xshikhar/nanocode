@@ -282,12 +282,7 @@ fn interrupted_tool_host(error: nanocode_code_mode::embedded::CodeModeHostError)
     )
 }
 
-impl<S> ModelRun<S>
-where
-    S: Service<ResponsesAttempt, Response = ResponsesServiceResponse> + AgentSend + 'static,
-    S::Error: Into<crate::client::ResponseError>,
-    S::Future: AgentSend,
-{
+impl ModelRun {
     pub(super) async fn execute_model_tools(
         &mut self,
         tools: &ToolRuntime,

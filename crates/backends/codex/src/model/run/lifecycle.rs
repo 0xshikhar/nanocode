@@ -99,12 +99,7 @@ pub(super) struct CompactionContext<'a> {
     pub(super) phase: CompactionPhase,
 }
 
-impl<S> ModelRun<S>
-where
-    S: Service<ResponsesAttempt, Response = ResponsesServiceResponse> + AgentSend + 'static,
-    S::Error: Into<crate::client::ResponseError>,
-    S::Future: AgentSend,
-{
+impl ModelRun {
     pub(super) async fn maybe_compact(
         &mut self,
         after_model_call_index: u32,
@@ -310,7 +305,7 @@ where
         {
             Ok(success) => success,
             Err(error) => {
-                let error = NanocodexError::from(Into::<crate::client::ResponseError>::into(error));
+                let error = NanocodexError::from(error);
                 if !error
                     .responses_error()
                     .is_some_and(|source| source.is_misalignment_policy_violation())
@@ -485,8 +480,7 @@ where
                 let success = match self.client.execute(request).instrument(span.clone()).await {
                     Ok(success) => success,
                     Err(error) => {
-                        let error =
-                            NanocodexError::from(Into::<crate::client::ResponseError>::into(error));
+                        let error = NanocodexError::from(error);
 
                         if error.responses_error().is_none() {
                             return Err(error);

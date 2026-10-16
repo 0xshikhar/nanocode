@@ -3,7 +3,8 @@ mod control;
 mod telemetry;
 
 use super::execution::{
-    AdmittedExecution, ExecutionTurn, SteerDelivery, SteerQueue, SteerReceipt, SteerSender,
+    AdmittedExecution, ExecutionFuture, ExecutionTurn, SteerDelivery, SteerQueue, SteerReceipt,
+    SteerSender,
 };
 use super::spawn::{validate_model_reasoning_mode, validate_model_thinking};
 use super::*;
@@ -16,14 +17,14 @@ use control::{
 };
 use telemetry::{ReasoningSettings, agent_compact_span, agent_turn_span, emit_replayed_terminal};
 
-pub(super) struct AgentDriver<S> {
+pub(super) struct AgentDriver {
     pub(super) commands: mpsc::Receiver<Command>,
     pub(super) events: EventSink,
-    pub(super) client: ResponsesClient<S>,
+    pub(super) client: ResponsesClientBox,
     pub(super) transport_stats: Arc<TransportStats>,
     pub(super) tools: Tools,
     pub(super) workspace: Option<Arc<str>>,
-    pub(super) spawner: BranchSpawner<S>,
+    pub(super) spawner: BranchSpawner,
     pub(super) initial_model: Option<PreparedCheckpoint>,
     pub(super) origin: AgentOrigin,
     pub(super) checkpoints: Arc<CheckpointSource>,
@@ -32,12 +33,7 @@ pub(super) struct AgentDriver<S> {
     pub(super) initial_persisted: Option<oneshot::Sender<Result<()>>>,
 }
 
-impl<S> AgentDriver<S>
-where
-    S: Service<ResponsesAttempt, Response = ResponsesServiceResponse> + AgentSend + 'static,
-    S::Error: Into<ResponseError> + AgentSend + 'static,
-    S::Future: AgentSend,
-{
+impl AgentDriver {
     #[allow(clippy::too_many_lines)]
     pub(super) async fn run(mut self) -> Result<()> {
         let session_id = self.events.request_id().to_owned();
@@ -649,7 +645,7 @@ where
                     let mut compact_replaced = false;
                     let (cancel_compaction, mut cancel_compaction_rx) = oneshot::channel();
                     let mut cancel_compaction = Some(cancel_compaction);
-                    let mut execution = Box::pin(
+                    let mut execution: ExecutionFuture<'_, Result<ModelCompactOutcome>> = Box::pin(
                         model
                             .compact(
                                 self.workspace.clone(),
@@ -971,11 +967,9 @@ where
                                 Ok(()) => {
                                     compact_checkpoint_committed = true;
                                     latest_fork_checkpoint = Some(checkpoint);
-                                    model.replace_client(ResponsesClient::new((self
-                                        .spawner
-                                        .service_factory)(
+                                    model.replace_client((self.spawner.service_factory)(
                                         Arc::clone(&self.spawner.config),
-                                    )));
+                                    ));
                                     Err(NanocodexError::TurnCancelled)
                                 }
                                 Err(error) => Err(error),
@@ -1242,7 +1236,7 @@ where
             let mut cancel_result = None;
             let input_events = events.clone();
             model.set_events(events);
-            let mut execution = Box::pin(
+            let mut execution: ExecutionFuture<'_, Result<ModelTurnOutcome>> = Box::pin(
                 model
                     .execute(
                         prompt,
@@ -1811,8 +1805,8 @@ where
                         Ok(()) => (Ok(()), Ok(())),
                         Err(error) => (Err(duplicate_policy_error(&error)), Err(error)),
                     };
-                    model.replace_client(ResponsesClient::new((self.spawner.service_factory)(
-                        Arc::clone(&self.spawner.config),
+                    model.replace_client((self.spawner.service_factory)(Arc::clone(
+                        &self.spawner.config,
                     )));
                     (
                         persisted.and(Err(NanocodexError::TurnCancelled)),
@@ -2062,19 +2056,14 @@ async fn accept_turn_steer(
     Ok(())
 }
 
-async fn commit_developer_message<S>(
-    model: &mut ModelRun<S>,
+async fn commit_developer_message(
+    model: &mut ModelRun,
     execution: &Execution,
     lineage_id: Arc<str>,
     (model_name, thinking, service_tier): (Model, Thinking, ServiceTier),
     text: String,
     workspace: Option<&str>,
-) -> Result<Option<Arc<CommittedSession>>>
-where
-    S: Service<ResponsesAttempt, Response = ResponsesServiceResponse> + AgentSend + 'static,
-    S::Error: Into<ResponseError>,
-    S::Future: AgentSend,
-{
+) -> Result<Option<Arc<CommittedSession>>> {
     let snapshot = model.append_developer_message(text, workspace)?;
     let checkpoint = Arc::new(CommittedSession::new(
         lineage_id,
@@ -2087,20 +2076,15 @@ where
     Ok(Some(checkpoint))
 }
 
-fn model_from_checkpoint<S>(
+fn model_from_checkpoint(
     events: &EventSink,
     transport_stats: &Arc<TransportStats>,
     tools: &Tools,
-    spawner: &BranchSpawner<S>,
+    spawner: &BranchSpawner,
     prompt_cache: &ModelPromptCache,
     checkpoint: Option<&CommittedSession>,
-) -> ModelRun<S>
-where
-    S: Service<ResponsesAttempt, Response = ResponsesServiceResponse> + AgentSend + 'static,
-    S::Error: Into<ResponseError>,
-    S::Future: AgentSend,
-{
-    let client = ResponsesClient::new((spawner.service_factory)(Arc::clone(&spawner.config)));
+) -> ModelRun {
+    let client = (spawner.service_factory)(Arc::clone(&spawner.config));
     let mut model = if let Some(checkpoint) = checkpoint {
         let prepared = prepare_checkpoint(
             checkpoint.model().clone(),

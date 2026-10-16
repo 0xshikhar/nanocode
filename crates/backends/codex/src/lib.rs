@@ -86,7 +86,6 @@ pub mod input {
 }
 
 #[cfg(not(target_family = "wasm"))]
-
 pub mod transport {
     pub use crate::client::{
         responses::RequestProfile,

@@ -6,6 +6,7 @@ use std::{
 };
 
 use futures_util::future::{AbortHandle, Abortable};
+use nanocode_agent_core::backend::BackendFuture;
 use nanocode_platform::Instant;
 use tokio::sync::oneshot;
 
@@ -71,7 +72,7 @@ where
 {
     let (send, result) = oneshot::channel();
     let (abort, registration) = AbortHandle::new_pair();
-    spawn_detached(async move {
+    spawn_detached(Box::pin(async move {
         let _ = Abortable::new(
             async move {
                 let output = future.await;
@@ -80,7 +81,7 @@ where
             registration,
         )
         .await;
-    });
+    }));
     Task { result, abort }
 }
 
@@ -98,19 +99,10 @@ where
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
-fn spawn_detached<F>(future: F)
-where
-    F: Future<Output = ()> + Send + 'static,
-{
+fn spawn_detached(future: BackendFuture<()>) {
+    #[cfg(not(target_family = "wasm"))]
     drop(tokio::spawn(future));
-}
-
-#[cfg(target_family = "wasm")]
-fn spawn_detached<F>(future: F)
-where
-    F: Future<Output = ()> + 'static,
-{
+    #[cfg(target_family = "wasm")]
     nanocode_platform::spawn_local(future);
 }
 

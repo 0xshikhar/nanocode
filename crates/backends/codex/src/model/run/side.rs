@@ -46,21 +46,16 @@ impl ModelCheckpoint {
         clippy::too_many_arguments,
         reason = "a side question takes each request setting from the live thread"
     )]
-    pub(crate) async fn side_question<S>(
+    pub(crate) async fn side_question(
         &self,
         config: &ModelConfig,
-        service: S,
+        mut client: ResponsesClientBox,
         model: Model,
         thinking: Thinking,
         service_tier: ServiceTier,
         thread_id: &str,
         question: &str,
-    ) -> Result<SideAnswer>
-    where
-        S: Service<ResponsesAttempt, Response = ResponsesServiceResponse> + AgentSend + 'static,
-        S::Error: Into<crate::client::ResponseError>,
-        S::Future: AgentSend,
-    {
+    ) -> Result<SideAnswer> {
         let (events, _events) = EventSink::channel(thread_id.to_owned());
         let factory = ResponsesAttemptFactory::new(
             RequestProfile::new(
@@ -93,10 +88,7 @@ impl ModelCheckpoint {
             ),
             service_tier,
         );
-        let mut client = ResponsesClient::new(service);
-        let success = client.execute(request).await.map_err(|error| {
-            NanocodexError::from(Into::<crate::client::ResponseError>::into(error))
-        })?;
+        let success = client.execute(request).await?;
         let ResponsesOutput::Generation(response) = success.into_output() else {
             return Err(NanocodexError::InvalidAttemptState {
                 detail: "side question returned a non-generation response",

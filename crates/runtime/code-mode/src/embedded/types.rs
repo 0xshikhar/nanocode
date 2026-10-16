@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use nanocode_tool_contracts::{ToolContext, ToolOutputBody};
-use nanocode_types::responses::ResponseItem;
+use nanocode_types_core::responses::ResponseItem;
 use serde::Deserialize;
 use serde_json::{Value, value::RawValue};
 

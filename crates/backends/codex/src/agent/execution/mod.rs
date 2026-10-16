@@ -1212,7 +1212,7 @@ impl ExecutionTurn {
     }
 
     #[cfg_attr(target_family = "wasm", allow(clippy::missing_const_for_fn))]
-    pub(crate) fn replaced(mut self) -> Self {
+    pub(crate) const fn replaced(mut self) -> Self {
         self.platform = self.platform.replaced();
         self
     }
