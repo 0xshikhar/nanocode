@@ -91,6 +91,11 @@ impl OpenAiAuthSnapshot {
     }
 
     #[must_use]
+    pub fn sends_bearer(&self) -> bool {
+        !self.bearer.is_empty()
+    }
+
+    #[must_use]
     pub fn account_id(&self) -> Option<&str> {
         self.account_id.as_deref()
     }
@@ -161,6 +166,7 @@ pub trait OpenAiAuthSource: Send + Sync {
 pub struct OpenAiAuth {
     mode: OpenAiAuthMode,
     source: Arc<dyn OpenAiAuthSource>,
+    gateway_managed: bool,
 }
 
 impl OpenAiAuth {
@@ -172,7 +178,22 @@ impl OpenAiAuth {
         Self {
             mode: OpenAiAuthMode::ApiKey,
             source: Arc::new(source),
+            gateway_managed: false,
         }
+    }
+
+    #[must_use]
+    pub fn gateway_managed() -> Self {
+        Self {
+            mode: OpenAiAuthMode::ApiKey,
+            source: Arc::new(GatewayManagedAuth),
+            gateway_managed: true,
+        }
+    }
+
+    #[must_use]
+    pub const fn is_gateway_managed(&self) -> bool {
+        self.gateway_managed
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -187,6 +208,7 @@ impl OpenAiAuth {
         Self {
             mode: OpenAiAuthMode::ChatGpt,
             source,
+            gateway_managed: false,
         }
     }
 
@@ -216,6 +238,7 @@ impl fmt::Debug for OpenAiAuth {
         formatter
             .debug_struct("OpenAiAuth")
             .field("mode", &self.mode)
+            .field("gateway_managed", &self.gateway_managed)
             .finish_non_exhaustive()
     }
 }
@@ -274,6 +297,33 @@ impl OpenAiAuthSource for CodexHomeAuth {
     ) -> OpenAiAuthFuture<'_, Result<(), OpenAiAuthError>> {
         let rejected = rejected.clone();
         Box::pin(async move { self.load()?.recover_unauthorized(&rejected).await })
+    }
+}
+
+struct GatewayManagedAuth;
+
+impl OpenAiAuthSource for GatewayManagedAuth {
+    fn validate(&self) -> Result<(), OpenAiAuthError> {
+        Ok(())
+    }
+
+    fn snapshot(&self) -> OpenAiAuthFuture<'_, Result<OpenAiAuthSnapshot, OpenAiAuthError>> {
+        Box::pin(ready(Ok(OpenAiAuthSnapshot::new(
+            OpenAiAuthMode::ApiKey,
+            "",
+            None::<Arc<str>>,
+            false,
+            0,
+        ))))
+    }
+
+    fn recover_unauthorized(
+        &self,
+        _rejected: &OpenAiAuthSnapshot,
+    ) -> OpenAiAuthFuture<'_, Result<(), OpenAiAuthError>> {
+        Box::pin(ready(Err(OpenAiAuthError::LoginRequired(Arc::from(
+            "the gateway rejected its configured credentials",
+        )))))
     }
 }
 

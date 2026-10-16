@@ -212,6 +212,26 @@ impl<F> OpenAiBuilder<F> {
         self
     }
 
+    #[must_use]
+    pub fn responses_gateway(
+        mut self,
+        gateway: crate::client::transport::ResponsesGateway,
+    ) -> Self {
+        gateway
+            .api_base_url()
+            .clone_into(&mut self.config.api_base_url);
+        if let Some(websocket_url) = gateway.websocket_url() {
+            self.config.websocket_url = websocket_url;
+        }
+        self.config.model_id_prefix = gateway.model_id_prefix().map(Arc::from);
+        self.config.responses_gateway = Some(Arc::new(gateway));
+        self.config.responses_transport = ResponsesTransport::Https;
+        self.config.responses_history = ResponsesHistory::FullReplay;
+        self.config.store_responses = false;
+        self.config.websocket_warmup = false;
+        self
+    }
+
     #[cfg(any(target_family = "wasm", docsrs))]
     #[must_use]
     pub fn host_transport(

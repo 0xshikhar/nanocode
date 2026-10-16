@@ -571,6 +571,10 @@ pub(crate) struct ResponseCreate<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     generate: Option<bool>,
     client_metadata: ClientMetadata<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider: Option<&'a serde_json::Value>,
+    #[serde(rename = "providerOptions", skip_serializing_if = "Option::is_none")]
+    provider_options: Option<crate::client::transport::gateway::VercelProviderOptions<'a>>,
 }
 
 impl<'a> ResponseCreate<'a> {
@@ -700,6 +704,14 @@ impl<'a> ResponseCreate<'a> {
                     },
                 }),
             },
+            provider: config
+                .responses_gateway
+                .as_deref()
+                .and_then(crate::client::transport::ResponsesGateway::openrouter_provider),
+            provider_options: config
+                .responses_gateway
+                .as_deref()
+                .and_then(crate::client::transport::ResponsesGateway::vercel_provider_options),
         }
     }
 }

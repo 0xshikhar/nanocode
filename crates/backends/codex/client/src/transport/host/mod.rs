@@ -43,6 +43,7 @@ pub struct HostConnectRequest<'a> {
     session_id: &'a str,
     thread_id: &'a str,
     turn_state: Option<&'a str>,
+    headers: &'a [super::GatewayHeader],
 }
 
 impl<'a> HostConnectRequest<'a> {
@@ -83,7 +84,19 @@ impl<'a> HostConnectRequest<'a> {
             session_id,
             thread_id,
             turn_state,
+            headers: &[],
         }
+    }
+
+    #[cfg(target_family = "wasm")]
+    pub(crate) const fn with_headers(mut self, headers: &'a [super::GatewayHeader]) -> Self {
+        self.headers = headers;
+        self
+    }
+
+    #[must_use]
+    pub const fn headers(&self) -> &'a [super::GatewayHeader] {
+        self.headers
     }
 
     #[must_use]
@@ -94,6 +107,11 @@ impl<'a> HostConnectRequest<'a> {
     #[must_use]
     pub const fn bearer_token(&self) -> &'a str {
         self.bearer_token
+    }
+
+    #[must_use]
+    pub const fn sends_bearer_token(&self) -> bool {
+        !self.bearer_token.is_empty()
     }
 
     #[must_use]

@@ -19,6 +19,7 @@ pub(crate) struct ResponsesHttp {
     chat_gateway: Option<(std::sync::Arc<super::chat::ChatGateway>, reqwest::Client)>,
     #[cfg(target_family = "wasm")]
     host: Option<std::sync::Arc<dyn crate::client::transport::host::HostTransport>>,
+    gateway: Option<std::sync::Arc<super::ResponsesGateway>>,
 }
 
 pub(crate) struct ResponsesHttpStream {
@@ -43,11 +44,13 @@ impl ResponsesHttp {
     pub(crate) fn new(
         client: reqwest::Client,
         chat_gateway: Option<std::sync::Arc<super::chat::ChatGateway>>,
+        gateway: Option<std::sync::Arc<super::ResponsesGateway>>,
     ) -> Self {
         Self {
             client,
             chat_gateway: chat_gateway
                 .map(|gateway| (gateway, super::chat::ChatGateway::http_client())),
+            gateway,
         }
     }
 
@@ -69,7 +72,6 @@ impl ResponsesHttp {
         let mut builder = self
             .client
             .post(endpoint)
-            .bearer_auth(auth.bearer())
             .header(header::CONTENT_TYPE, "application/json")
             .header(header::ACCEPT, "text/event-stream")
             .header(RESPONSES_LITE_HEADER, "true")
@@ -81,11 +83,21 @@ impl ResponsesHttp {
                 concat!("nanocode/", env!("CARGO_PKG_VERSION")),
             )
             .body(request.raw().get().to_owned());
+        if auth.sends_bearer() {
+            builder = builder.bearer_auth(auth.bearer());
+        }
         if let Some(account_id) = auth.account_id() {
             builder = builder.header("ChatGPT-Account-ID", account_id);
         }
         if auth.is_fedramp() {
             builder = builder.header("X-OpenAI-Fedramp", "true");
+        }
+        for gateway_header in self
+            .gateway
+            .as_deref()
+            .map_or(&[][..], super::ResponsesGateway::headers)
+        {
+            builder = builder.header(gateway_header.name(), gateway_header.value());
         }
         if let Some(turn_state) =
             turn_state.and_then(|value| header::HeaderValue::from_bytes(value.as_bytes()).ok())
@@ -279,8 +291,9 @@ fn map_http_error(error: reqwest::Error) -> ResponsesError {
 impl ResponsesHttp {
     pub(crate) fn new(
         host: Option<std::sync::Arc<dyn crate::client::transport::host::HostTransport>>,
+        gateway: Option<std::sync::Arc<super::ResponsesGateway>>,
     ) -> Self {
-        Self { host }
+        Self { host, gateway }
     }
 
     pub(crate) async fn send(
@@ -310,6 +323,11 @@ impl ResponsesHttp {
                     session_id,
                     thread_id,
                     turn_state,
+                )
+                .with_headers(
+                    self.gateway
+                        .as_deref()
+                        .map_or(&[][..], super::ResponsesGateway::headers),
                 ),
                 request.raw().get(),
             )

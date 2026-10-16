@@ -23,7 +23,11 @@ impl ServicePlatform {
 
     pub(crate) fn with_http_client(config: &ModelConfig, client: reqwest::Client) -> Self {
         Self {
-            http: ResponsesHttp::new(client, config.chat_gateway.clone()),
+            http: ResponsesHttp::new(
+                client,
+                config.chat_gateway.clone(),
+                config.responses_gateway.clone(),
+            ),
         }
     }
 

@@ -8,6 +8,7 @@ pub use connector::connect_async;
 #[cfg(not(target_family = "wasm"))]
 mod crypto;
 pub(crate) mod error;
+pub(crate) mod gateway;
 
 pub mod host;
 mod retry_after;
@@ -30,6 +31,7 @@ pub use chat::{ChatGateway, DEFAULT_STALL_TIMEOUT, OPENROUTER_API_BASE_URL};
 #[cfg(not(target_family = "wasm"))]
 pub use crypto::install_default_rustls_crypto_provider;
 pub use error::{ResponsesError, RetryAdvice};
+pub use gateway::{GatewayHeader, ResponsesGateway};
 pub use retry_after::RetryAfter;
 pub(crate) use retry_after::RetryReceipt;
 pub use telemetry::TRANSPORT;

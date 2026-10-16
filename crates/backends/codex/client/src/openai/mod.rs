@@ -7,7 +7,7 @@ mod platform;
 
 use crate::client::{
     DefaultResponsesService, Model, OpenAiAuthError, OpenAiAuthMode, ResponsesHistory,
-    ResponsesRetryPolicy, ResponsesTransport,
+    ResponsesRetryPolicy, ResponsesTransport, transport::ResponsesGateway,
 };
 
 #[doc(hidden)]
@@ -146,9 +146,58 @@ pub fn apply_mode_defaults(config: &mut ModelConfig, mode: OpenAiAuthMode) {
         .clone_into(&mut config.api_base_url);
 }
 
+fn validate_responses_gateway(
+    config: &ModelConfig,
+    gateway: &ResponsesGateway,
+) -> Result<(), OpenAiError> {
+    gateway
+        .validate()
+        .and_then(|()| crate::client::transport::gateway::validate_base_url(&config.api_base_url))
+        .map_err(|detail| OpenAiError::InvalidConfiguration { detail })?;
+    if config.auth.mode() != OpenAiAuthMode::ApiKey {
+        return Err(OpenAiError::InvalidConfiguration {
+            detail: "Responses gateways require API-key authentication",
+        });
+    }
+    #[cfg(not(target_family = "wasm"))]
+    if config.chat_gateway.is_some() {
+        return Err(OpenAiError::InvalidConfiguration {
+            detail: "choose either a Chat Completions gateway or a Responses gateway",
+        });
+    }
+    if !gateway.serves(config.model) {
+        return Err(OpenAiError::InvalidConfiguration {
+            detail: "Responses gateways serve the OpenAI Codex models Sol, Luna and Astra; use the Chat Completions gateway for GLM-5.3, Kimi and MiMo",
+        });
+    }
+    if matches!(config.responses_transport, ResponsesTransport::WebSocket)
+        && !gateway.supports_websocket()
+    {
+        return Err(OpenAiError::InvalidConfiguration {
+            detail: "this gateway documents the Responses API over HTTPS only",
+        });
+    }
+    if config.store_responses && !gateway.supports_stored_responses() {
+        return Err(OpenAiError::InvalidConfiguration {
+            detail: "OpenRouter's Responses API is stateless and rejects store: true",
+        });
+    }
+    Ok(())
+}
+
 #[doc(hidden)]
 pub fn validate(config: &ModelConfig) -> Result<(), OpenAiError> {
     config.auth.validate()?;
+    if config.auth.is_gateway_managed()
+        && !config
+            .responses_gateway
+            .as_deref()
+            .is_some_and(ResponsesGateway::authenticates_requests)
+    {
+        return Err(OpenAiError::InvalidConfiguration {
+            detail: "gateway-managed authentication requires a Cloudflare provider-native gateway with a gateway token",
+        });
+    }
     if !config.model.supports_thinking(config.thinking) {
         return Err(OpenAiError::InvalidConfiguration {
             detail: (if config.model == Model::Glm53 {
@@ -202,11 +251,19 @@ pub fn validate(config: &ModelConfig) -> Result<(), OpenAiError> {
                 detail: "model ID prefixes require API-key authentication",
             });
         }
-        if !matches!(config.responses_transport, ResponsesTransport::Https) {
+        if !matches!(config.responses_transport, ResponsesTransport::Https)
+            && !config
+                .responses_gateway
+                .as_deref()
+                .is_some_and(ResponsesGateway::supports_websocket)
+        {
             return Err(OpenAiError::InvalidConfiguration {
                 detail: "model ID prefixes require the HTTPS Responses transport",
             });
         }
+    }
+    if let Some(gateway) = config.responses_gateway.as_deref() {
+        validate_responses_gateway(config, gateway)?;
     }
     #[cfg(not(target_family = "wasm"))]
     if let Some(gateway) = config.chat_gateway.as_deref() {

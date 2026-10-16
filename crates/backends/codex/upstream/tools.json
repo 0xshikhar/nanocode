@@ -57,7 +57,7 @@
     },
     {
       "path": "client/src/openai/config.rs",
-      "sha256": "dd70b1b45260b87337e3a6956a0579772f23d5bc6014f842fb653a3988ddc870"
+      "sha256": "36e900bf6c2293368d019e1b6ef2d63cbd1eec0954019e93a49f1dcb2d5cf05d"
     },
     {
       "path": "src/model/input.rs",
