@@ -120,9 +120,6 @@ impl AgentDriver {
         }
         loop {
             let command = loop {
-                if let Some((parent, result)) = pending_compact.take() {
-                    break Command::Compact { parent, result };
-                }
                 if let Some(queued) = queued_turns.pop_front() {
                     match queued {
                         QueuedTurn::Pending {
@@ -273,6 +270,10 @@ impl AgentDriver {
                             continue;
                         }
                     }
+                }
+
+                if let Some((parent, result)) = pending_compact.take() {
+                    break Command::Compact { parent, result };
                 }
 
                 if developer_checkpoint_ready && !pending_developer_messages.is_empty() {
