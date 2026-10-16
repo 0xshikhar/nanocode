@@ -61,7 +61,7 @@
     },
     {
       "path": "src/model/input.rs",
-      "sha256": "6b291964d7ed8c5e0b4d4490b78d04a71b8009068465f3b2e571282b1d9f4b1d"
+      "sha256": "86f6a486427632f2ea21e40414eb36ed41d9f9b1fe1d419653ba939ffb634e20"
     },
     {
       "path": "src/model/run/mod.rs",
@@ -69,11 +69,11 @@
     },
     {
       "path": "src/model/run/turn.rs",
-      "sha256": "f12d2b783bd45c8942f33259d7f013ccd5658129c78ad2511833bfe5a64e934f"
+      "sha256": "a01bbf43a6fba96e1c08d951128abe2b3d95eba5d0766d84e374e3aa4aa8bcac"
     },
     {
       "path": "src/model/run/lifecycle.rs",
-      "sha256": "90d3209ef7030e84a6e40269bb0a8ca6f0da94efeca47c9a087da01abc0fcd33"
+      "sha256": "dd07fe25d451a54607602f4bcf12b5e53793d29601510c1db3d53dd0ed67752b"
     }
   ],
   "scope": "Reviewed StandardTool definitions only, before host routing or Code Mode exposure. Tool source and implementation hashes certify the reviewed artifacts; they are not an automatic Rust semantic equivalence proof. Input names, descriptions, schemas, strict=false and apply_patch grammar match the selected upstream profile. Output schemas remain host metadata and are skipped on the Responses wire, as upstream does. Host handlers, availability, Code Mode, remote routing, permission policy, output budgets and result rendering are SDK behavior.",

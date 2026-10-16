@@ -4,18 +4,21 @@ use crate::client::{
         ContentItem, FunctionOutputBody, FunctionOutputContent, MessageRole, ResponseItem,
     },
 };
+use crate::builtin_tools::StandardTool;
 use nanocode_code_mode::contract::{ToolOutputBody, ToolOutputContent};
+use nanocode_tool_host::Tools;
 use serde_json::Value;
 
 use super::context::ContextSnapshot;
 
 pub(in crate::model) fn task_input(
     config: &ModelConfig,
+    tools: &Tools,
     prompt: &Prompt,
     user_content: Vec<ContentItem>,
     context: &ContextSnapshot,
 ) -> Vec<ResponseItem> {
-    let mut input = vec![developer_context(config), context.full_item()];
+    let mut input = vec![developer_context(config, tools), context.full_item()];
     input.extend(prompt_messages(prompt, user_content));
     input
 }
@@ -56,17 +59,29 @@ pub(in crate::model) fn turn_aborted() -> ResponseItem {
     )
 }
 
-pub(in crate::model) fn developer_context(config: &ModelConfig) -> ResponseItem {
+pub(in crate::model) fn developer_context(config: &ModelConfig, tools: &Tools) -> ResponseItem {
     ResponseItem::message(
         MessageRole::Developer,
         [ContentItem::InputText {
             text: format!(
-                "{}\n\n{}",
+                "{}\n\n{}{}",
                 permissions_instructions(),
+                code_mode_instructions(tools),
                 config.host_instructions()
             )
             .into(),
         }],
+    )
+}
+
+fn code_mode_instructions(tools: &Tools) -> String {
+    if !tools.exposure().is_available_in_code_mode() {
+        return String::new();
+    }
+    let exec_command = StandardTool::ExecCommand.name();
+    let write_stdin = StandardTool::WriteStdin.name();
+    format!(
+        "<code_mode_orchestration>\nUse code mode to orchestrate related tool calls when the next calls can be determined from tool results without additional model judgment or user input. Keep the complete lifecycle in one code-mode program: use `Promise.all` for independent calls, and use loops and conditionals for dependent calls. When `{exec_command}` is available and returns a `session_id`, continue calling `{write_stdin}` in that program until the process exits. If the outer code-mode cell yields, wait on that cell with its `cell_id`; do not restart its work or move nested process polling into separate model turns. Complete or terminate yielded cells before finishing your turn. Return only the results needed for the next reasoning step. Use separate code-mode calls when an intermediate result requires model judgment, user input, or a progress update.\n</code_mode_orchestration>\n\n"
     )
 }
 

@@ -461,7 +461,10 @@ impl ModelRun {
             if update.full {
                 session
                     .conversation
-                    .append_canonical_context(developer_context(&self.config), update.item);
+                    .append_canonical_context(
+                        developer_context(&self.config, &self.tools),
+                        update.item,
+                    );
             } else {
                 session
                     .conversation
@@ -533,7 +536,13 @@ impl ModelRun {
                 tools.default_shell_name(),
                 self.context_source.execution_environment(),
             );
-            let mut history = task_input(&self.config, &task, user_content, &context_snapshot);
+            let mut history = task_input(
+                &self.config,
+                &self.tools,
+                &task,
+                user_content,
+                &context_snapshot,
+            );
             let mut pending = std::mem::take(&mut self.pending_developer_messages);
             for item in &mut pending {
                 assign_missing_response_item_id(item);
