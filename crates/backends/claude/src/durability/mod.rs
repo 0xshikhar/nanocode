@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use nanocode_agent::{
+use nanocode_agent_core::{
     AgentEvents, BackendRequest, Nanocodex, Result as AgentResult, backend::BackendFuture,
 };
 use nanocode_durability::{
@@ -76,11 +76,11 @@ impl DurableAgentExt for ClaudeBuilder {
         {
             record
                 .model
-                .capabilities(nanocode_agent::ModelTransport::Native)
+                .capabilities(nanocode_agent_core::ModelTransport::Native)
                 .check_service_tier(initial.service_tier)?;
             builder
                 .thinking(initial.thinking)?
-                .fast_mode(initial.service_tier != nanocode_agent::ServiceTier::Standard)
+                .fast_mode(initial.service_tier != nanocode_agent_core::ServiceTier::Standard)
         } else {
             builder
         };
@@ -132,7 +132,7 @@ struct LazyClaudeExecution {
 
     initialized: std::sync::atomic::AtomicBool,
 
-    model: std::sync::Mutex<Option<nanocode_agent::ModelSelection>>,
+    model: std::sync::Mutex<Option<nanocode_agent_core::ModelSelection>>,
 }
 
 impl LazyClaudeExecution {
@@ -189,7 +189,7 @@ impl LazyClaudeExecution {
 
 fn branch_child(
     branches: &Branches,
-    child: &nanocode_agent::SessionInfo,
+    child: &nanocode_agent_core::SessionInfo,
 ) -> AgentResult<Option<Arc<dyn ClaudeExecutionPolicy>>> {
     if branches.record.is_none() {
         return Ok(None);
@@ -329,7 +329,7 @@ impl ClaudeExecutionPolicy for LazyClaudeExecution {
     fn initial_checkpoint(
         &self,
         state: Value,
-        model: nanocode_agent::ModelSelection,
+        model: nanocode_agent_core::ModelSelection,
     ) -> PolicyFuture<'_, ()> {
         Box::pin(async move {
             if self.initialized.load(std::sync::atomic::Ordering::SeqCst) {
@@ -364,7 +364,7 @@ impl ClaudeExecutionPolicy for LazyClaudeExecution {
 
     fn branch(
         &self,
-        child: &nanocode_agent::SessionInfo,
+        child: &nanocode_agent_core::SessionInfo,
     ) -> AgentResult<Option<Arc<dyn ClaudeExecutionPolicy>>> {
         branch_child(
             &Branches {
@@ -383,7 +383,7 @@ impl ClaudeExecutionPolicy for ClaudeExecution {
 
     fn branch(
         &self,
-        child: &nanocode_agent::SessionInfo,
+        child: &nanocode_agent_core::SessionInfo,
     ) -> AgentResult<Option<Arc<dyn ClaudeExecutionPolicy>>> {
         branch_child(&self.branches, child)
     }
@@ -429,7 +429,7 @@ impl ClaudeExecutionPolicy for ClaudeExecution {
         Box::pin(async move {
             let input: Box<serde_json::value::RawValue> = serde_json::from_str(&input_json)
                 .map_err(|error| {
-                    nanocode_agent::NanocodexError::InvalidRequest(error.to_string())
+                    nanocode_agent_core::NanocodexError::InvalidRequest(error.to_string())
                 })?;
             self.owner
                 .identified_steer_accepted(message_id, &input)
@@ -448,7 +448,7 @@ impl ClaudeExecutionPolicy for ClaudeExecution {
         Box::pin(async move {
             let input: Box<serde_json::value::RawValue> = serde_json::from_str(&input_json)
                 .map_err(|error| {
-                    nanocode_agent::NanocodexError::InvalidRequest(error.to_string())
+                    nanocode_agent_core::NanocodexError::InvalidRequest(error.to_string())
                 })?;
             self.owner
                 .accept_steer(id, after, &input, message_id)
@@ -634,7 +634,7 @@ impl ClaudeExecutionPolicy for ClaudeExecution {
         Box::pin(async move {
             let state = self.session.state().await.map_err(agent_error)?;
             let operation = state.operation(&id).ok_or_else(|| {
-                nanocode_agent::NanocodexError::InvalidCheckpoint(
+                nanocode_agent_core::NanocodexError::InvalidCheckpoint(
                     "Claude notice operation is missing".into(),
                 )
             })?;

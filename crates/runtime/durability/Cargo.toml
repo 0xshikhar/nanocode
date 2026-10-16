@@ -18,12 +18,11 @@ description = "Portable durable execution state and stores for Nanocodex"
 rustdoc-args = ["-D", "warnings"]
 
 [dependencies]
+nanocode-durability-core.workspace = true
 nanocode-platform.workspace = true
-nanocode-agent.workspace = true
-sha2.workspace = true
+nanocode-agent-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync"] }
 tracing.workspace = true
 uuid.workspace = true

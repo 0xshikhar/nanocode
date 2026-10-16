@@ -23,85 +23,29 @@ use std::{
     time::{Duration, Instant},
 };
 
-use serde::Serialize;
 use tokio::{sync::Mutex, task::JoinHandle, time::timeout};
 
-pub const DEFAULT_EXEC_YIELD_MS: u64 = 10_000;
-pub const DEFAULT_WRITE_YIELD_MS: u64 = 250;
-pub const DEFAULT_POLL_YIELD_MS: u64 = 5_000;
-pub const MAX_EXEC_YIELD_MS: u64 = 30_000;
-pub const MAX_POLL_YIELD_MS: u64 = 300_000;
+pub use nanocode_process_contracts::{
+    DEFAULT_EXEC_YIELD_MS, DEFAULT_POLL_YIELD_MS, DEFAULT_WRITE_YIELD_MS, MAX_EXEC_YIELD_MS,
+    MAX_POLL_YIELD_MS,
+};
 const DRAIN_GRACE: Duration = Duration::from_secs(2);
 
-pub struct ExecCommand {
-    script: String,
-    workdir: Option<String>,
-    shell: Option<String>,
-    login: Option<bool>,
-    tty: bool,
-    yield_time_ms: Option<u64>,
-    max_output_tokens: Option<usize>,
-}
+pub use nanocode_process_contracts::{
+    ExecCommand, ExecCommandResult, ForegroundCommand, ForegroundExecutor, ProcessExecutors,
+    ShellExecutor, WriteStdin,
+};
 
-impl ExecCommand {
-    pub const fn new(
-        script: String,
-        workdir: Option<String>,
-        shell: Option<String>,
-        login: Option<bool>,
-        tty: bool,
-        yield_time_ms: Option<u64>,
-        max_output_tokens: Option<usize>,
-    ) -> Self {
-        Self {
-            script,
-            workdir,
-            shell,
-            login,
-            tty,
-            yield_time_ms,
-            max_output_tokens,
-        }
+pub struct NativeProcessExecutors;
+
+impl ProcessExecutors for NativeProcessExecutors {
+    fn shell(&self, environment: Vec<(OsString, OsString)>) -> Arc<dyn ShellExecutor> {
+        Arc::new(ShellSessions::with_environment(Arc::new(environment)))
     }
-}
 
-pub struct WriteStdin {
-    session_id: i32,
-    chars: String,
-    yield_time_ms: Option<u64>,
-    max_output_tokens: Option<usize>,
-}
-
-impl WriteStdin {
-    pub const fn new(
-        session_id: i32,
-        chars: String,
-        yield_time_ms: Option<u64>,
-        max_output_tokens: Option<usize>,
-    ) -> Self {
-        Self {
-            session_id,
-            chars,
-            yield_time_ms,
-            max_output_tokens,
-        }
+    fn foreground(&self) -> Arc<dyn ForegroundExecutor> {
+        Arc::new(NativeForeground)
     }
-}
-
-#[derive(Serialize)]
-pub struct ExecCommandResult {
-    #[serde(skip)]
-    pub error: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub chunk_id: Option<String>,
-    pub wall_time_seconds: f64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub exit_code: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub original_token_count: Option<usize>,
-    pub output: String,
 }
 
 pub struct ShellSessions {
@@ -500,20 +444,6 @@ impl CapturedChunk {
     }
 }
 
-impl ExecCommandResult {
-    fn failed(wall_time: Duration, output: String) -> Self {
-        Self {
-            error: Some(output.clone()),
-            chunk_id: None,
-            wall_time_seconds: wall_time.as_secs_f64(),
-            exit_code: Some(1),
-            session_id: None,
-            original_token_count: None,
-            output,
-        }
-    }
-}
-
 fn resolve_workdir(workspace: &Path, requested: Option<&str>) -> PathBuf {
     let requested = requested.filter(|workdir| !workdir.is_empty());
     match requested.map(PathBuf::from) {
@@ -560,3 +490,39 @@ impl Drop for CancelExecution {
 }
 
 pub use nanocode_home::shell::default_shell_name;
+
+impl ShellExecutor for ShellSessions {
+    fn execute<'a>(
+        &'a self,
+        command: ExecCommand,
+        workspace: &'a Path,
+    ) -> nanocode_process_contracts::ProcessFuture<'a, ExecCommandResult> {
+        ShellSessions::execute(self, command, workspace)
+    }
+    fn write_stdin(
+        &self,
+        request: WriteStdin,
+    ) -> nanocode_process_contracts::ProcessFuture<'_, ExecCommandResult> {
+        ShellSessions::write_stdin(self, request)
+    }
+    fn terminate_all(&self) -> nanocode_process_contracts::ProcessFuture<'_, ()> {
+        ShellSessions::terminate_all(self)
+    }
+}
+
+pub struct NativeForeground;
+impl ForegroundExecutor for NativeForeground {
+    fn execute<'a>(
+        &'a self,
+        request: ForegroundCommand<'a>,
+    ) -> nanocode_process_contracts::ProcessFuture<'a, Result<ForegroundOutput, String>> {
+        run_bash(
+            request.workspace,
+            request.command,
+            request.timeout,
+            request.max_stdout,
+            request.max_stderr,
+            request.session,
+        )
+    }
+}

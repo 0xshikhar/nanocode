@@ -112,10 +112,11 @@ enum ToolsConfiguration {
 
 impl ToolsConfiguration {
     fn materialize(&self, agent_handle: AgentHandle) -> Result<Tools> {
-        match self {
+        let tools = match self {
             Self::Shared(tools) => Ok(tools.clone()),
-            Self::PerAgent(factory) => factory(agent_handle).map_err(Into::into),
-        }
+            Self::PerAgent(factory) => factory(agent_handle).map_err(NanocodexError::from),
+        }?;
+        crate::builtin_tools::validate_tool_selection(tools).map_err(Into::into)
     }
 }
 
@@ -142,12 +143,14 @@ pub use backend::BuilderBackend;
 pub use builder::NanocodexBuilder;
 
 pub use context_source::ExecutionEnvironment;
-pub use nanocode_agent::AgentHandle;
-pub use nanocode_agent::AgentSessionContext;
+pub use nanocode_agent_core::AgentHandle;
+pub use nanocode_agent_core::AgentSessionContext;
 #[doc(hidden)]
-pub use nanocode_agent::backend::{AgentOwner, adopt};
-pub use nanocode_agent::{Nanocodex, WeakAgent};
-pub use nanocode_agent::{PromptRequest, PromptRoute, SpawnOptions, Turn, TurnControl, TurnResult};
+pub use nanocode_agent_core::backend::{AgentOwner, adopt};
+pub use nanocode_agent_core::{Nanocodex, WeakAgent};
+pub use nanocode_agent_core::{
+    PromptRequest, PromptRoute, SpawnOptions, Turn, TurnControl, TurnResult,
+};
 
 use backend::{BackendRuntime, LocalLifecycle};
 

@@ -14,7 +14,7 @@ use super::{
     task_tree::TaskTree,
 };
 use futures_util::future::join_all;
-use nanocode_agent::{
+use nanocode_agent_core::{
     AgentEvents, AgentHandle, ModelSelection, Nanocodex, NanocodexError, ReasoningMode,
     Result as AgentResult, SessionCheckpoint, Thinking, TurnResult, events::AgentEventKind,
 };
@@ -3072,8 +3072,10 @@ impl Registry {
         };
         match parent
             .route_prompt_request(
-                nanocode_agent::PromptRequest::new(completion_continuation_prompt(id, &status))
-                    .request_id(format!("subagent-completion:{session_id}:{revision}")),
+                nanocode_agent_core::PromptRequest::new(completion_continuation_prompt(
+                    id, &status,
+                ))
+                .request_id(format!("subagent-completion:{session_id}:{revision}")),
             )
             .await
         {

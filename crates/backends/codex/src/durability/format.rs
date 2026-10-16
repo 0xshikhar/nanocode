@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use nanocode_agent::{
+use nanocode_agent_core::{
     HarnessFamily, SessionCheckpoint,
     session::{ToolOutcome, TranscriptItem},
 };

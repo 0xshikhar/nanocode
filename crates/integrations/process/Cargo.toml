@@ -10,6 +10,9 @@ autotests = false
 autobenches = false
 description = "Reusable native process and PTY execution"
 
+[dependencies]
+nanocode-process-contracts.workspace = true
+
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 nanocode-home.workspace = true
 portable-pty.workspace = true

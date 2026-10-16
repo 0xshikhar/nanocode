@@ -1,7 +1,7 @@
 use crate::{ContentBlock, Message, Role};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use image::ImageReader;
-use nanocode_agent::{
+use nanocode_agent_core::{
     NanocodexError, Result,
     input::{Prompt, PromptInput, PromptMessageRole, UserInput},
 };

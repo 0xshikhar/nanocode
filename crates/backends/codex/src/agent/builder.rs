@@ -207,7 +207,7 @@ impl<F> NanocodexBuilder<F> {
         self
     }
 
-    pub(crate) fn runtime_tools(mut self, runtime: nanocode_agent::RuntimeTools) -> Self {
+    pub(crate) fn runtime_tools(mut self, runtime: nanocode_agent_core::RuntimeTools) -> Self {
         if runtime.is_empty() {
             return self;
         }

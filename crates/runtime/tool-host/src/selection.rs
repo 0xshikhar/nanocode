@@ -69,6 +69,7 @@ pub trait AttachTarget {
 #[derive(Clone)]
 pub struct Tools {
     exposure: ToolExposure,
+    builtin_names: Arc<[Box<str>]>,
     workspace: bool,
     web_search: bool,
     image_generation: bool,
@@ -109,6 +110,7 @@ impl Default for Tools {
     fn default() -> Self {
         Self {
             exposure: ToolExposure::default(),
+            builtin_names: Arc::from([]),
             workspace: true,
             web_search: true,
             image_generation: true,
@@ -217,6 +219,15 @@ impl fmt::Debug for Tools {
 }
 
 impl Tools {
+    pub fn with_builtin_names(
+        self,
+        names: impl IntoIterator<Item = impl Into<Box<str>>>,
+    ) -> Result<Self, ToolsBuildError> {
+        let mut builder = self.into_builder();
+        builder.tools.builtin_names = names.into_iter().map(Into::into).collect();
+        builder.build()
+    }
+
     #[cfg(not(target_family = "wasm"))]
     pub fn workspace_source(&self) -> Option<&crate::WorkspaceTools> {
         self.workspace_tools.as_ref()
@@ -616,7 +627,7 @@ impl ToolsBuilder {
         let mut code_mode_names = HashMap::new();
 
         if self.tools.exposure.is_available_in_code_mode() {
-            for name in enabled_built_in_names(&self.tools) {
+            for name in self.tools.builtin_names.iter().map(AsRef::as_ref) {
                 insert_code_mode_name(&mut code_mode_names, name)?;
             }
         }
@@ -640,7 +651,12 @@ impl ToolsBuilder {
             {
                 return Err(ToolsBuildError::ReservedName(name.into()));
             }
-            if built_in_name(&self.tools, name) {
+            if self
+                .tools
+                .builtin_names
+                .iter()
+                .any(|builtin| builtin.as_ref() == name)
+            {
                 return Err(ToolsBuildError::BuiltInName(name.into()));
             }
             if !names.insert(name.to_owned()) {
@@ -664,7 +680,12 @@ impl ToolsBuilder {
             if host_owned_name(name) {
                 return Err(ToolsBuildError::ReservedName(name.into()));
             }
-            if built_in_name(&self.tools, name) {
+            if self
+                .tools
+                .builtin_names
+                .iter()
+                .any(|builtin| builtin.as_ref() == name)
+            {
                 return Err(ToolsBuildError::BuiltInName(name.into()));
             }
             if !names.insert(name.to_owned()) {
@@ -690,7 +711,12 @@ impl ToolsBuilder {
                 {
                     return Err(ToolsBuildError::ReservedName(name.into()));
                 }
-                if built_in_name(&self.tools, name) {
+                if self
+                    .tools
+                    .builtin_names
+                    .iter()
+                    .any(|builtin| builtin.as_ref() == name)
+                {
                     return Err(ToolsBuildError::BuiltInName(name.into()));
                 }
                 if !names.insert(name.to_owned()) {
@@ -817,30 +843,6 @@ pub fn normalize_public_tool_name(name: &str) -> String {
 
 fn host_owned_name(name: &str) -> bool {
     matches!(name, "exec" | "wait")
-}
-
-fn built_in_name(tools: &Tools, name: &str) -> bool {
-    (tools.workspace
-        && matches!(
-            name,
-            "exec_command" | "write_stdin" | "update_plan" | "apply_patch" | "view_image"
-        ))
-        || (tools.web_search && name == "web__run")
-        || (tools.image_generation && name == "image_gen__imagegen")
-}
-
-fn enabled_built_in_names(tools: &Tools) -> impl Iterator<Item = &'static str> {
-    [
-        (tools.workspace, "exec_command"),
-        (tools.workspace, "write_stdin"),
-        (tools.workspace, "update_plan"),
-        (tools.workspace, "apply_patch"),
-        (tools.workspace, "view_image"),
-        (tools.web_search, "web__run"),
-        (tools.image_generation, "image_gen__imagegen"),
-    ]
-    .into_iter()
-    .filter_map(|(enabled, name)| enabled.then_some(name))
 }
 
 impl nanocode_tools::ToolCollection for Tools {

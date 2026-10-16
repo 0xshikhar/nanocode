@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use nanocode_agent::{HarnessFamily, Lineage, ModelSelection};
+use nanocode_agent_core::{HarnessFamily, Lineage, ModelSelection};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -36,13 +36,13 @@ pub struct SessionRecord {
     pub initial: Option<InitialSettings>,
 
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub inherited_transcript: Vec<nanocode_agent::input::PromptMessage>,
+    pub inherited_transcript: Vec<nanocode_agent_core::input::PromptMessage>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InitialSettings {
-    pub thinking: nanocode_agent::Thinking,
-    pub service_tier: nanocode_agent::ServiceTier,
+    pub thinking: nanocode_agent_core::Thinking,
+    pub service_tier: nanocode_agent_core::ServiceTier,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,7 +81,7 @@ impl SessionRecord {
     #[must_use]
     pub fn with_inherited_transcript(
         mut self,
-        transcript: Vec<nanocode_agent::input::PromptMessage>,
+        transcript: Vec<nanocode_agent_core::input::PromptMessage>,
     ) -> Self {
         self.inherited_transcript = transcript;
         self
@@ -105,7 +105,11 @@ impl SessionRecord {
     }
 
     #[must_use]
-    pub fn derive(&self, session_id: impl Into<String>, origin: nanocode_agent::Origin) -> Self {
+    pub fn derive(
+        &self,
+        session_id: impl Into<String>,
+        origin: nanocode_agent_core::Origin,
+    ) -> Self {
         let session_id = session_id.into();
         let now = now_ms();
         Self {
@@ -180,7 +184,7 @@ pub use store::*;
 mod store {
     use std::{path::PathBuf, sync::Arc};
 
-    use nanocode_agent::{HarnessFamily, Lineage, ModelSelection, Origin};
+    use nanocode_agent_core::{HarnessFamily, Lineage, ModelSelection, Origin};
     use serde::Serialize;
     use serde_json::Value;
 
@@ -191,7 +195,7 @@ mod store {
         session::reduce_peeked, shared_store::SharedStore,
     };
 
-    pub use nanocode_agent::session::TranscriptItem;
+    pub use nanocode_agent_core::session::TranscriptItem;
 
     pub const LIST_LIMIT: usize = 1000;
 
@@ -239,7 +243,7 @@ mod store {
     }
 
     impl StoredSession {
-        pub fn session_checkpoint(&self) -> Result<Option<nanocode_agent::SessionCheckpoint>> {
+        pub fn session_checkpoint(&self) -> Result<Option<nanocode_agent_core::SessionCheckpoint>> {
             let Some(checkpoint) = &self.checkpoint else {
                 return Ok(None);
             };
@@ -250,7 +254,7 @@ mod store {
                     .require_family(record.family())
                     .map_err(|error| Error::InvalidState(error.to_string()))?;
 
-                let rebound = nanocode_agent::SessionCheckpoint::native(
+                let rebound = nanocode_agent_core::SessionCheckpoint::native(
                     record.session_id.clone(),
                     portable.model(),
                     portable.thinking(),
@@ -417,8 +421,8 @@ mod store {
 
         pub async fn recovery_checkpoint(
             &self,
-            journal: nanocode_agent::SessionCheckpoint,
-        ) -> Result<nanocode_agent::SessionCheckpoint> {
+            journal: nanocode_agent_core::SessionCheckpoint,
+        ) -> Result<nanocode_agent_core::SessionCheckpoint> {
             journal
                 .validate()
                 .map_err(|error| Error::InvalidState(error.to_string()))?;
@@ -510,12 +514,12 @@ mod store {
                     let prior = state
                         .operations()
                         .values()
-                        .filter(|op| op.accepted_order < selected.accepted_order)
-                        .max_by_key(|op| op.accepted_order);
+                        .filter(|op| op.accepted_order() < selected.accepted_order())
+                        .max_by_key(|op| op.accepted_order());
 
                     let complete_history = state
                         .session()
-                        .map_or(selected.accepted_order == 1, |record| {
+                        .map_or(selected.accepted_order() == 1, |record| {
                             !record.history_pruned
                         });
                     match prior {
@@ -566,7 +570,7 @@ mod store {
                 .map(|value| self.encode_native(record.family(), value))
                 .transpose()?;
 
-            record.start_checkpoint = checkpoint.as_ref().map(|payload| payload.key.to_string());
+            record.start_checkpoint = checkpoint.as_ref().map(|payload| payload.key().to_owned());
             let preview = match &at {
                 BranchPoint::Before(_) => None,
                 _ => self.first_prompt(id, &state).await?,
@@ -600,13 +604,13 @@ mod store {
             state: &DurableState,
             at: &BranchPoint,
         ) -> Result<BranchBoundary> {
-            let order = |turn: &str| state.operation(turn).map(|op| op.accepted_order);
+            let order = |turn: &str| state.operation(turn).map(|op| op.accepted_order());
             let limit = match at {
                 BranchPoint::Latest => state
                     .operations()
                     .values()
                     .filter(|op| settled_checkpoint(&op.status).is_some())
-                    .map(|op| op.accepted_order)
+                    .map(|op| op.accepted_order())
                     .max()
                     .unwrap_or(0),
                 BranchPoint::Through(turn) => order(turn).ok_or_else(unknown_turn)?,
@@ -776,7 +780,7 @@ mod store {
 
         async fn state_turns(&self, id: &str, state: &DurableState) -> Result<Vec<StoredTurn>> {
             let mut operations: Vec<_> = state.operations().iter().collect();
-            operations.sort_by_key(|(_, op)| op.accepted_order);
+            operations.sort_by_key(|(_, op)| op.accepted_order());
             let mut turns = Vec::new();
             for (turn, operation) in operations {
                 let input: Value = self.load_payload(id, &operation.input).await?.decode()?;
@@ -806,7 +810,7 @@ mod store {
             let Some((_, first)) = state
                 .operations()
                 .iter()
-                .min_by_key(|(_, op)| op.accepted_order)
+                .min_by_key(|(_, op)| op.accepted_order())
             else {
                 return Ok(None);
             };
@@ -841,8 +845,8 @@ mod store {
             .is_some_and(|format| format.starts_with("nanocode-session-checkpoint/"))
     }
 
-    fn portable_checkpoint(value: &Value) -> Result<nanocode_agent::SessionCheckpoint> {
-        let checkpoint: nanocode_agent::SessionCheckpoint =
+    fn portable_checkpoint(value: &Value) -> Result<nanocode_agent_core::SessionCheckpoint> {
+        let checkpoint: nanocode_agent_core::SessionCheckpoint =
             serde_json::from_value(value.clone()).map_err(Error::InvalidPayload)?;
         checkpoint
             .validate()

@@ -2,7 +2,8 @@ use std::{ffi::OsString, path::PathBuf, sync::Arc};
 
 use nanocode_code_mode::embedded::HostFuture;
 use nanocode_home::SessionEnvironment;
-use nanocode_process::{MAX_EXEC_YIELD_MS, MAX_POLL_YIELD_MS, ShellSessions};
+use nanocode_process::ShellSessions;
+use nanocode_process_contracts::{ProcessExecutors, ShellExecutor};
 use nanocode_tool_host::workspace_runtime::{WorkspaceExecutor, WorkspaceToolFactory};
 
 use super::{
@@ -17,7 +18,7 @@ pub struct WorkspaceToolRuntime {
     exec_command: Arc<ExecCommandHandler>,
     view_image: Arc<ViewImageHandler>,
     write_stdin: Arc<WriteStdinHandler>,
-    sessions: Arc<ShellSessions>,
+    sessions: Arc<dyn ShellExecutor>,
 }
 
 #[derive(Clone)]
@@ -45,6 +46,22 @@ impl WorkspaceTools {
         }
     }
 
+    pub fn into_source(self) -> nanocode_tool_host::WorkspaceTools {
+        self.source
+    }
+
+    pub fn with_process_executors(
+        workspace: impl Into<PathBuf>,
+        executors: Arc<dyn ProcessExecutors>,
+    ) -> Self {
+        Self {
+            source: nanocode_tool_host::WorkspaceTools::with_factory(
+                workspace,
+                ConfiguredWorkspaceFactory(executors),
+            ),
+        }
+    }
+
     #[must_use]
     pub fn root(&self) -> &std::path::Path {
         self.source.root()
@@ -61,6 +78,23 @@ impl nanocode_tool_host::ToolSource for WorkspaceTools {
 }
 
 struct CodexWorkspaceFactory;
+
+struct ConfiguredWorkspaceFactory(Arc<dyn ProcessExecutors>);
+
+impl WorkspaceToolFactory for ConfiguredWorkspaceFactory {
+    fn create(
+        &self,
+        root: PathBuf,
+        environment: Vec<(OsString, OsString)>,
+        max_wire_bytes: Option<u64>,
+    ) -> Arc<dyn WorkspaceExecutor> {
+        Arc::new(WorkspaceToolRuntime::with_executor(
+            root,
+            max_wire_bytes,
+            self.0.shell(environment),
+        ))
+    }
+}
 
 impl WorkspaceToolFactory for CodexWorkspaceFactory {
     fn create(
@@ -89,8 +123,12 @@ impl WorkspaceExecutor for WorkspaceToolRuntime {
 
     fn timeout_ms(&self, name: &str) -> Option<u64> {
         match name {
-            name if name == StandardTool::ExecCommand.name() => Some(MAX_EXEC_YIELD_MS + 10_000),
-            name if name == StandardTool::WriteStdin.name() => Some(MAX_POLL_YIELD_MS + 10_000),
+            name if name == StandardTool::ExecCommand.name() => {
+                Some(nanocode_process_contracts::MAX_EXEC_YIELD_MS + 10_000)
+            }
+            name if name == StandardTool::WriteStdin.name() => {
+                Some(nanocode_process_contracts::MAX_POLL_YIELD_MS + 10_000)
+            }
             _ => None,
         }
     }
@@ -135,7 +173,18 @@ impl WorkspaceToolRuntime {
         max_wire_bytes: Option<u64>,
         environment: Arc<Vec<(OsString, OsString)>>,
     ) -> Self {
-        let sessions = Arc::new(ShellSessions::with_environment(environment));
+        Self::with_executor(
+            workspace,
+            max_wire_bytes,
+            Arc::new(ShellSessions::with_environment(environment)),
+        )
+    }
+
+    pub fn with_executor(
+        workspace: PathBuf,
+        max_wire_bytes: Option<u64>,
+        sessions: Arc<dyn ShellExecutor>,
+    ) -> Self {
         Self {
             apply_patch: Arc::new(ApplyPatchHandler::new(workspace.clone())),
             exec_command: Arc::new(ExecCommandHandler::new(
@@ -185,7 +234,7 @@ impl WorkspaceToolRuntime {
 }
 
 pub struct WorkspaceToolRuntimeControl {
-    sessions: Arc<ShellSessions>,
+    sessions: Arc<dyn ShellExecutor>,
 }
 
 impl WorkspaceToolRuntimeControl {

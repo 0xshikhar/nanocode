@@ -1,0 +1,23 @@
+[package]
+name = "nanocode-process-contracts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Portable process execution contracts for tool hosts"
+autotests = false
+autobenches = false
+
+[dependencies]
+nanocode-home.workspace = true
+serde.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+test = false
+doctest = false
+bench = false

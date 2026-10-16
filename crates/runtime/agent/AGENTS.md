@@ -1,0 +1,1 @@
+Own backend-independent runtime assembly, agent ownership, durable recovery and subagent coordination. Receive provider construction and host services through interfaces. Keep substantial assembly outside generic public builders, and keep facade compatibility methods as thin forwards. Do not depend on backend or integration crates.

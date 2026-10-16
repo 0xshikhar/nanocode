@@ -7,53 +7,42 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "Typed Anthropic Messages protocol and streaming transport"
+description = "Claude backend: agent driver, prompts, tools and durability over the Messages client"
 
 [dependencies]
+nanocode-backend-claude-tools.workspace = true
+nanocode-backend-claude-client.workspace = true
+nanocode-process-contracts.workspace = true
+nanocode-agent-config.workspace = true
+nanocode-tool-contracts.workspace = true
 nanocode-tool-host.workspace = true
 nanocode-platform.workspace = true
-nanocode-agent.workspace = true
+nanocode-agent-core.workspace = true
 nanocode-durability.workspace = true
 nanocode-types.workspace = true
 nanocode-tools.workspace = true
 nanocode-media.workspace = true
 nanocode-home = { workspace = true  }
-schemars = { workspace = true  }
 base64.workspace = true
 chrono.workspace = true
-sha2.workspace = true
-xxhash-rust = { version = "0.8.15", features = ["xxh64"] }
 url.workspace = true
 futures-util.workspace = true
-httpdate = "1.0.3"
 image.workspace = true
 nanocode-code-mode = { path = "../../runtime/code-mode", version = "0.6.7"   }
 tokio = { workspace = true, features = ["macros", "sync", "time"] }
-uuid.workspace = true
 http.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-thiserror.workspace = true
 tracing.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
-nix = { workspace = true, features = ["fs"]  }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 async-trait.workspace = true
-regex.workspace = true
 chrono = { workspace = true, features = ["clock"] }
-reqwest = { workspace = true, features = ["stream", "gzip", "deflate"] }
-nanocode-http.workspace = true
 nanocode-process.workspace = true
 tokio = { workspace = true, features = ["fs", "process", "rt-multi-thread"] }
-nanocode-tls.workspace = true
-ignore = { workspace = true  }
-globset = { version = "0.4.19"  }
-tempfile = { workspace = true  }
-serde_yaml_ng = { workspace = true  }
-unicode-normalization = "0.1.25"
 
 [lints]
 workspace = true

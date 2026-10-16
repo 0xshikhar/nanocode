@@ -7,7 +7,7 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
-nanocode-durability.workspace = true
+nanocode-durability-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

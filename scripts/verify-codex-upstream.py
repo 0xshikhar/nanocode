@@ -16,7 +16,7 @@ parser.add_argument('--consumer-dump', type=Path)
 args = parser.parse_args()
 output = root / 'output/codex-upstream-parity'
 output.mkdir(parents=True, exist_ok=True)
-prompts = json.loads((backend / 'prompts/upstream.json').read_text())
+prompts = json.loads((backend / 'client/prompts/upstream.json').read_text())
 tools = json.loads((backend / 'upstream/tools.json').read_text())
 if prompts['revision'] != tools['revision']:
     raise ValueError('Prompt and tool provenance revisions differ')
@@ -54,7 +54,7 @@ for entry in prompts['prompts']:
     for part in entry['json_pointer'].strip('/').split('/'):
         value = value[int(part)] if isinstance(value, list) else value[part]
     extracted = value.encode('utf-8')
-    local = (backend / 'prompts' / entry['file']).read_bytes()
+    local = (backend / 'client/prompts' / entry['file']).read_bytes()
     require_hash(local, entry['sha256'], entry['file'])
     if local != extracted or len(local) != entry['bytes']:
         raise ValueError(f"Prompt extraction differs: {entry['file']}")

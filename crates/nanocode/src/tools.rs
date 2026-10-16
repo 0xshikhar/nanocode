@@ -25,25 +25,12 @@ pub mod attachment {
     }
 
     pub fn run_runner_with_tools(
-        mut config: RunnerConfig,
+        config: RunnerConfig,
         tools: Tools,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), AttachmentError>> + Send>>
     {
-        Box::pin(async move {
-            config.workspace = tokio::fs::canonicalize(&config.workspace)
-                .await
-                .map_err(|error| AttachmentError::Transport(error.to_string().into()))?;
-            let tools = tools
-                .into_builder()
-                .workspace(false)
-                .web_search(false)
-                .image_generation(false)
-                .add(nanocode_backend_codex::tools::WorkspaceTools::new(
-                    config.workspace.clone(),
-                ))
-                .build()
-                .map_err(|error| AttachmentError::Catalog(error.to_string().into()))?;
-            nanocode_tool_runtime::attachment::run_runner_with_tools(config, tools).await
+        nanocode_agent_host::run_runner_with_workspace_tools(config, tools, |workspace| {
+            nanocode_backend_codex::tools::WorkspaceTools::new(workspace).into_source()
         })
     }
 }

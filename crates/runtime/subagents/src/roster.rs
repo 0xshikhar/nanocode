@@ -1,5 +1,5 @@
 use super::model::{AgentDescriptor, AgentId, AgentStatus, AgentUpdate};
-use nanocode_agent::{ModelSelection, ReasoningMode, Thinking};
+use nanocode_agent_core::{ModelSelection, ReasoningMode, Thinking};
 use serde::Serialize;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]

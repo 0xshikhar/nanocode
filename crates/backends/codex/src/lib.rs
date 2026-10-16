@@ -141,3 +141,6 @@ pub use error::ErrorExt;
 pub use agent::checkpoint::CodexCheckpointExt;
 
 pub use crate::client::OpenAi as Codex;
+
+mod runtime;
+pub use runtime::CodexHarness;

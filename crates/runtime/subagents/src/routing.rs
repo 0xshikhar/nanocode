@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use nanocode_agent::SpawnOptions;
+use nanocode_agent_core::SpawnOptions;
 
 pub struct SpawnRoute {
     pub options: SpawnOptions,

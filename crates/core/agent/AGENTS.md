@@ -1,0 +1,1 @@
+Own backend-independent agent handles, lifecycle, session and usage contracts. Keep durability orchestration, subagent registries, provider implementations and native host adapters out of this crate. Preserve the nanocode-agent compatibility reexports and native/WASM future behavior.

@@ -14,12 +14,15 @@ pub use nanocode_agent::{
 };
 pub use nanocode_platform as platform;
 
-pub use nanocode_backend_codex::NanocodexBuilder as CodexBuilder;
-mod harness;
-pub use harness::{Harness, HarnessBuilder, HarnessRequest};
+pub use nanocode_agent::HarnessRequest;
+pub use nanocode_backend_claude::ClaudeHarness;
+pub use nanocode_backend_codex::CodexHarness;
+pub type Harness = nanocode_agent::Harness<Defaults>;
+pub type HarnessBuilder = nanocode_agent::HarnessBuilder<Defaults>;
 #[cfg(not(target_family = "wasm"))]
-pub mod runners;
-mod runtime;
+pub use nanocode_agent_host as runners;
+pub use nanocode_backend_codex::NanocodexBuilder as CodexBuilder;
+
 pub use nanocode_agent::{Model, ReasoningMode, Thinking};
 pub use nanocode_backend_claude::{Claude, ClaudeClient};
 #[cfg(not(target_family = "wasm"))]
@@ -43,26 +46,17 @@ pub use nanocode_durability::DurableAgentExt;
 pub fn session_store<S: durability::StateStore + 'static>(
     store: S,
 ) -> durability::Result<durability::SessionStore> {
-    let store = durability::SessionStore::new(store)?;
-    register_builtin_formats(&store)?;
-    Ok(store)
-}
-
-pub(crate) fn register_builtin_formats(store: &durability::SessionStore) -> durability::Result<()> {
-    store.register_format(std::sync::Arc::new(
-        nanocode_backend_codex::durability::CodexCheckpointFormat,
-    ))?;
-    store.register_format(std::sync::Arc::new(
-        nanocode_backend_claude::durability::ClaudeCheckpointFormat,
-    ))
+    nanocode_agent::session_store::<Defaults, S>(store)
 }
 pub use nanocode_subagents::{
     AgentContext, AgentDescriptor, AgentId, AgentMessageUpdate, AgentStatus, AgentUpdate,
     ScopedAgentUpdate, SubagentControl, SubagentRuntimeId,
 };
-pub use runtime::ClaudeHarness;
-pub use runtime::CodexHarness;
-pub use runtime::{Nanocodex, NanocodexBuilder, SpawnBuilder, SubagentUpdates, Unselected};
+pub type Defaults = nanocode_agent_host::Defaults<CodexHarness, ClaudeHarness>;
+pub type Nanocodex = nanocode_agent::Runtime<Defaults>;
+pub type NanocodexBuilder<B = nanocode_agent::Unselected> =
+    nanocode_agent::RuntimeBuilder<B, Defaults>;
+pub use nanocode_agent::{SpawnBuilder, SubagentUpdates, Unselected};
 
 pub mod agent {
 
@@ -166,6 +160,3 @@ pub mod backend {
 
 #[cfg(not(target_family = "wasm"))]
 pub use nanocode_store_jsonl::JsonlStore;
-
-#[cfg(not(target_family = "wasm"))]
-mod process_routes;

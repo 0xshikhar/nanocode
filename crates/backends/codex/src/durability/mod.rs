@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use nanocode_agent::{ExecutionPolicyDisposition, NanocodexError, Result as AgentResult};
+use nanocode_agent_core::{ExecutionPolicyDisposition, NanocodexError, Result as AgentResult};
 use nanocode_durability::{
     Admission, BeginStep, Branches, DurableAgentExt, DurableOwner, DurableSession, InitialSettings,
     OperationStatus, SessionRecord, SharedStore, agent_error,
@@ -173,7 +173,7 @@ impl ExecutionPolicy for DurableExecution {
 
     fn branch(
         &self,
-        child: &nanocode_agent::SessionInfo,
+        child: &nanocode_agent_core::SessionInfo,
     ) -> AgentResult<Option<Arc<dyn ExecutionPolicy>>> {
         let Some(branches) = self
             .branches
@@ -611,8 +611,8 @@ impl LazyExecution {
                 let mut record = self.record.clone();
                 if let Some(settings) = self.created_with.lock().ok().and_then(|settings| *settings)
                 {
-                    record.model = nanocode_agent::ModelSelection::new(
-                        nanocode_agent::BackendId::Codex,
+                    record.model = nanocode_agent_core::ModelSelection::new(
+                        nanocode_agent_core::BackendId::Codex,
                         settings.model.as_str(),
                     );
                     record.initial = Some(InitialSettings {
@@ -652,7 +652,7 @@ impl ExecutionPolicy for LazyExecution {
 
     fn branch(
         &self,
-        child: &nanocode_agent::SessionInfo,
+        child: &nanocode_agent_core::SessionInfo,
     ) -> AgentResult<Option<Arc<dyn ExecutionPolicy>>> {
         let branches = Branches {
             store: self.store.clone(),

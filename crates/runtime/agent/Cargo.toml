@@ -1,23 +1,27 @@
 [package]
-autotests = false
-autobenches = false
 name = "nanocode-agent"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Backend-independent agent lifecycle, handles and session contracts"
+publish.workspace = true
+description = "Backend-independent agent orchestration, ownership and SDK builders"
+autotests = false
+autobenches = false
+
 [dependencies]
+nanocode-agent-config.workspace = true
+nanocode-agent-core.workspace = true
 nanocode-platform.workspace = true
-nanocode-home.workspace = true
-nanocode-types.workspace = true
+nanocode-durability.workspace = true
+nanocode-subagents.workspace = true
+nanocode-tool-host.workspace = true
 nanocode-tool-contracts.workspace = true
-futures-util.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-thiserror.workspace = true
-uuid.workspace = true
+nanocode-home.workspace = true
+nanocode-process-contracts.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+
 [lints]
 workspace = true
 

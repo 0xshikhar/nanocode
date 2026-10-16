@@ -602,7 +602,7 @@ impl Driver {
                     let mut accepted = false;
                     for operation in self.state.operations().values() {
                         if let Some(receipt) = operation.steer_receipts.get(&message_id) {
-                            if receipt.input_key != input.key.as_ref() {
+                            if receipt.input_key != input.key() {
                                 return Err(Error::SteerConflict { message_id });
                             }
                             if receipt.withdrawn {
@@ -1050,7 +1050,7 @@ impl Driver {
         if let Some(id) = &message_id
             && let Some(receipt) = operation.steer_receipts.get(id)
         {
-            if receipt.input_key != input.key.as_ref() {
+            if receipt.input_key != input.key() {
                 return Err(Error::SteerConflict {
                     message_id: id.clone(),
                 });
@@ -1641,7 +1641,7 @@ impl DurableSession {
         self.store.clone()
     }
 
-    pub fn child_journal(&self) -> nanocode_agent::backend::ChildJournal {
+    pub fn child_journal(&self) -> nanocode_agent_core::backend::ChildJournal {
         crate::child_journal::child_journal(self.store.clone(), &self.state_id)
     }
 

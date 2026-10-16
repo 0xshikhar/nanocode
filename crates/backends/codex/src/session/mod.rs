@@ -44,7 +44,7 @@ impl SessionStart {
     }
 }
 
-pub use nanocode_agent::session::{ToolOutcome, TranscriptItem};
+pub use nanocode_agent_core::session::{ToolOutcome, TranscriptItem};
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub(crate) struct ContextSnapshot {
@@ -233,7 +233,7 @@ fn harness_context(text: &str) -> bool {
 impl SessionSnapshot {
     pub(crate) fn transcript(&self) -> Vec<crate::input::PromptMessage> {
         use crate::client::{MessageRole, ResponseItem};
-        let mut transcript = nanocode_agent::backend::TranscriptBuilder::default();
+        let mut transcript = nanocode_agent_core::backend::TranscriptBuilder::default();
         let mut tools = std::collections::HashMap::<&str, &str>::new();
         for item in &self.history {
             match item {

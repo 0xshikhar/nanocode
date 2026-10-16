@@ -1,26 +1,8 @@
 use crate::client::ResponseError;
 pub use crate::client::transport::ResponsesError;
-pub use nanocode_agent::{CompactionRecovery, ExecutionPolicyDisposition, NanocodexError, Result};
-impl nanocode_agent::BackendFailure for ResponseError {
-    fn requires_image_repair(&self) -> bool {
-        matches!(
-            self.responses_error(),
-            Some(ResponsesError::InvalidImageRequest { .. })
-        )
-    }
-    fn retryable(&self) -> bool {
-        self.responses_error()
-            .is_some_and(|source| source.retry_advice().is_some())
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-}
-impl From<ResponseError> for NanocodexError {
-    fn from(error: ResponseError) -> Self {
-        Self::Response(nanocode_agent::BackendError(Box::new(error)))
-    }
-}
+pub use nanocode_agent_core::{
+    CompactionRecovery, ExecutionPolicyDisposition, NanocodexError, Result,
+};
 
 pub trait ErrorExt {
     fn responses_error(&self) -> Option<&ResponsesError>;

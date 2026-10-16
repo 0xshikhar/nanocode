@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use nanocode_agent::{AgentEvents, BackendRequest, Nanocodex, Result, backend::BackendFuture};
+use nanocode_agent_core::{AgentEvents, BackendRequest, Nanocodex, Result, backend::BackendFuture};
 use nanocode_durability::{
     CheckpointFormat, DurableAgentExt as _, DurableBackendRegistration, DurableSession,
 };
@@ -49,7 +49,7 @@ where
                 .state_id()
                 .parse::<crate::session::SessionId>()
                 .map_err(|error| {
-                    nanocode_agent::NanocodexError::InvalidRequest(format!(
+                    nanocode_agent_core::NanocodexError::InvalidRequest(format!(
                         "registered durable Codex state ID must be a UUID: {error}"
                     ))
                 })?;

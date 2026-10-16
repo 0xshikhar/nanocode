@@ -2,15 +2,7 @@ use super::{process, selection};
 use std::{path::Path, time::Duration};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
-pub struct ForegroundOutput {
-    pub stdout: String,
-
-    pub stderr: String,
-
-    pub exit_code: i32,
-
-    pub truncated: bool,
-}
+pub use nanocode_process_contracts::ForegroundOutput;
 
 pub fn run_bash<'call>(
     workspace: &'call Path,

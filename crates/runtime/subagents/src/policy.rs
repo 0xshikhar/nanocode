@@ -1,4 +1,4 @@
-use nanocode_agent::{Model, ModelSelection, ReasoningMode, Thinking};
+use nanocode_agent_core::{Model, ModelSelection, ReasoningMode, Thinking};
 use std::fmt;
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]

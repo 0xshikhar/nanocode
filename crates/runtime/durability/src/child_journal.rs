@@ -1,13 +1,8 @@
 use std::{collections::HashSet, sync::Arc};
 
-use nanocode_agent::backend::{BackendFuture, ChildJournal, ChildJournalStore};
+use nanocode_agent_core::backend::{BackendFuture, ChildJournal, ChildJournalStore};
 
-use crate::{
-    StateStore,
-    shared_store::SharedStore,
-    state::EncodedPayload,
-    store::{OwnerId, OwnerToken},
-};
+use crate::{EncodedPayload, OwnerId, OwnerToken, StateStore, shared_store::SharedStore};
 
 struct Fenced {
     store: SharedStore,

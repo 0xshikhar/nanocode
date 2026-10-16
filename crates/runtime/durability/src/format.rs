@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, RwLock, RwLockReadGuard},
 };
 
-use nanocode_agent::{HarnessFamily, SessionCheckpoint, session::TranscriptItem};
+use nanocode_agent_core::{HarnessFamily, SessionCheckpoint, session::TranscriptItem};
 use serde_json::Value;
 
 use crate::{EncodedPayload, Error, PayloadReader, Result, SessionRecord};

@@ -1,5 +1,5 @@
 use super::*;
-use nanocode_agent::backend::{created, created_batch};
+use nanocode_agent_core::backend::{created, created_batch};
 
 pub(super) struct OpenAiAgentFactory {
     pub(super) commands: mpsc::WeakSender<Command>,

@@ -4,7 +4,7 @@ use crate::{
     ToolResultContent, Usage, collect_stream,
 };
 use futures_util::{FutureExt as _, StreamExt};
-use nanocode_agent::{
+use nanocode_agent_core::{
     AgentEvents, AgentHandle, AgentSessionContext, Capabilities, CostStatus, ForkPoint,
     ForkRequest, HarnessFamily, Lineage, ModelSelection, ModelTransport, Mutability, Nanocodex,
     NanocodexError, Origin, Persistence, ReportedTurnUsage, Result, SessionCheckpoint,
@@ -525,7 +525,7 @@ pub struct ClaudeBuilder {
     dynamic_tools: Vec<DynamicToolsFactory>,
     tool_hooks: Vec<Arc<dyn crate::ClaudeToolHooks>>,
     spawn_factory: Option<Arc<dyn AgentFactory>>,
-    child_journal: Option<nanocode_agent::backend::ChildJournal>,
+    child_journal: Option<nanocode_agent_core::backend::ChildJournal>,
     host_context: Option<Arc<str>>,
     server_tools: Vec<ServerToolDefinition>,
     parallel_tools: bool,
@@ -551,7 +551,7 @@ impl ClaudeBuilder {
                     .map_err(unsupported)?
                     .default_thinking()
             },
-            service_tier: nanocode_agent::ServiceTier::from_fast_mode(self.fast_mode),
+            service_tier: nanocode_agent_core::ServiceTier::from_fast_mode(self.fast_mode),
         })
     }
 
@@ -677,7 +677,7 @@ impl ClaudeBuilder {
         self
     }
 
-    pub fn child_journal(mut self, journal: nanocode_agent::backend::ChildJournal) -> Self {
+    pub fn child_journal(mut self, journal: nanocode_agent_core::backend::ChildJournal) -> Self {
         self.child_journal = Some(journal);
         self
     }
@@ -2118,10 +2118,10 @@ fn recovery_thinking(model: &str) -> RecoveryThinking {
         .ok()
         .and_then(|model| model.as_claude())
     {
-        Some(nanocode_agent::ClaudeModel::Sonnet55) => RecoveryThinking::BetweenTools,
-        Some(nanocode_agent::ClaudeModel::Opus55 | nanocode_agent::ClaudeModel::Fable51) => {
-            RecoveryThinking::AdaptiveLow
-        }
+        Some(nanocode_agent_core::ClaudeModel::Sonnet55) => RecoveryThinking::BetweenTools,
+        Some(
+            nanocode_agent_core::ClaudeModel::Opus55 | nanocode_agent_core::ClaudeModel::Fable51,
+        ) => RecoveryThinking::AdaptiveLow,
         _ => RecoveryThinking::Disabled,
     }
 }
@@ -2475,7 +2475,7 @@ impl AgentFactory for ClaudeNativeFactory {
             snapshot.conversation_id = Some(state.conversation_id.clone());
 
             if let Some(parent) = &state.policy {
-                let child = nanocode_agent::SessionInfo::new(
+                let child = nanocode_agent_core::SessionInfo::new(
                     child_id.clone(),
                     HarnessFamily::Claude,
                     lineage.clone(),
@@ -3139,7 +3139,7 @@ async fn defer_turn(
                 Err(error) => {
                     drop(admission);
                     let blocked = error.execution_policy_disposition()
-                        == Some(nanocode_agent::ExecutionPolicyDisposition::Retry);
+                        == Some(nanocode_agent_core::ExecutionPolicyDisposition::Retry);
                     if blocked && state.local_blocker(order) {
                         tokio::select! {
                             () = retired.as_mut() => {}
@@ -3301,7 +3301,7 @@ impl ClaudeBoundary {
             self.snapshot.has_conversation(),
             payload,
         )
-        .with_service_tier(Some(nanocode_agent::ServiceTier::from_fast_mode(
+        .with_service_tier(Some(nanocode_agent_core::ServiceTier::from_fast_mode(
             self.policy.fast_mode,
         ))))
     }
@@ -3531,7 +3531,7 @@ impl State {
             return Ok(());
         };
         let child =
-            nanocode_agent::SessionInfo::new(child_id, HarnessFamily::Claude, lineage.clone());
+            nanocode_agent_core::SessionInfo::new(child_id, HarnessFamily::Claude, lineage.clone());
 
         let Some(policy) = parent.branch(&child)? else {
             return if journal_backed {
@@ -4161,7 +4161,9 @@ impl State {
             {
                 telemetry::fail_attempt(&attempt_span, &error, None, retry_after.is_some());
                 return Err(ResponseFailure {
-                    error: NanocodexError::Response(nanocode_agent::BackendError(Box::new(error))),
+                    error: NanocodexError::Response(nanocode_agent_core::BackendError(Box::new(
+                        error,
+                    ))),
                     recovery: if uncertain || upgrade.is_some() {
                         recovery
                     } else {
@@ -4292,7 +4294,7 @@ impl State {
         {
             self.stopped.store(true, Ordering::SeqCst);
             result = result.map_err(|error| match error.execution_policy_disposition() {
-                Some(nanocode_agent::ExecutionPolicyDisposition::Retry) => {
+                Some(nanocode_agent_core::ExecutionPolicyDisposition::Retry) => {
                     durable::recovery_error(error)
                 }
                 _ => error,
@@ -4632,7 +4634,7 @@ impl State {
             return Err(NanocodexError::TurnNotSteerable);
         }
         if self.policy.is_some()
-            && matches!(&prompt.instruction, nanocode_agent::input::PromptInput::Content(items) if items.iter().any(|item| matches!(item, nanocode_agent::input::UserInput::LocalImage { .. })))
+            && matches!(&prompt.instruction, nanocode_agent_core::input::PromptInput::Content(items) if items.iter().any(|item| matches!(item, nanocode_agent_core::input::UserInput::LocalImage { .. })))
         {
             return Err(NanocodexError::InvalidRequest("durable Claude steering requires inline images; local image paths cannot be retained safely".into()));
         }
@@ -6072,7 +6074,7 @@ impl LifecycleBackend for Driver {
                             Ok(()) => attempt = Some(AttemptGuard::begin(state.clone())),
                             Err(error) => {
                                 let blocked = error.execution_policy_disposition()
-                                    == Some(nanocode_agent::ExecutionPolicyDisposition::Retry);
+                                    == Some(nanocode_agent_core::ExecutionPolicyDisposition::Retry);
 
                                 if blocked
                                     && request.cancel_on_admission
@@ -6397,9 +6399,9 @@ impl LifecycleBackend for Driver {
                             }
                             settled.map_err(|error| {
                                 match error.execution_policy_disposition() {
-                                    Some(nanocode_agent::ExecutionPolicyDisposition::Retry) => {
-                                        durable::recovery_error(error)
-                                    }
+                                    Some(
+                                        nanocode_agent_core::ExecutionPolicyDisposition::Retry,
+                                    ) => durable::recovery_error(error),
                                     _ => error,
                                 }
                             })?;
@@ -6408,7 +6410,7 @@ impl LifecycleBackend for Driver {
                     result
                         .map(|_| ())
                         .map_err(|error| match error.execution_policy_disposition() {
-                            Some(nanocode_agent::ExecutionPolicyDisposition::Retry) => {
+                            Some(nanocode_agent_core::ExecutionPolicyDisposition::Retry) => {
                                 durable::recovery_error(error)
                             }
                             _ => error,
@@ -6488,7 +6490,7 @@ impl LifecycleBackend for Driver {
                             .await
                         {
                             if error.execution_policy_disposition()
-                                == Some(nanocode_agent::ExecutionPolicyDisposition::Retry)
+                                == Some(nanocode_agent_core::ExecutionPolicyDisposition::Retry)
                             {
                                 drop(update);
                                 drop(admission);
@@ -6512,11 +6514,14 @@ impl LifecycleBackend for Driver {
             })
         })
     }
-    fn side_question(&self, question: String) -> BackendFuture<Result<nanocode_agent::SideAnswer>> {
+    fn side_question(
+        &self,
+        question: String,
+    ) -> BackendFuture<Result<nanocode_agent_core::SideAnswer>> {
         let state = self.state.clone();
         Box::pin(async move { state.side_question(question).await })
     }
-    fn transcript(&self) -> BackendFuture<Result<Vec<nanocode_agent::input::PromptMessage>>> {
+    fn transcript(&self) -> BackendFuture<Result<Vec<nanocode_agent_core::input::PromptMessage>>> {
         let state = self.state.clone();
         Box::pin(async move { state.transcript().await })
     }
@@ -6677,11 +6682,11 @@ impl State {
     }
 }
 
-impl nanocode_agent::BackendKind for Claude {
-    type Model = nanocode_agent::ClaudeModel;
+impl nanocode_agent_core::BackendKind for Claude {
+    type Model = nanocode_agent_core::ClaudeModel;
 
-    fn backend_id() -> nanocode_agent::BackendId {
-        nanocode_agent::BackendId::new("claude")
+    fn backend_id() -> nanocode_agent_core::BackendId {
+        nanocode_agent_core::BackendId::new("claude")
     }
 
     fn model_id(model: &Self::Model) -> &str {
@@ -6689,11 +6694,11 @@ impl nanocode_agent::BackendKind for Claude {
     }
 }
 
-impl nanocode_agent::BackendKind for ClaudeBuilder {
-    type Model = nanocode_agent::ClaudeModel;
+impl nanocode_agent_core::BackendKind for ClaudeBuilder {
+    type Model = nanocode_agent_core::ClaudeModel;
 
-    fn backend_id() -> nanocode_agent::BackendId {
-        nanocode_agent::BackendId::new("claude")
+    fn backend_id() -> nanocode_agent_core::BackendId {
+        nanocode_agent_core::BackendId::new("claude")
     }
 
     fn model_id(model: &Self::Model) -> &str {
@@ -6701,9 +6706,9 @@ impl nanocode_agent::BackendKind for ClaudeBuilder {
     }
 }
 
-impl nanocode_agent::BackendRegistration for Claude {
-    fn id(&self) -> nanocode_agent::BackendId {
-        nanocode_agent::BackendId::new("claude")
+impl nanocode_agent_core::BackendRegistration for Claude {
+    fn id(&self) -> nanocode_agent_core::BackendId {
+        nanocode_agent_core::BackendId::new("claude")
     }
     fn default_model(&self) -> String {
         self.model.clone()
@@ -6716,14 +6721,14 @@ impl nanocode_agent::BackendRegistration for Claude {
     }
     fn build(
         &self,
-        request: nanocode_agent::BackendRequest,
+        request: nanocode_agent_core::BackendRequest,
     ) -> BackendFuture<Result<(Nanocodex, AgentEvents)>> {
-        nanocode_agent::BackendRegistration::build(&ClaudeBuilder::new(self.clone()), request)
+        nanocode_agent_core::BackendRegistration::build(&ClaudeBuilder::new(self.clone()), request)
     }
 }
-impl nanocode_agent::BackendRegistration for ClaudeBuilder {
-    fn id(&self) -> nanocode_agent::BackendId {
-        nanocode_agent::BackendRegistration::id(&self.claude)
+impl nanocode_agent_core::BackendRegistration for ClaudeBuilder {
+    fn id(&self) -> nanocode_agent_core::BackendId {
+        nanocode_agent_core::BackendRegistration::id(&self.claude)
     }
     fn default_model(&self) -> String {
         self.claude.model.clone()
@@ -6732,20 +6737,20 @@ impl nanocode_agent::BackendRegistration for ClaudeBuilder {
         (self.thinking_explicit || self.effort.is_some()).then(|| effort_thinking(self.effort))
     }
     fn validate_model(&self, model: &str) -> Result<()> {
-        nanocode_agent::BackendRegistration::validate_model(&self.claude, model)
+        nanocode_agent_core::BackendRegistration::validate_model(&self.claude, model)
     }
     fn build(
         &self,
-        request: nanocode_agent::BackendRequest,
+        request: nanocode_agent_core::BackendRequest,
     ) -> BackendFuture<Result<(Nanocodex, AgentEvents)>> {
         let prepared = self.clone().prepare(request);
         Box::pin(async move { prepared?.build() })
     }
 }
 impl ClaudeBuilder {
-    pub fn prepare(self, request: nanocode_agent::BackendRequest) -> Result<Self> {
+    pub fn prepare(self, request: nanocode_agent_core::BackendRequest) -> Result<Self> {
         let mut builder = self;
-        use nanocode_agent::BackendRegistration as _;
+        use nanocode_agent_core::BackendRegistration as _;
         if request.model.backend != builder.id() {
             return Err(unsupported(
                 "Claude registration requires the Claude backend",

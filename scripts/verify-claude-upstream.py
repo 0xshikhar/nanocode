@@ -138,7 +138,7 @@ catalogs = {name: {tool['name']: tool for tool in request['tools']}
             for name, request in profiles.items()}
 tools = [catalogs[manifest['tool_profiles'][name]][name]
          for name in sorted(manifest['tool_profiles'])]
-artifacts = {'prompts/claude-code-system.json': blocks, 'src/tools/upstream.json': tools}
+artifacts = {'prompts/claude-code-system.json': blocks, 'tools/src/tools/upstream.json': tools}
 for entry in manifest['artifacts']:
     path = backend / entry['path']
     expected = artifacts[entry['path']]

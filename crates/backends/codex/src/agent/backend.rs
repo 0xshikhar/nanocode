@@ -1,7 +1,7 @@
 use super::handle::request_fork;
 use super::*;
-pub use nanocode_agent::backend::AgentFactory;
-pub use nanocode_agent::backend::*;
+pub use nanocode_agent_core::backend::AgentFactory;
+pub use nanocode_agent_core::backend::*;
 
 pub(super) fn resolve_fork_point(
     point: crate::session::ForkPoint,
@@ -370,7 +370,10 @@ impl LifecycleBackend for LocalLifecycle {
         })
     }
 
-    fn side_question(&self, question: String) -> BackendFuture<Result<nanocode_agent::SideAnswer>> {
+    fn side_question(
+        &self,
+        question: String,
+    ) -> BackendFuture<Result<nanocode_agent_core::SideAnswer>> {
         let commands = self.commands.clone();
         let shutdown = self.shutdown.clone();
         Box::pin(async move {

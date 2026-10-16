@@ -5,15 +5,15 @@ use serde::Deserialize;
 
 use super::{StandardTool, Tool, ToolContext, ToolInput, ToolOutput, ToolResult};
 
-use nanocode_process::{ExecCommand, ExecCommandResult, ShellSessions, WriteStdin};
+use nanocode_process_contracts::{ExecCommand, ExecCommandResult, ShellExecutor, WriteStdin};
 
 pub(crate) struct ExecCommandHandler {
     workspace: PathBuf,
-    sessions: Arc<ShellSessions>,
+    sessions: Arc<dyn ShellExecutor>,
 }
 
 impl ExecCommandHandler {
-    pub(crate) const fn new(workspace: PathBuf, sessions: Arc<ShellSessions>) -> Self {
+    pub(crate) const fn new(workspace: PathBuf, sessions: Arc<dyn ShellExecutor>) -> Self {
         Self {
             workspace,
             sessions,
@@ -48,11 +48,11 @@ impl Tool for ExecCommandHandler {
 }
 
 pub(crate) struct WriteStdinHandler {
-    sessions: Arc<ShellSessions>,
+    sessions: Arc<dyn ShellExecutor>,
 }
 
 impl WriteStdinHandler {
-    pub(crate) const fn new(sessions: Arc<ShellSessions>) -> Self {
+    pub(crate) const fn new(sessions: Arc<dyn ShellExecutor>) -> Self {
         Self { sessions }
     }
 }

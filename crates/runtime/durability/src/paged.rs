@@ -89,7 +89,7 @@ impl<'a> PagedWriter<'a> {
 
     fn record<T: Serialize>(&mut self, value: &T) -> Result<EncodedPayload> {
         let mut payload = EncodedPayload::encode(value)?;
-        let key = payload.key.to_string();
+        let key = payload.key().to_owned();
         if self.keys.insert(key.clone()) && !self.known.contains(&key) {
             payload.stage(&mut self.records);
         }
@@ -128,7 +128,7 @@ pub async fn load_sequence<T: DeserializeOwned>(
     let mut pages = Vec::new();
     let mut next = sequence.tail;
     while let Some(reference) = next {
-        keys.insert(reference.key.to_string());
+        keys.insert(reference.key().to_owned());
         let page: Page = reader.load_payload(reference).await?.decode()?;
         next = page.previous;
         pages.push(page.items);
@@ -137,7 +137,7 @@ pub async fn load_sequence<T: DeserializeOwned>(
     for page in pages.into_iter().rev() {
         for chunk in page.chunks(16) {
             for reference in chunk {
-                keys.insert(reference.key.to_string());
+                keys.insert(reference.key().to_owned());
             }
             for payload in reader.load_payloads(chunk.to_vec()).await? {
                 items.push(payload.decode()?);

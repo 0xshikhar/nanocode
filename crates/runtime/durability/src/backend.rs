@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use nanocode_agent::{
+use nanocode_agent_core::{
     AgentEvents, BackendRegistration, BackendRequest, ExecutionPolicyDisposition, Nanocodex,
     NanocodexError, Result as AgentResult, SessionInfo, backend::BackendFuture,
 };

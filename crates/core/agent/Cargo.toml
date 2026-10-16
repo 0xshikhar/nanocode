@@ -1,0 +1,27 @@
+[package]
+autotests = false
+autobenches = false
+name = "nanocode-agent-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Backend-independent agent lifecycle, handles and session contracts"
+[dependencies]
+nanocode-agent-types.workspace = true
+nanocode-platform.workspace = true
+nanocode-home.workspace = true
+nanocode-types.workspace = true
+nanocode-tool-contracts.workspace = true
+futures-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+[lints]
+workspace = true
+
+[lib]
+test = false
+doctest = false
+bench = false

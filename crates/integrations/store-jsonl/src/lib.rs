@@ -1,6 +1,6 @@
 #![cfg(not(target_family = "wasm"))]
 
-use nanocode_durability::{
+use nanocode_durability_core::{
     OwnedState, OwnerId, OwnerToken, StateStore, StoreError, StoreFuture, StoreRecord, StoredState,
 };
 use serde::{Deserialize, Deserializer, Serialize, de};

@@ -16,7 +16,7 @@ description = "Composable task-tree subagents for Nanocodex"
 
 [dependencies]
 nanocode-platform.workspace = true
-nanocode-agent.workspace = true
+nanocode-agent-core.workspace = true
 async-trait.workspace = true
 futures-util.workspace = true
 nanocode-schema.workspace = true

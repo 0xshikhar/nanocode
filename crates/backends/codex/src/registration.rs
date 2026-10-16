@@ -2,10 +2,10 @@ use crate::agent::AgentSend;
 use crate::client::tower::{ResponsesAttempt, ResponsesServiceResponse};
 use crate::client::{__private::ResponsesServiceFactory, Model, ResponseError};
 use crate::{AgentEvents, Nanocodex, NanocodexBuilder, NanocodexError, OpenAi, Result};
-use nanocode_agent::{BackendId, BackendRegistration, BackendRequest};
+use nanocode_agent_core::{BackendId, BackendRegistration, BackendRequest};
 use tower::Service;
 
-impl<F> nanocode_agent::BackendKind for OpenAi<F> {
+impl<F> nanocode_agent_core::BackendKind for OpenAi<F> {
     type Model = Model;
 
     fn backend_id() -> BackendId {
@@ -17,7 +17,7 @@ impl<F> nanocode_agent::BackendKind for OpenAi<F> {
     }
 }
 
-impl<F> nanocode_agent::BackendKind for NanocodexBuilder<F> {
+impl<F> nanocode_agent_core::BackendKind for NanocodexBuilder<F> {
     type Model = Model;
 
     fn backend_id() -> BackendId {
@@ -64,7 +64,7 @@ where
     fn build(
         &self,
         request: BackendRequest,
-    ) -> nanocode_agent::backend::BackendFuture<Result<(Nanocodex, AgentEvents)>> {
+    ) -> nanocode_agent_core::backend::BackendFuture<Result<(Nanocodex, AgentEvents)>> {
         BackendRegistration::build(&Nanocodex::builder(self.clone()), request)
     }
 }
@@ -96,7 +96,7 @@ where
     fn build(
         &self,
         request: BackendRequest,
-    ) -> nanocode_agent::backend::BackendFuture<Result<(Nanocodex, AgentEvents)>> {
+    ) -> nanocode_agent_core::backend::BackendFuture<Result<(Nanocodex, AgentEvents)>> {
         let prepared = self.clone().prepare(request);
         Box::pin(async move { prepared?.build() })
     }
@@ -128,8 +128,8 @@ impl<F> NanocodexBuilder<F> {
             .spawn_factory(request.spawn_factory)
             .host_context(request.host_context);
         builder = builder.reasoning_mode(
-            nanocode_agent::ModelSelection::Codex(model)
-                .capabilities(nanocode_agent::ModelTransport::Native)
+            nanocode_agent_core::ModelSelection::Codex(model)
+                .capabilities(nanocode_agent_core::ModelTransport::Native)
                 .normalize_reasoning_mode(
                     request
                         .options

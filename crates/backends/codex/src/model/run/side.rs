@@ -1,6 +1,6 @@
 use super::*;
 use crate::client::FunctionOutputBody;
-use nanocode_agent::{SideAnswer, backend::side_question_prompt};
+use nanocode_agent_core::{SideAnswer, backend::side_question_prompt};
 use std::collections::HashSet;
 
 const RUNNING_TOOL_OUTPUT: &str =

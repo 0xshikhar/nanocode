@@ -411,7 +411,7 @@ impl State {
                 .filter(|prompt| {
                     matches!(
                         prompt.instruction,
-                        nanocode_agent::input::PromptInput::Content(_)
+                        nanocode_agent_core::input::PromptInput::Content(_)
                     )
                 })
                 .cloned(),
@@ -668,7 +668,7 @@ pub(super) fn candidate_id(kind: &str) -> String {
 pub(super) fn recovery_error(error: impl std::fmt::Display) -> NanocodexError {
     NanocodexError::execution_policy_with_disposition(
         "Claude recovery",
-        nanocode_agent::ExecutionPolicyDisposition::Reopen,
+        nanocode_agent_core::ExecutionPolicyDisposition::Reopen,
         provider_error(error),
     )
 }
@@ -738,7 +738,7 @@ pub struct ClaudeCheckpointView {
 
     pub lineage: Option<Lineage>,
 
-    pub transcript: Vec<nanocode_agent::session::TranscriptItem>,
+    pub transcript: Vec<nanocode_agent_core::session::TranscriptItem>,
 }
 
 pub fn decode_checkpoint(checkpoint: Value) -> Result<ClaudeCheckpointView> {
@@ -831,8 +831,8 @@ impl Snapshot {
             transcript: self.transcript(),
         })
     }
-    fn transcript(&self) -> Vec<nanocode_agent::session::TranscriptItem> {
-        use nanocode_agent::session::TranscriptItem;
+    fn transcript(&self) -> Vec<nanocode_agent_core::session::TranscriptItem> {
+        use nanocode_agent_core::session::TranscriptItem;
         let mut items = Vec::new();
         if !self.conversation.summary.is_empty() {
             items.push(TranscriptItem::Assistant(format!(

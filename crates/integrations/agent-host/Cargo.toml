@@ -1,0 +1,39 @@
+[package]
+name = "nanocode-agent-host"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Native agent defaults, durable process routing and runner lifecycle adapters"
+autotests = false
+autobenches = false
+
+[dependencies]
+nanocode-agent.workspace = true
+nanocode-agent-core.workspace = true
+nanocode-durability.workspace = true
+nanocode-tool-host.workspace = true
+nanocode-tool-contracts.workspace = true
+nanocode-platform.workspace = true
+nanocode-process-contracts.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+serde_json.workspace = true
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+nanocode-cua.workspace = true
+nanocode-home.workspace = true
+nanocode-store-jsonl.workspace = true
+nanocode-tool-runtime.workspace = true
+nanocode-process.workspace = true
+async-trait.workspace = true
+tokio = { workspace = true, features = ["rt", "macros"] }
+
+[lints]
+workspace = true
+
+[lib]
+test = false
+doctest = false
+bench = false

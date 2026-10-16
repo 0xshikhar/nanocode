@@ -1,4 +1,4 @@
-use nanocode_agent::{NanocodexError, Result, SessionInfo};
+use nanocode_agent_core::{NanocodexError, Result, SessionInfo};
 use serde_json::{Value, value::RawValue};
 use std::{future::Future, pin::Pin, sync::Arc};
 
@@ -153,7 +153,7 @@ pub trait ClaudeExecutionPolicy: Send + Sync {
     fn initial_checkpoint(
         &self,
         _state: Value,
-        _model: nanocode_agent::ModelSelection,
+        _model: nanocode_agent_core::ModelSelection,
     ) -> PolicyFuture<'_, ()> {
         Box::pin(async { Ok(()) })
     }

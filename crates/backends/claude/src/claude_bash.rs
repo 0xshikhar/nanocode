@@ -60,18 +60,25 @@ impl Jobs {
 struct LocalBash {
     workspace: PathBuf,
     jobs: Arc<Jobs>,
+    executor: Arc<dyn nanocode_process_contracts::ForegroundExecutor>,
 }
 
-async fn run(workspace: PathBuf, request: BashRequest, duration: Duration) -> Outcome {
-    let output = nanocode_process::run_bash(
-        &workspace,
-        &request.command,
-        duration,
-        request.max_stdout_bytes,
-        request.max_stderr_bytes,
-        request.session.as_ref(),
-    )
-    .await?;
+async fn run(
+    executor: &dyn nanocode_process_contracts::ForegroundExecutor,
+    workspace: PathBuf,
+    request: BashRequest,
+    duration: Duration,
+) -> Outcome {
+    let output = executor
+        .execute(nanocode_process_contracts::ForegroundCommand {
+            workspace: &workspace,
+            command: &request.command,
+            timeout: duration,
+            max_stdout: request.max_stdout_bytes,
+            max_stderr: request.max_stderr_bytes,
+            session: request.session.as_ref(),
+        })
+        .await?;
     Ok(BashResult {
         stdout: output.stdout,
         stderr: output.stderr,
@@ -82,7 +89,13 @@ async fn run(workspace: PathBuf, request: BashRequest, duration: Duration) -> Ou
 impl BashExecutor for LocalBash {
     async fn execute(&self, request: BashRequest) -> Outcome {
         let timeout = Duration::from_millis(request.timeout_ms);
-        run(self.workspace.clone(), request, timeout).await
+        run(
+            self.executor.as_ref(),
+            self.workspace.clone(),
+            request,
+            timeout,
+        )
+        .await
     }
     async fn execute_with_background(
         &self,
@@ -111,8 +124,9 @@ impl BashExecutor for LocalBash {
                 .lock()
                 .map_err(|_| "Bash job store poisoned")?;
             let workspace = self.workspace.clone();
+            let executor = self.executor.clone();
             let task = tokio::spawn(async move {
-                let result = run(workspace, request, hard_timeout).await;
+                let result = run(executor.as_ref(), workspace, request, hard_timeout).await;
                 let _ = sender.send(Some(result));
             });
             let job = Arc::new(Job {
@@ -164,8 +178,13 @@ pub(super) fn install(
     workspace: PathBuf,
     session: Option<SessionEnvironment>,
     jobs: Arc<Jobs>,
+    process: Arc<dyn nanocode_process_contracts::ForegroundExecutor>,
 ) -> ToolsBuilder {
-    let executor = LocalBash { workspace, jobs };
+    let executor = LocalBash {
+        workspace,
+        jobs,
+        executor: process,
+    };
     tools = tools.tool(BashTool {
         bash: ClaudeBash::new(executor.clone()),
         session,

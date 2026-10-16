@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OptionalExtension as _, TransactionBehavior, params};
 
-use nanocode_durability::{
+use nanocode_durability_core::{
     OwnedState, OwnerId, OwnerToken, StateStore, StoreError, StoreFuture, StoredState,
 };
 
@@ -106,7 +106,7 @@ impl SqliteStore {
         owner: &OwnerToken,
         expected_revision: u64,
         payload: &str,
-        records: &[nanocode_durability::StoreRecord],
+        records: &[nanocode_durability_core::StoreRecord],
         after_begin: impl FnOnce(),
     ) -> Result<u64, StoreError> {
         let transaction = self
@@ -218,7 +218,7 @@ impl StateStore for SqliteStore {
         owner: &'a OwnerToken,
         expected_revision: u64,
         payload: &'a str,
-        records: &'a [nanocode_durability::StoreRecord],
+        records: &'a [nanocode_durability_core::StoreRecord],
     ) -> StoreFuture<'a, Result<u64, StoreError>> {
         let result =
             self.replace_transactional(state_id, owner, expected_revision, payload, records, || {});

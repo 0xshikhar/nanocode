@@ -1,5 +1,5 @@
-use nanocode_types::responses::ResponseItem;
-pub use nanocode_types::tools::*;
+use nanocode_types_core::responses::ResponseItem;
+pub use nanocode_types_core::tools::*;
 use serde::de::DeserializeOwned;
 use serde_json::value::RawValue;
 use std::{future::Future, pin::Pin};

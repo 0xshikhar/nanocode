@@ -1,5 +1,5 @@
-use nanocode_agent::input::{Prompt, PromptInput, UserInput};
-use nanocode_agent::{
+use nanocode_agent_core::input::{Prompt, PromptInput, UserInput};
+use nanocode_agent_core::{
     Model, ModelSelection, ModelTransport, ReasoningMode, Thinking, events::AgentEvent,
 };
 use serde::{Deserialize, Serialize};

@@ -3,7 +3,7 @@ use super::{
     ResponseContext, Result, Role, State, TurnUsage, provider_error,
 };
 use crate::ToolResultContent;
-use nanocode_agent::{
+use nanocode_agent_core::{
     SideAnswer,
     backend::{TranscriptBuilder, side_question_prompt},
     input::PromptMessage,

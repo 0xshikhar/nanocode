@@ -2,7 +2,7 @@
 
 use tokio_postgres::Client;
 
-use nanocode_durability::{
+use nanocode_durability_core::{
     OwnedState, OwnerId, OwnerToken, StateStore, StoreError, StoreFuture, StoredState,
 };
 
@@ -120,7 +120,7 @@ impl StateStore for PostgresStore {
         owner: &'a OwnerToken,
         expected_revision: u64,
         payload: &'a str,
-        records: &'a [nanocode_durability::StoreRecord],
+        records: &'a [nanocode_durability_core::StoreRecord],
     ) -> StoreFuture<'a, Result<u64, StoreError>> {
         Box::pin(async move {
             let transaction = self.client.transaction().await.map_err(backend)?;

@@ -1,0 +1,195 @@
+use std::{future::Future, pin::Pin};
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(transparent)]
+pub struct OwnerId(String);
+
+impl OwnerId {
+    pub fn new() -> Self {
+        #[cfg(not(target_family = "wasm"))]
+        let id = uuid::Uuid::now_v7();
+        #[cfg(target_family = "wasm")]
+        let id = nanocode_platform::uuid_v7();
+        Self(id.to_string())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Default for OwnerId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct OwnerToken {
+    owner_id: OwnerId,
+    fence: u64,
+}
+
+impl OwnerToken {
+    pub const fn new(owner_id: OwnerId, fence: u64) -> Self {
+        Self { owner_id, fence }
+    }
+
+    pub const fn owner_id(&self) -> &OwnerId {
+        &self.owner_id
+    }
+
+    pub const fn fence(&self) -> u64 {
+        self.fence
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct StoredState {
+    pub revision: u64,
+
+    pub payload: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct OwnedState {
+    pub owner: OwnerToken,
+
+    pub state: StoredState,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum StoreError {
+    #[error("durability state owner was fenced")]
+    Fenced,
+
+    #[error("durability state revision conflict: expected {expected}, found {actual}")]
+    Conflict { expected: u64, actual: u64 },
+
+    #[error("durability store operation was not committed: {0}")]
+    NotCommitted(String),
+
+    #[error("durability store failed: {0}")]
+    Backend(String),
+}
+
+#[cfg(not(target_family = "wasm"))]
+pub type StoreFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+#[cfg(target_family = "wasm")]
+pub type StoreFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct StoreRecord {
+    pub key: String,
+
+    pub value: String,
+}
+
+fn read_only_unsupported() -> StoreError {
+    StoreError::Backend("this store does not support non-fencing reads".to_owned())
+}
+
+#[cfg(not(target_family = "wasm"))]
+pub trait StateStore: Send {
+    fn read_record<'a>(
+        &'a mut self,
+        state_id: &'a str,
+        key: &'a str,
+    ) -> StoreFuture<'a, Result<Option<String>, StoreError>>;
+
+    fn read_records<'a>(
+        &'a mut self,
+        state_id: &'a str,
+        keys: &'a [String],
+    ) -> StoreFuture<'a, Result<Vec<Option<String>>, StoreError>> {
+        Box::pin(async move {
+            let mut records = Vec::with_capacity(keys.len());
+            for key in keys {
+                records.push(self.read_record(state_id, key).await?);
+            }
+            Ok(records)
+        })
+    }
+
+    fn peek<'a>(
+        &'a mut self,
+        _state_id: &'a str,
+    ) -> StoreFuture<'a, Result<StoredState, StoreError>> {
+        Box::pin(async { Err(read_only_unsupported()) })
+    }
+
+    fn list_states<'a>(
+        &'a mut self,
+        _limit: usize,
+    ) -> StoreFuture<'a, Result<Vec<String>, StoreError>> {
+        Box::pin(async { Err(read_only_unsupported()) })
+    }
+
+    fn acquire<'a>(
+        &'a mut self,
+        state_id: &'a str,
+        owner_id: OwnerId,
+    ) -> StoreFuture<'a, Result<OwnedState, StoreError>>;
+
+    fn replace<'a>(
+        &'a mut self,
+        state_id: &'a str,
+        owner: &'a OwnerToken,
+        expected_revision: u64,
+        payload: &'a str,
+        records: &'a [crate::StoreRecord],
+    ) -> StoreFuture<'a, Result<u64, StoreError>>;
+}
+
+#[cfg(target_family = "wasm")]
+pub trait StateStore {
+    fn read_record<'a>(
+        &'a mut self,
+        state_id: &'a str,
+        key: &'a str,
+    ) -> StoreFuture<'a, Result<Option<String>, StoreError>>;
+
+    fn read_records<'a>(
+        &'a mut self,
+        state_id: &'a str,
+        keys: &'a [String],
+    ) -> StoreFuture<'a, Result<Vec<Option<String>>, StoreError>> {
+        Box::pin(async move {
+            let mut records = Vec::with_capacity(keys.len());
+            for key in keys {
+                records.push(self.read_record(state_id, key).await?);
+            }
+            Ok(records)
+        })
+    }
+
+    fn peek<'a>(
+        &'a mut self,
+        _state_id: &'a str,
+    ) -> StoreFuture<'a, Result<StoredState, StoreError>> {
+        Box::pin(async { Err(read_only_unsupported()) })
+    }
+
+    fn list_states<'a>(
+        &'a mut self,
+        _limit: usize,
+    ) -> StoreFuture<'a, Result<Vec<String>, StoreError>> {
+        Box::pin(async { Err(read_only_unsupported()) })
+    }
+
+    fn acquire<'a>(
+        &'a mut self,
+        state_id: &'a str,
+        owner_id: OwnerId,
+    ) -> StoreFuture<'a, Result<OwnedState, StoreError>>;
+
+    fn replace<'a>(
+        &'a mut self,
+        state_id: &'a str,
+        owner: &'a OwnerToken,
+        expected_revision: u64,
+        payload: &'a str,
+        records: &'a [crate::StoreRecord],
+    ) -> StoreFuture<'a, Result<u64, StoreError>>;
+}

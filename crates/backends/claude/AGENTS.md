@@ -1,8 +1,12 @@
 # Claude upstream contracts
 
+- Own Claude harness construction and tool installation here. Bash executes through core/process interfaces; native constructors remain compatibility defaults. Runtime assembly supplies host process executors.
+
+- `client/` (`nanocode-backend-claude-client`) owns the Messages protocol types, `ClaudeClient`, authentication, subscription wire compatibility and transport; this crate re-exports it at the crate root. `upstream::VERSION` reuses the client's pinned CLI version.
+- `tools/` (`nanocode-backend-claude-tools`) owns independent provider tool definitions and handlers; keep it independent of clients, agent lifecycle, runtime and durability. Preserve this backend's public tool paths through re-exports.
 - Preserve the exact identity and core text blocks in `prompts/claude-code-system.json`, with version and official package integrity recorded in `prompts/upstream.json`.
 - Keep provider blocks unchanged. Add Code Mode and environment/project context as separate blocks. Preserve explicit caller system overrides.
-- Use `upstream::tool_definition` for verified provider contracts. `src/tools/upstream.json` records exact names, descriptions and schemas from the official CLI; provenance selects the capture profile for each definition. Bash uses the expanded profile with Glob and Grep available.
+- Use `upstream::tool_definition` for verified provider contracts. `tools/src/tools/upstream.json` records exact names, descriptions and schemas from the official CLI; provenance selects the capture profile for each definition. Bash uses the expanded profile with Glob and Grep available.
 - Run `python3 scripts/verify-claude-upstream.py --capture` with the pinned official macOS ARM64 CLI installed to verify fresh requests against a local stub and dummy credentials. `--write` refreshes the pinned artifacts after review. `--offline` compares existing ignored captures and artifact hashes without running the CLI.
 - Keep captures, package archives and dynamic request context under ignored `output/claude-upstream-parity`. Never copy captured workspace paths, Git state, credentials or user configuration into provider assets.
 - Keep authentication, billing and cache policy separate from prompt/tool provenance. Subscription requests preserve tool names and the SDK identity instead of adding underscore aliases or a second identity.

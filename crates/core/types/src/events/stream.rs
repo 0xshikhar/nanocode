@@ -8,12 +8,13 @@ use std::{
 
 use futures_util::Stream;
 use nanocode_platform::Instant;
-use serde::{Deserialize, Serialize};
-use serde_json::value::RawValue;
+use serde::Serialize;
 use serde_json::value::to_raw_value;
 use tokio::sync::mpsc;
 
-pub const AGENT_EVENT_PROTOCOL_VERSION: u32 = 1;
+pub use nanocode_types_core::events::{
+    AGENT_EVENT_PROTOCOL_VERSION, AgentEvent, AgentEventKind, EventError,
+};
 static PROCESS_MONOTONIC_EPOCH: OnceLock<Instant> = OnceLock::new();
 
 #[doc(hidden)]
@@ -24,51 +25,6 @@ pub fn monotonic_now_ns() -> u64 {
         .elapsed()
         .as_nanos();
     u64::try_from(elapsed).unwrap_or(u64::MAX)
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum EventError {
-    #[error("failed to encode agent event")]
-    Encode(#[source] serde_json::Error),
-
-    #[error("failed to write agent event")]
-    Write(#[source] std::io::Error),
-
-    #[error("agent event stream closed before the turn emitted a terminal event")]
-    ClosedBeforeTerminal,
-
-    #[error("agent event protocol version mismatch: expected {expected}, received {actual}")]
-    ProtocolVersionMismatch { expected: u32, actual: u32 },
-
-    #[error("agent event request identity mismatch: expected {expected}, received {actual}")]
-    RequestIdMismatch {
-        expected: Arc<str>,
-
-        actual: Arc<str>,
-    },
-
-    #[error("agent event sequence did not advance: minimum {expected}, received {actual}")]
-    SequenceMismatch { expected: u64, actual: u64 },
-
-    #[error("agent event sequence is exhausted")]
-    SequenceExhausted,
-
-    #[error("agent turn event was published after its terminal event")]
-    TurnAlreadyTerminal,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct AgentEvent {
-    pub protocol_version: u32,
-
-    pub request_id: Arc<str>,
-
-    pub seq: u64,
-
-    #[serde(rename = "type")]
-    pub kind: AgentEventKind,
-
-    pub payload: Arc<RawValue>,
 }
 
 #[doc(hidden)]
@@ -85,90 +41,6 @@ pub struct TimedAgentEvent {
     pub event: AgentEvent,
 
     pub timing: AgentEventTiming,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum AgentEventKind {
-    #[serde(rename = "input.accepted")]
-    InputAccepted,
-
-    #[serde(rename = "api.event")]
-    ApiEvent,
-
-    #[serde(rename = "assistant.delta")]
-    AssistantDelta,
-
-    #[serde(rename = "assistant.message")]
-    AssistantMessage,
-
-    #[serde(rename = "reasoning.summary.delta")]
-    ReasoningSummaryDelta,
-
-    #[serde(rename = "run.started")]
-    RunStarted,
-
-    #[serde(rename = "run.steered")]
-    RunSteered,
-
-    #[serde(rename = "run.error")]
-    RunError,
-
-    #[serde(rename = "run.completed")]
-    RunCompleted,
-
-    #[serde(rename = "run.failed")]
-    RunFailed,
-
-    #[serde(rename = "tool.call")]
-    ToolCall,
-
-    #[serde(rename = "tool.result")]
-    ToolResult,
-
-    #[serde(rename = "model.warmup.started")]
-    ModelWarmupStarted,
-
-    #[serde(rename = "model.warmup.completed")]
-    ModelWarmupCompleted,
-
-    #[serde(rename = "model.warmup.failed")]
-    ModelWarmupFailed,
-
-    #[serde(rename = "model.call.started")]
-    ModelCallStarted,
-
-    #[serde(rename = "model.call.completed")]
-    ModelCallCompleted,
-
-    #[serde(rename = "model.call.failed")]
-    ModelCallFailed,
-
-    #[serde(rename = "model.compaction.started")]
-    ModelCompactionStarted,
-
-    #[serde(rename = "model.compaction.completed")]
-    ModelCompactionCompleted,
-
-    #[serde(rename = "model.compaction.failed")]
-    ModelCompactionFailed,
-
-    #[serde(rename = "model.attempt.started")]
-    ModelAttemptStarted,
-
-    #[serde(rename = "model.attempt.failed")]
-    ModelAttemptFailed,
-
-    #[serde(rename = "model.attempt.retrying")]
-    ModelAttemptRetrying,
-
-    #[serde(rename = "model.connection.started")]
-    ModelConnectionStarted,
-
-    #[serde(rename = "model.connection.completed")]
-    ModelConnectionCompleted,
-
-    #[serde(rename = "model.connection.failed")]
-    ModelConnectionFailed,
 }
 
 pub struct AgentEvents {
@@ -225,96 +97,6 @@ impl Stream for AgentEvents {
         self.receiver
             .poll_recv(context)
             .map(|event| event.map(|event| event.event))
-    }
-}
-
-impl AgentEventKind {
-    #[must_use]
-    pub const fn is_terminal(self) -> bool {
-        matches!(self, Self::RunCompleted | Self::RunFailed)
-    }
-}
-
-impl AgentEvent {
-    pub fn data(&self) -> Result<super::AgentEventData, serde_json::Error> {
-        use super::{
-            AgentEventData, AssistantEvent, ContextEvent, ModelEvent, ReasoningEvent, RunEvent,
-            ToolEvent, TransportEvent,
-        };
-
-        Ok(match self.kind {
-            AgentEventKind::InputAccepted => AgentEventData::InputAccepted(self.decode_payload()?),
-            AgentEventKind::ApiEvent => AgentEventData::OpenAi(self.decode_payload()?),
-            AgentEventKind::AssistantDelta => {
-                AgentEventData::Assistant(AssistantEvent::Delta(self.decode_payload()?))
-            }
-            AgentEventKind::AssistantMessage => {
-                AgentEventData::Assistant(AssistantEvent::Message(self.decode_payload()?))
-            }
-            AgentEventKind::ReasoningSummaryDelta => {
-                AgentEventData::Reasoning(ReasoningEvent::SummaryDelta(self.decode_payload()?))
-            }
-            AgentEventKind::RunStarted => {
-                AgentEventData::Run(RunEvent::Started(self.decode_payload()?))
-            }
-            AgentEventKind::RunSteered => {
-                AgentEventData::Run(RunEvent::Steered(self.decode_payload()?))
-            }
-            AgentEventKind::RunError => {
-                AgentEventData::Run(RunEvent::Error(self.decode_payload()?))
-            }
-            AgentEventKind::RunCompleted => {
-                AgentEventData::Run(RunEvent::Completed(Box::new(self.decode_payload()?)))
-            }
-            AgentEventKind::RunFailed => {
-                AgentEventData::Run(RunEvent::Failed(Box::new(self.decode_payload()?)))
-            }
-            AgentEventKind::ToolCall => {
-                AgentEventData::Tool(ToolEvent::Call(self.decode_payload()?))
-            }
-            AgentEventKind::ToolResult => {
-                AgentEventData::Tool(ToolEvent::Result(self.decode_payload()?))
-            }
-            AgentEventKind::ModelWarmupStarted => {
-                AgentEventData::Model(ModelEvent::WarmupStarted(self.decode_payload()?))
-            }
-            AgentEventKind::ModelWarmupCompleted => {
-                AgentEventData::Model(ModelEvent::WarmupCompleted(self.decode_payload()?))
-            }
-            AgentEventKind::ModelWarmupFailed => {
-                AgentEventData::Model(ModelEvent::WarmupFailed(self.decode_payload()?))
-            }
-            AgentEventKind::ModelCallStarted => {
-                AgentEventData::Model(ModelEvent::CallStarted(self.decode_payload()?))
-            }
-            AgentEventKind::ModelCallCompleted => {
-                AgentEventData::Model(ModelEvent::CallCompleted(self.decode_payload()?))
-            }
-            AgentEventKind::ModelCallFailed => {
-                AgentEventData::Model(ModelEvent::CallFailed(self.decode_payload()?))
-            }
-            AgentEventKind::ModelCompactionStarted => {
-                AgentEventData::Context(ContextEvent::CompactionStarted(self.decode_payload()?))
-            }
-            AgentEventKind::ModelCompactionCompleted => {
-                AgentEventData::Context(ContextEvent::CompactionCompleted(self.decode_payload()?))
-            }
-            AgentEventKind::ModelCompactionFailed => {
-                AgentEventData::Context(ContextEvent::CompactionFailed(self.decode_payload()?))
-            }
-            AgentEventKind::ModelAttemptStarted
-            | AgentEventKind::ModelAttemptFailed
-            | AgentEventKind::ModelAttemptRetrying
-            | AgentEventKind::ModelConnectionStarted
-            | AgentEventKind::ModelConnectionCompleted
-            | AgentEventKind::ModelConnectionFailed => {
-                AgentEventData::Transport(TransportEvent::new(self.kind, Arc::clone(&self.payload)))
-            }
-        })
-    }
-
-    pub fn decode_payload<T: serde::de::DeserializeOwned>(&self) -> Result<T, serde_json::Error> {
-        serde_json::from_str(self.payload.get())
     }
 }
 

@@ -7,11 +7,11 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Shared SDK protocol and tool wire contracts without backend clients"
+description = "Shared SDK contracts and event channels with compatible value reexports"
 
 [dependencies]
 nanocode-platform.workspace = true
-smallvec.workspace = true
+nanocode-types-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

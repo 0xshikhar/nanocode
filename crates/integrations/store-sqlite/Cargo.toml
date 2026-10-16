@@ -13,7 +13,7 @@ repository.workspace = true
 description = "SQLite state store for Nanocodex durability"
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-nanocode-durability.workspace = true
+nanocode-durability-core.workspace = true
 rusqlite.workspace = true
 
 [lints]

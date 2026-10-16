@@ -4,7 +4,7 @@ use crate::{
     ClaudeNestedToolUpdate, ClaudeToolInvocation, ClaudeToolProgress, ClaudeToolReply, ClaudeTools,
     ToolDefinition, ToolResultContent,
 };
-use nanocode_agent::{AgentHandle, NanocodexError, Result};
+use nanocode_agent_core::{AgentHandle, NanocodexError, Result};
 use nanocode_tool_host::{
     ToolContext, ToolDefinition as RuntimeDefinition, ToolInput, Tools,
     contract::{ToolOutputBody, ToolOutputContent},

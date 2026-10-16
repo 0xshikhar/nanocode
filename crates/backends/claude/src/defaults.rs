@@ -1,4 +1,4 @@
-use nanocode_agent::{AgentHandle, NanocodexError, Result};
+use nanocode_agent_core::{AgentHandle, NanocodexError, Result};
 use nanocode_tool_host::{Tool, Tools};
 use nanocode_tools::ToolCollection as _;
 use std::{path::PathBuf, sync::Arc};
@@ -30,6 +30,13 @@ pub fn install_default_tools_with_process_routes(
 }
 
 pub fn runner_tools(workspace: PathBuf) -> Result<Tools> {
+    runner_tools_with_executor(workspace, Arc::new(nanocode_process::NativeForeground))
+}
+
+pub fn runner_tools_with_executor(
+    workspace: PathBuf,
+    executor: Arc<dyn nanocode_process_contracts::ForegroundExecutor>,
+) -> Result<Tools> {
     let files = crate::tools::ClaudeWorkspaceFiles::new(&workspace).map_err(|error| {
         NanocodexError::InvalidRequest(format!(
             "Claude file tools require the runner workspace {}: {error}",
@@ -41,6 +48,7 @@ pub fn runner_tools(workspace: PathBuf) -> Result<Tools> {
         workspace,
         None,
         Arc::new(crate::claude_bash::Jobs::default()),
+        executor,
     )
     .map_err(|error| NanocodexError::InvalidRequest(error.to_string()))
 }
@@ -52,6 +60,26 @@ pub fn install_default_tools_with_runner_pool(
     additive: Vec<Arc<dyn Tool>>,
     process_routes: Option<Arc<dyn nanocode_tool_host::attachment::ProcessRouteStore>>,
     runner_pool: Option<nanocode_tool_host::attachment::RunnerRouting>,
+) -> Result<crate::ClaudeTools> {
+    install_default_tools_with_executor(
+        workspace,
+        handle,
+        selected,
+        additive,
+        process_routes,
+        runner_pool,
+        Arc::new(nanocode_process::NativeForeground),
+    )
+}
+
+pub fn install_default_tools_with_executor(
+    workspace: PathBuf,
+    handle: &AgentHandle,
+    selected: Option<Tools>,
+    additive: Vec<Arc<dyn Tool>>,
+    process_routes: Option<Arc<dyn nanocode_tool_host::attachment::ProcessRouteStore>>,
+    runner_pool: Option<nanocode_tool_host::attachment::RunnerRouting>,
+    executor: Arc<dyn nanocode_process_contracts::ForegroundExecutor>,
 ) -> Result<crate::ClaudeTools> {
     let jobs = Arc::new(crate::claude_bash::Jobs::default());
     let selected = match selected {
@@ -68,6 +96,7 @@ pub fn install_default_tools_with_runner_pool(
                 workspace.clone(),
                 Some(handle.session_environment()),
                 jobs.clone(),
+                executor,
             )
             .map_err(|error| NanocodexError::InvalidRequest(error.to_string()))?
         }

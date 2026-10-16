@@ -335,7 +335,7 @@ fn spawn_side_question<S>(
     defaults: TurnDefaults,
     session_id: &str,
     question: String,
-    result: oneshot::Sender<Result<nanocode_agent::SideAnswer>>,
+    result: oneshot::Sender<Result<nanocode_agent_core::SideAnswer>>,
 ) where
     S: Service<ResponsesAttempt, Response = ResponsesServiceResponse> + AgentSend + 'static,
     S::Error: Into<ResponseError> + AgentSend + 'static,

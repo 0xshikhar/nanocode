@@ -1,0 +1,1 @@
+Own native default storage, CUA lifecycle, runner attachment and durable process routing. Receive provider defaults through generic contracts without depending on backends. Explicit remote Code Mode must not initialize local machine tools. Preserve native/WASM adapters and the facade runner APIs.

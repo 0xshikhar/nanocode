@@ -1,0 +1,25 @@
+[package]
+name = "nanocode-types-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Shared SDK values and event wire contracts independent of event channels"
+autotests = false
+autobenches = false
+
+[dependencies]
+smallvec.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+test = false
+doctest = false
+bench = false

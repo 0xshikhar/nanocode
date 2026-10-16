@@ -58,7 +58,7 @@ impl<S: StateStore> CheckpointBranch<S> {
 
     pub async fn turns(&mut self) -> Result<Vec<BranchTurn>> {
         let mut operations: Vec<_> = self.state.operations().iter().collect();
-        operations.sort_by_key(|(_, op)| op.accepted_order);
+        operations.sort_by_key(|(_, op)| op.accepted_order());
         let mut turns = Vec::new();
         for (id, op) in operations {
             let input = op
@@ -91,11 +91,11 @@ impl<S: StateStore> CheckpointBranch<S> {
             .state
             .operations()
             .values()
-            .filter(|op| op.accepted_order < selected.accepted_order)
-            .max_by_key(|op| op.accepted_order);
+            .filter(|op| op.accepted_order() < selected.accepted_order())
+            .max_by_key(|op| op.accepted_order());
         let checkpoint = match prior.map(|op| &op.status) {
             Some(OperationStatus::Completed { checkpoint, .. } | OperationStatus::Failed { checkpoint, .. } | OperationStatus::Cancelled { checkpoint: Some(checkpoint) }) => checkpoint,
-            None if selected.accepted_order == 1 => return Ok(None),
+            None if selected.accepted_order() == 1 => return Ok(None),
             _ => return Err(Error::InvalidState("checkpoint before selected turn is unavailable; retained history cannot safely be reconstructed".into())),
         };
         Ok(Some(

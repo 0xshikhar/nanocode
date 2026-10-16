@@ -2,7 +2,7 @@ use super::{
     model::{AgentDescriptor, AgentId, AgentStatus},
     runtime::{ChildSession, OutputContract},
 };
-use nanocode_agent::{Lineage, ModelSelection, SessionCheckpoint, Thinking};
+use nanocode_agent_core::{Lineage, ModelSelection, SessionCheckpoint, Thinking};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use std::{
@@ -501,7 +501,7 @@ fn legacy_codex_checkpoint(
     };
     let mut payload = fields.clone();
     let session_id: String = legacy_field(&mut payload, "session_id")?;
-    let model: nanocode_agent::Model = legacy_field(&mut payload, "model")?;
+    let model: nanocode_agent_core::Model = legacy_field(&mut payload, "model")?;
     let thinking: Thinking = legacy_field(&mut payload, "thinking")?;
     let conversation = payload
         .get("conversation")
@@ -563,7 +563,7 @@ impl PersistedNative {
     }
 }
 
-pub(super) struct JournalStore(pub(super) Arc<dyn nanocode_agent::backend::ChildJournalStore>);
+pub(super) struct JournalStore(pub(super) Arc<dyn nanocode_agent_core::backend::ChildJournalStore>);
 
 impl SubagentStore for JournalStore {
     fn pending_turn<'a>(
@@ -737,7 +737,7 @@ pub(super) fn journaled_lineage(
     Lineage::new(
         root_session_id,
         Some(parent_session_id),
-        nanocode_agent::Origin::Subagent,
+        nanocode_agent_core::Origin::Subagent,
         u32::try_from(depth).unwrap_or(u32::MAX),
     )
 }

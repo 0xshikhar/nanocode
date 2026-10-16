@@ -4,8 +4,8 @@ use super::{
     platform::{self, Task, TaskError},
     runtime::{DelegationChange, Registry, completion_instructions},
 };
-use nanocode_agent::input::Prompt;
-use nanocode_agent::{
+use nanocode_agent_core::input::Prompt;
+use nanocode_agent_core::{
     Nanocodex, NanocodexError, Result as AgentResult, SessionCheckpoint, TurnControl, TurnResult,
 };
 use std::{
@@ -631,7 +631,7 @@ impl Harness {
                 let recovered = agent
                     .decode_durable_prompt(input)
                     .map_err(std::io::Error::other)?;
-                nanocode_agent::PromptRequest::new(recovered).request_id(id)
+                nanocode_agent_core::PromptRequest::new(recovered).request_id(id)
             }
             None => {
                 let prompt =
@@ -640,7 +640,7 @@ impl Harness {
                     Some(context) => context.prompt(prompt),
                     None => prompt,
                 };
-                nanocode_agent::PromptRequest::new(prompt)
+                nanocode_agent_core::PromptRequest::new(prompt)
             }
         };
         let turn = match agent.prompt(request).await {

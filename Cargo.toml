@@ -2,13 +2,23 @@
 members = [
     "crates/nanocode",
     "crates/runtime/agent",
+    "crates/runtime/agent-config",
+    "crates/core/agent",
+    "crates/core/agent-types",
+    "crates/core/durability",
+    "crates/core/types-core",
+    "crates/core/process",
+    "crates/integrations/agent-host",
     "crates/runtime/tool-host",
     "crates/runtime/code-mode",
     "crates/runtime/code-mode-engine",
     "crates/runtime/durability",
     "crates/runtime/subagents",
     "crates/backends/claude",
+    "crates/backends/claude/client",
+    "crates/backends/claude/tools",
     "crates/backends/codex",
+    "crates/backends/codex/client",
     "crates/core/home",
     "crates/core/http",
     "crates/core/zstd",
@@ -53,8 +63,17 @@ categories = ["api-bindings", "asynchronous", "development-tools"]
 publish = true
 
 [workspace.dependencies]
-nanocode-backend-codex = { version = "0.6.7", path = "crates/backends/codex" }
+nanocode-backend-claude-tools = { version = "0.6.7", path = "crates/backends/claude/tools" }
+nanocode-agent-types = { version = "0.6.7", path = "crates/core/agent-types" }
+nanocode-durability-core = { version = "0.6.7", path = "crates/core/durability" }
+nanocode-types-core = { version = "0.6.7", path = "crates/core/types-core" }
+nanocode-agent-config = { version = "0.6.7", path = "crates/runtime/agent-config" }
+nanocode-process-contracts = { version = "0.6.7", path = "crates/core/process" }
 nanocode-agent = { version = "0.6.7", path = "crates/runtime/agent" }
+nanocode-agent-host = { version = "0.6.7", path = "crates/integrations/agent-host" }
+nanocode-backend-codex = { version = "0.6.7", path = "crates/backends/codex" }
+nanocode-backend-codex-client = { version = "0.6.7", path = "crates/backends/codex/client" }
+nanocode-agent-core = { version = "0.6.7", path = "crates/core/agent" }
 nanocode-tool-host = { version = "0.6.7", path = "crates/runtime/tool-host" }
 nanocode-media = { version = "0.6.7", path = "crates/core/media" }
 nanocode-image = { version = "0.6.7", path = "crates/core/image" }
@@ -85,6 +104,7 @@ httpdate = "1.0.3"
 ignore = "0.4.31"
 nanocode = { version = "0.6.7", path = "crates/nanocode" }
 nanocode-backend-claude = { version = "0.6.7", path = "crates/backends/claude" }
+nanocode-backend-claude-client = { version = "0.6.7", path = "crates/backends/claude/client" }
 nanocode-home = { version = "0.6.7", path = "crates/core/home" }
 nanocode-http = { version = "0.6.7", path = "crates/core/http" }
 nanocode-mcp = { version = "0.6.7", path = "crates/core/mcp" }
@@ -157,7 +177,7 @@ large_enum_variant = "allow"
 result_large_err = "allow"
 
 [profile.dev]
-debug = "line-tables-only"
+debug = false
 split-debuginfo = "unpacked"
 
 [profile.dev.package."*"]
@@ -168,6 +188,10 @@ opt-level = 2
 
 [profile.dev.package."sha2:0.11.0"]
 opt-level = 3
+
+[profile.ci]
+inherits = "dev"
+incremental = false
 
 [profile.release]
 opt-level = 3

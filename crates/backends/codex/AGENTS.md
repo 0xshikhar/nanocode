@@ -1,6 +1,9 @@
 # Codex upstream contracts
 
-- Preserve the exact prompt bytes and extraction provenance in `prompts/upstream.json`.
+- Own Codex harness construction and reserved built-in tool names here. Tool handlers execute through core/process interfaces; native constructors remain compatibility defaults. Runtime assembly supplies host process executors.
+
+- `client/` (`nanocode-backend-codex-client`) owns the Responses protocol, model configuration, authentication, transports and pinned base prompts; this crate re-exports it as `client` and keeps `OpenAi`/`OpenAiBuilder` so backend registration impls stay local.
+- Preserve the exact prompt bytes and extraction provenance in `client/prompts/upstream.json`.
 - Keep the immutable provider prefix on `ModelConfig::base_system_prompt`; place runtime identity and additional instructions in developer context. Preserve the public composed `system_prompt()` compatibility view and explicit system overrides.
 - `upstream/tools.json` pins the reviewed standard tool sources, local artifacts, and selected upstream option profile. Re-audit affected contracts against that revision before updating artifact hashes.
 - Run `python3 scripts/verify-codex-upstream.py` from the repository root to verify upstream hashes, prompt extraction, local artifact integrity, and exact patch grammar. `--offline` uses the ignored `output/codex-upstream-parity` cache. Without `--serialize`, this verifies artifacts without executing Rust tool serialization.

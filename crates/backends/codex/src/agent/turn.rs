@@ -97,7 +97,7 @@ pub(super) enum Command {
     },
     SideQuestion {
         question: String,
-        result: oneshot::Sender<Result<nanocode_agent::SideAnswer>>,
+        result: oneshot::Sender<Result<nanocode_agent_core::SideAnswer>>,
     },
     Shutdown,
 }

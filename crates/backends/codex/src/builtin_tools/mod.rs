@@ -108,3 +108,25 @@ pub fn handlers(
     }
     tools
 }
+
+pub(crate) fn validate_tool_selection(
+    tools: nanocode_tool_host::Tools,
+) -> Result<nanocode_tool_host::Tools, nanocode_tool_host::ToolsBuildError> {
+    if tools.has_code_mode_host() {
+        return tools.with_builtin_names(std::iter::empty::<Box<str>>());
+    }
+    let names = [
+        (tools.workspace_enabled(), StandardTool::ExecCommand.name()),
+        (tools.workspace_enabled(), StandardTool::WriteStdin.name()),
+        (tools.workspace_enabled(), StandardTool::UpdatePlan.name()),
+        (tools.workspace_enabled(), StandardTool::ApplyPatch.name()),
+        (tools.workspace_enabled(), StandardTool::ViewImage.name()),
+        (tools.web_search_enabled(), "web__run"),
+        (tools.image_generation_enabled(), "image_gen__imagegen"),
+    ];
+    tools.with_builtin_names(
+        names
+            .into_iter()
+            .filter_map(|(enabled, name)| enabled.then_some(name)),
+    )
+}

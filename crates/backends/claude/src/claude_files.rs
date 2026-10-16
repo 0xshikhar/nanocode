@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use std::{path::PathBuf, sync::Arc};
 
 use crate::tools::{ClaudeWorkspaceFiles, ImageSource, ToolContent, ToolResultBlock};
-use nanocode_agent::input::ImageDetail;
+use nanocode_agent_core::input::ImageDetail;
 use nanocode_tool_host::{
     SessionEnvironment, Tool, ToolContext, ToolDefinition, ToolInput, ToolOutput, ToolResult,
     Tools, ToolsBuildError, contract::ToolOutputContent,
@@ -14,6 +14,7 @@ pub(super) fn selection(
     workspace: PathBuf,
     session: Option<SessionEnvironment>,
     jobs: Arc<super::claude_bash::Jobs>,
+    executor: Arc<dyn nanocode_process_contracts::ForegroundExecutor>,
 ) -> Result<Tools, ToolsBuildError> {
     let mut tools = Tools::builder().without_defaults();
     for schema in ClaudeWorkspaceFiles::definitions() {
@@ -33,7 +34,7 @@ pub(super) fn selection(
             session: session.clone(),
         });
     }
-    super::claude_bash::install(tools, workspace, session, jobs).build()
+    super::claude_bash::install(tools, workspace, session, jobs, executor).build()
 }
 
 struct ClaudeFileTool {

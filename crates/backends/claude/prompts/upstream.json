@@ -62,7 +62,7 @@
       "sha256": "1e7f77aa3df014730edb8b43a9f3366ec2c9cdbc54d00b1c8ea0df007d3c24da"
     },
     {
-      "path": "src/tools/upstream.json",
+      "path": "tools/src/tools/upstream.json",
       "sha256": "c59ad0a65d053d1afa2f5a2eacb6da7dea2843ef3b5d6ec4d0b6f978d088abcb"
     }
   ],

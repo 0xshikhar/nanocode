@@ -56,8 +56,8 @@
       "sha256": "d6367f4826ed608c424b0a308f3d6163527df63c22513d089b91863552f8bfeb"
     },
     {
-      "path": "src/client/openai/config.rs",
-      "sha256": "33e6607df4cc5e40ac6cf5a84f132f211c8c8caf3a42be8934e997c09715c8e2"
+      "path": "client/src/openai/config.rs",
+      "sha256": "dd70b1b45260b87337e3a6956a0579772f23d5bc6014f842fb653a3988ddc870"
     },
     {
       "path": "src/model/input.rs",
@@ -65,7 +65,7 @@
     },
     {
       "path": "src/model/run/mod.rs",
-      "sha256": "aadef62f3a5a444ee6872773b8415b5f0571e5df33a96c949fd4c645ca639838"
+      "sha256": "3e39a665c01479e667d986295a38a54dcbd2777ee0c9380452026b3bf04c207d"
     },
     {
       "path": "src/model/run/turn.rs",
