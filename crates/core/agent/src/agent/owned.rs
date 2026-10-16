@@ -69,6 +69,9 @@ struct Owned {
 }
 
 impl LifecycleBackend for Owned {
+    fn decode_durable_prompt(&self, input: serde_json::Value) -> Result<Prompt> {
+        self.inner.decode_durable_prompt(input)
+    }
     fn harness_family(&self) -> crate::HarnessFamily {
         self.inner.harness_family()
     }
